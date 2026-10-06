@@ -1,0 +1,5 @@
+# 本地开发差异：挂载源码，修改代码后无需重建镜像
+services:
+  app:
+    volumes:
+      - .:/workspace

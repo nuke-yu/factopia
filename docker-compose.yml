@@ -1,0 +1,70 @@
+# 基础配置：本地与云端共用。环境差异放在 compose.local.yml / compose.cloud.yml 和 .env 中。
+# 约定：配置中只出现容器内路径；数据放在命名卷中，挂载点统一为 /workspace/runtime。
+services:
+  app:
+    build:
+      context: .
+      dockerfile: docker/app/Dockerfile
+    image: factopia-app:dev
+    env_file: .env   # 首次使用前：cp .env.example .env
+    volumes:
+      - runtime:/workspace/runtime
+
+  # RD-Agent 回测镜像：只构建，不常驻。构建后需载入 dind：见 README
+  qlib-runner:
+    build:
+      context: docker/qlib
+    image: factopia-qlib:dev
+    profiles: ["build-only"]
+
+  # 独立的 Docker 引擎（Docker-in-Docker）。RD-Agent 启动的回测容器运行在这里，
+  # 与 rdagent 以相同路径挂载同一批命名卷，因此 RD-Agent 传出的路径都是容器内路径。
+  dind:
+    image: docker:24-dind
+    privileged: true
+    environment:
+      DOCKER_TLS_CERTDIR: ""        # 仅在 compose 内部网络中访问，不对外暴露
+    volumes:
+      - runtime:/workspace/runtime
+      - rdagent_src:/opt/rdagent-src
+      - dind_data:/var/lib/docker   # 保留 dind 中的镜像，重启后无需重新载入
+
+  rdagent:
+    build:
+      context: docker/rdagent
+    image: factopia-rdagent:dev
+    env_file: .env
+    depends_on: [dind]
+    environment:
+      DOCKER_HOST: tcp://dind:2375
+      # v1.0.0 默认在本地 conda 环境中回测（model_coder/conf.py: env_type="conda"），改为在 Docker 回测镜像中运行
+      MODEL_CoSTEER_ENV_TYPE: docker
+      # 使用预先构建的多架构回测镜像，而不是官方 x86 镜像
+      QLIB_DOCKER_BUILD_FROM_DOCKERFILE: "False"
+      QLIB_DOCKER_IMAGE: factopia-qlib:dev
+      QLIB_DOCKER_EXTRA_VOLUMES: '{"/workspace/runtime/qlib_home": {"bind": "/root/.qlib/", "mode": "rw"}}'
+      # 日志签名密钥放在共享卷中，所有 rdagent 容器（运行、日志界面）共用，否则日志无法读取
+      ARTIFACT_SIGNING_KEY_PATH: /workspace/runtime/rdagent/.rdagent/artifact_signing.key
+    volumes:
+      - runtime:/workspace/runtime
+      - rdagent_src:/opt/rdagent-src
+    working_dir: /workspace/runtime/rdagent
+
+  # RD-Agent 自带的日志界面：docker compose --profile ui up -d rdagent-ui → http://localhost:19899
+  rdagent-ui:
+    image: factopia-rdagent:dev
+    profiles: ["ui"]
+    env_file: .env
+    environment:
+      ARTIFACT_SIGNING_KEY_PATH: /workspace/runtime/rdagent/.rdagent/artifact_signing.key
+    volumes:
+      - runtime:/workspace/runtime
+      - rdagent_src:/opt/rdagent-src
+    ports:
+      - "127.0.0.1:19899:19899"     # 只绑定本机
+    command: ["rdagent", "ui", "--port", "19899", "--log-dir", "/workspace/runtime/rdagent/log"]
+
+volumes:
+  runtime:
+  rdagent_src:
+  dind_data:

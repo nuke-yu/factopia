@@ -1,0 +1,20 @@
+[project]
+name = "factopia"
+version = "0.0.1"
+description = "AI 驱动的跨境量化股票策略研究平台（最小 POC）"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "yfinance",
+    "exchange-calendars",
+    "pandas",
+    "pyarrow",
+    # PyPI 上的 pyqlib 没有 Linux ARM 安装包，改为从源码编译；
+    # 固定到 RD-Agent 官方镜像使用的同一提交，保证两边 Qlib 一致
+    "pyqlib @ git+https://github.com/microsoft/qlib.git@2fb9380b342556ddb50a4b24e4fe8655d548b2b8",
+    "skfolio",
+    # Qlib 的实验记录依赖 MLflow 文件存储，3.13 起默认关闭（见 Qlib 主分支 pyproject 注释）
+    "mlflow<3.13",
+]
+
+[tool.uv]
+package = false

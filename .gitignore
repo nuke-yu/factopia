@@ -1,0 +1,22 @@
+# 环境与密钥
+.env
+.venv/
+__pycache__/
+*.pyc
+
+# 数据与运行产物（不入库）
+/qlib_data/
+/data/
+/mlruns/
+/artifacts/
+/logs/
+
+# 第三方源码（只用于阅读，依赖通过包管理安装）
+/vendor/
+
+# 前端
+web/node_modules/
+web/dist/
+
+.DS_Store
+/runtime/

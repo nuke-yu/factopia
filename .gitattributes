@@ -1,0 +1,7 @@
+# 统一使用 LF 换行，避免 Windows 提交的脚本在 Linux 容器中报错
+* text=auto eol=lf
+*.sh text eol=lf
+*.png binary
+*.jpg binary
+*.parquet binary
+*.h5 binary
