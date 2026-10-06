@@ -26,12 +26,23 @@ docker save factopia-qlib:dev | docker compose exec -T dind docker load
 # 三个市场的行情、汇率、交易日历
 docker compose -f docker-compose.yml -f compose.local.yml run --rm app python spikes/01_data_sources.py
 
-# RD-Agent 环境检查 / 跑一轮因子挖掘
-docker compose run --rm rdagent rdagent health_check
-docker compose run --rm rdagent rdagent fin_factor --loop-n 1
+# 数据：下载 → 标准化 → 转为 Qlib 数据集（含 RD-Agent 用的截至 2023-12-31 版本）→ 验证
+docker compose -f docker-compose.yml -f compose.local.yml run --rm app python -m factopia.data.universe
+docker compose -f docker-compose.yml -f compose.local.yml run --rm app python -m factopia.data.download
+docker compose -f docker-compose.yml -f compose.local.yml run --rm app python -m factopia.data.standardize
+docker compose -f docker-compose.yml -f compose.local.yml run --rm app python -m factopia.data.to_qlib
+docker compose -f docker-compose.yml -f compose.local.yml run --rm app python -m factopia.data.to_qlib --rdagent
+docker compose -f docker-compose.yml -f compose.local.yml run --rm app python spikes/03_verify_qlib_data.py
 
-# RD-Agent 日志界面 → http://localhost:19899
-docker compose --profile ui up -d rdagent-ui
+# Alpha158 三市场评估与迁移性分类 → /workspace/runtime/results/alpha158/
+docker compose -f docker-compose.yml -f compose.local.yml run --rm app python -m factopia.factors.evaluate
+
+# RD-Agent：环境检查 / 在指定市场（hk / uk / fr）跑一轮因子挖掘
+docker compose run --rm rdagent rdagent health_check
+docker compose -f docker-compose.yml -f compose.local.yml run --rm -e FACTOPIA_MARKET=hk rdagent rdagent fin_factor --loop-n 1
+
+# RD-Agent 日志界面 → http://localhost:19899（RDAGENT_UI_MARKET 选择市场，默认 hk）
+RDAGENT_UI_MARKET=hk docker compose -f docker-compose.yml -f compose.local.yml --profile ui up -d rdagent-ui
 
 # 查看命名卷中的文件
 docker compose run --rm rdagent ls /workspace/runtime

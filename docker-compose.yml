@@ -62,7 +62,8 @@ services:
       - rdagent_src:/opt/rdagent-src
     ports:
       - "127.0.0.1:19899:19899"     # 只绑定本机
-    command: ["rdagent", "ui", "--port", "19899", "--log-dir", "/workspace/runtime/rdagent/log"]
+    # 查看某个市场的日志：RDAGENT_UI_MARKET=hk docker compose --profile ui up -d rdagent-ui
+    command: ["rdagent", "ui", "--port", "19899", "--log-dir", "/workspace/runtime/rdagent/${RDAGENT_UI_MARKET:-hk}/log"]
 
 volumes:
   runtime:

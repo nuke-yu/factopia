@@ -3,3 +3,11 @@ services:
   app:
     volumes:
       - .:/workspace
+
+  # RD-Agent 各市场配置模板（本地开发挂载；云端部署时打包进镜像）
+  rdagent:
+    volumes:
+      - ./configs:/workspace/configs:ro
+  rdagent-ui:
+    volumes:
+      - ./configs:/workspace/configs:ro

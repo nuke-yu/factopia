@@ -372,7 +372,10 @@ RD-Agent 的运行分三部分：主程序（调用 LLM、管理循环）、LLM 
 | 回测默认不在 Docker 中运行 | v1.0.0 中 `model_coder/conf.py` 的 `env_type` 默认为 `"conda"`，会在 rdagent 容器内建 conda 环境并从源码编译 Qlib（缺编译器即失败），与文档描述不一致 | 设置 `MODEL_CoSTEER_ENV_TYPE=docker`，回测使用我们的多架构镜像（2026-10-06 实测） |
 | 日志签名密钥不共享 | 日志文件用随机密钥签名，密钥默认存于容器内 `~/.rdagent`；每次 `docker compose run` 都是新容器，导致日志界面无法读取 | 设置 `ARTIFACT_SIGNING_KEY_PATH` 指向 `runtime/rdagent/.rdagent/artifact_signing.key`，所有 rdagent 容器共用（2026-10-06 实测） |
 | 回测偶发 "Metric 'Rank ICIR' is malformed" | Qlib 的 `MLflowRecorder` 用 `AsyncCaller` 在后台线程写指标（`recorder.py` 第 350 行），同一进程随后读取时可能读到未写完的文件；属 Qlib 上游竞态，结果取决于时机 | 回测镜像中加入 `sitecustomize.py` 启动钩子，在 `start_run` 后等待排队写入并改为同步写入；不修改 Qlib 源码文件（2026-10-06 实测） |
-| 多市场切换 | 一次运行只针对一套数据 | 通过 `FACTOR_CoSTEER_DATA_FOLDER` 等环境变量和各市场配置模板切换，由 Factopia 调度层分别运行三次 |
+| 多市场切换 | 一次运行只针对一套数据；配置模板写死沪深 300、A 股涨跌停和成本；数据目录写死为 `cn_data` | 已实现（2026-10-06 港股实测通过）：`FACTOPIA_MARKET=hk/uk/fr` 时，启动脚本用 `configs/rdagent/<市场>/` 的模板覆盖原版（股票池、基准、region=us、取消涨跌停、成本示例值），回测容器挂载该市场数据（放在 `cn_data` 位置），并使用独立工作目录；每次启动先恢复原版模板 |
+| 挖掘时间段 | 默认 2008–2020 年，且未隔离最终测试数据 | RD-Agent 用数据集截止 2023-12-31（`to_qlib --rdagent`）；训练 2015–2020、验证 2021、测试 2022-01-01 至 2023-12-28，2024 年以后对 AI 完全不可见（Spec MINE-03）。测试期结束日须早于数据最后一天，否则 Qlib 回测在最后一步读取下一交易日时越界 |
+| 基准指数参与因子排序 | RD-Agent 用 `D.instruments()`（即 all）生成因子数据 | 基准指数不放入 `all.txt`，单独列在 `benchmark.txt`；回测按代码读取基准，不受影响 |
+| 场景描述仍为 A 股 | RD-Agent 提示词中的场景描述写有 CSI300 | 只影响 AI 提出假设时的措辞，不影响计算；后续用继承扩展（7.4 第 ③ 层）替换为对应市场的描述 |
 
 ### 7.5 跨平台规范（Mac / Windows）
 
