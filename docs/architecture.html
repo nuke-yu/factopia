@@ -1,0 +1,627 @@
+<meta charset="utf-8">
+<title>Factopia 架构图</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --bg: #F3F5F6;
+    --surface: #FFFFFF;
+    --band: #E8ECEF;
+    --ink: #18232D;
+    --muted: #5A6772;
+    --line: #CBD3DA;
+    --line-strong: #9AA6B1;
+    --edge: #4A5763;
+    --accent: #1D4E6E;
+    --accent-soft: #DCE8F0;
+    --on-accent: #FFFFFF;
+    --done: #2F7D4F;
+    --done-bg: #E2F1E7;
+    --part: #A9660A;
+    --part-bg: #FBEFD8;
+    --todo: #7E8B96;
+    --ext: #7F89A0;
+    --ext-bg: #ECEFF6;
+    --hk: #C2412D;
+    --uk: #2A4D9B;
+    --fr: #6B4FA3;
+    --sans: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    --serif: "Noto Serif SC", "Songti SC", "SimSun", serif;
+    --mono: "JetBrains Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg: #0F151B; --surface: #161E26; --band: #1B252F; --ink: #E3E9EE; --muted: #93A1AD;
+      --line: #2C3946; --line-strong: #4A5866; --edge: #A3B0BC; --accent: #7FB3D8; --accent-soft: #1A2E3D; --on-accent: #0F151B;
+      --done: #5BC489; --done-bg: #15301F; --part: #E2A64A; --part-bg: #33260F; --todo: #7C8A96;
+      --ext: #8D97B3; --ext-bg: #1C2230; --hk: #E3735F; --uk: #7D9BE0; --fr: #A88BDB;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #0F151B; --surface: #161E26; --band: #1B252F; --ink: #E3E9EE; --muted: #93A1AD;
+    --line: #2C3946; --line-strong: #4A5866; --edge: #A3B0BC; --accent: #7FB3D8; --accent-soft: #1A2E3D; --on-accent: #0F151B;
+    --done: #5BC489; --done-bg: #15301F; --part: #E2A64A; --part-bg: #33260F; --todo: #7C8A96;
+    --ext: #8D97B3; --ext-bg: #1C2230; --hk: #E3735F; --uk: #7D9BE0; --fr: #A88BDB;
+  }
+
+  html { scroll-behavior: smooth; scroll-padding-top: 72px; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.75;
+    padding-inline: 20px;
+  }
+  .wrap { max-width: 1120px; margin: 0 auto; padding-block: 0 72px; }
+
+  /* 顶部导航 */
+  .topnav {
+    position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5;
+    background: var(--bg);
+    border-bottom: 1px solid var(--line);
+    margin-inline: -20px; padding: 10px 20px;
+  }
+  .topnav .inner { max-width: 1120px; margin: 0 auto; display: flex; gap: 6px 18px; flex-wrap: wrap; align-items: center; }
+  .topnav .brand { font-family: var(--serif); font-weight: 700; color: var(--accent); margin-right: 8px; }
+  .topnav a { color: var(--muted); text-decoration: none; font-size: 13.5px; }
+  .topnav a:hover, .topnav a:focus-visible { color: var(--accent); }
+  a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+
+  header.page { padding-block: 40px 8px; display: grid; gap: 14px; }
+  .eyebrow { font-family: var(--mono); font-size: 12px; letter-spacing: .06em; color: var(--muted); }
+  h1 { font-family: var(--serif); font-size: 34px; line-height: 1.25; margin: 0; text-wrap: balance; }
+  .lead { max-width: 68ch; color: var(--muted); margin: 0; }
+
+  .markets { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 8px; }
+  .mkt { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; display: grid; gap: 2px; border-top: 3px solid var(--c); }
+  .mkt .name { font-weight: 700; }
+  .mkt .codes { font-family: var(--mono); font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .mkt.hk { --c: var(--hk); } .mkt.uk { --c: var(--uk); } .mkt.fr { --c: var(--fr); }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 8px 22px; align-items: center; font-size: 13px; color: var(--muted); padding: 12px 0 0; }
+  .legend .k { display: inline-flex; align-items: center; gap: 8px; }
+  .sw { width: 26px; height: 14px; border-radius: 3px; border: 1.4px solid; display: inline-block; }
+  .sw.done { background: var(--done-bg); border-color: var(--done); }
+  .sw.part { background: var(--part-bg); border-color: var(--part); }
+  .sw.todo { background: var(--surface); border-color: var(--todo); border-style: dashed; }
+  .sw.ext { background: var(--ext-bg); border-color: var(--ext); }
+  .ln { width: 30px; height: 0; border-top: 2px solid var(--edge); display: inline-block; }
+  .ln.plan { border-top-style: dashed; }
+  .pill { display: inline-block; background: var(--accent); color: var(--on-accent); border-radius: 999px; font-size: 11px; padding: 0 8px; line-height: 18px; }
+
+  section { padding-block: 44px 8px; border-top: 1px solid var(--line); margin-top: 36px; display: grid; gap: 14px; }
+  section:first-of-type { border-top: 0; }
+  h2 { font-family: var(--serif); font-size: 24px; line-height: 1.35; margin: 0; text-wrap: balance; display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+  h2 .no { font-family: var(--mono); font-size: 13px; color: var(--accent); font-weight: 500; }
+  h3 { font-size: 16px; margin: 6px 0 0; }
+  p { margin: 0; max-width: 72ch; }
+  .muted { color: var(--muted); }
+
+  figure { margin: 6px 0 0; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 18px 18px 14px; }
+  .scroll { overflow-x: auto; }
+  figcaption { margin-top: 10px; font-size: 13.5px; color: var(--muted); max-width: 90ch; }
+
+  /* 图中元素 */
+  .dg { display: block; width: 100%; min-width: 760px; height: auto; color: var(--edge); }
+  .dg text { font-family: var(--sans); fill: var(--ink); }
+  .dg .t { font-size: 13px; font-weight: 500; }
+  .dg .s { font-size: 11px; fill: var(--muted); }
+  .dg .m { font-family: var(--mono); font-size: 10.5px; fill: var(--muted); }
+  .dg .tm { font-family: var(--mono); font-size: 11.5px; font-weight: 500; fill: var(--ink); }
+  .dg .lyr { font-family: var(--mono); font-size: 10.5px; fill: var(--accent); letter-spacing: .05em; }
+  .dg .band { fill: var(--band); }
+  .dg .host { fill: none; stroke: var(--line-strong); stroke-width: 1.4; stroke-dasharray: 2 3; }
+  .dg .n { stroke-width: 1.3; }
+  .dg .n.done { fill: var(--done-bg); stroke: var(--done); }
+  .dg .n.part { fill: var(--part-bg); stroke: var(--part); }
+  .dg .n.todo { fill: var(--surface); stroke: var(--todo); stroke-dasharray: 4 3; }
+  .dg .n.ext { fill: var(--ext-bg); stroke: var(--ext); }
+  .dg .n.vol { fill: var(--surface); stroke: var(--line-strong); }
+  .dg .e { stroke: currentColor; stroke-width: 1.4; fill: none; }
+  .dg .e.plan { stroke-dasharray: 5 4; }
+  .dg .tag { fill: var(--accent); }
+  .dg .tagt { fill: var(--on-accent); font-size: 10.5px; font-weight: 500; }
+
+  table { border-collapse: collapse; width: 100%; font-size: 14px; background: var(--surface); }
+  .tbl { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr:last-child td { border-bottom: 0; }
+  th { font-weight: 500; color: var(--muted); font-size: 12.5px; letter-spacing: .03em; background: var(--band); }
+  td code, p code, li code { font-family: var(--mono); font-size: 12.5px; background: var(--band); padding: 1px 5px; border-radius: 4px; }
+  .st { font-size: 12px; border-radius: 999px; padding: 1px 9px; border: 1px solid; white-space: nowrap; }
+  .st.done { color: var(--done); border-color: var(--done); background: var(--done-bg); }
+  .st.part { color: var(--part); border-color: var(--part); background: var(--part-bg); }
+  .st.todo { color: var(--muted); border-color: var(--todo); border-style: dashed; }
+
+  ol.rules { margin: 0; padding-left: 1.4em; display: grid; gap: 8px; max-width: 80ch; }
+  ol.rules b { font-weight: 700; }
+
+  footer { margin-top: 48px; font-size: 13px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 14px; }
+
+  @media (max-width: 720px) {
+    h1 { font-size: 27px; }
+    .markets { grid-template-columns: 1fr; }
+    figure { padding: 12px; }
+  }
+</style>
+
+<nav class="topnav" aria-label="页面目录">
+  <div class="inner">
+    <span class="brand">Factopia</span>
+    <a href="#layers">总体架构</a>
+    <a href="#flow">业务流程</a>
+    <a href="#loop">RD-Agent 与 Qlib</a>
+    <a href="#deploy">运行部署</a>
+    <a href="#data">数据流</a>
+    <a href="#code">代码结构</a>
+    <a href="#rules">开发约定</a>
+  </div>
+</nav>
+
+<div class="wrap">
+  <header class="page">
+    <div class="eyebrow">架构图 · 对应 Spec v0.3 · 2026-10-07</div>
+    <h1>Factopia 跨境量化研究平台架构</h1>
+    <p class="lead">同一个投资假设，在香港、伦敦、巴黎三个市场分别检验，判断能否跨市场迁移，再按客户授权构建组合，经规则检查和跨地区审批后上线监控。本页用五张图说明平台的分层、流程、组件协作、部署和数据流向，供开发时对照。</p>
+    <div class="markets">
+      <div class="mkt hk"><span class="name">香港 · 恒生指数</span><span class="codes">XHKG · HKD · 84 只 · 2,895 个交易日</span></div>
+      <div class="mkt uk"><span class="name">伦敦 · 富时 100</span><span class="codes">XLON · GBP · 100 只 · 2,972 个交易日</span></div>
+      <div class="mkt fr"><span class="name">巴黎 · CAC 40</span><span class="codes">XPAR · EUR · 40 只 · 3,011 个交易日</span></div>
+    </div>
+    <div class="legend" aria-label="图例">
+      <span class="k"><span class="sw done"></span>已完成</span>
+      <span class="k"><span class="sw part"></span>部分完成</span>
+      <span class="k"><span class="sw todo"></span>未开始</span>
+      <span class="k"><span class="sw ext"></span>外部服务 / 外部数据</span>
+      <span class="k"><span class="ln"></span>已实现的流向</span>
+      <span class="k"><span class="ln plan"></span>计划中的流向</span>
+      <span class="k"><span class="pill">人工</span>需要人工操作</span>
+    </div>
+  </header>
+
+  <!-- 1 总体架构 -->
+  <section id="layers">
+    <h2><span class="no">图 1</span>总体架构：八层与横切能力</h2>
+    <p>自下而上，数据层是一切的基础，界面层只读取各层的产出、不做计算。右侧四项横切能力被所有层共用。</p>
+    <figure>
+      <div class="scroll">
+      <svg class="dg" viewBox="0 0 1040 560" role="img" aria-label="Factopia 总体架构分为八层：数据、信号生产、验证关卡、组合、治理、监控、编排与协作、界面，另有实验追踪、存储、运行环境、大模型服务四项横切能力；目前数据层已完成，信号生产和验证部分完成，其余未开始。">
+        <!-- 层带 -->
+        <rect class="band" x="20" y="20"  width="800" height="58" rx="6"/>
+        <rect class="band" x="20" y="86"  width="800" height="58" rx="6"/>
+        <rect class="band" x="20" y="152" width="800" height="58" rx="6"/>
+        <rect class="band" x="20" y="218" width="800" height="58" rx="6"/>
+        <rect class="band" x="20" y="284" width="800" height="58" rx="6"/>
+        <rect class="band" x="20" y="350" width="800" height="58" rx="6"/>
+        <rect class="band" x="20" y="416" width="800" height="58" rx="6"/>
+        <rect class="band" x="20" y="482" width="800" height="58" rx="6"/>
+
+        <text class="lyr" x="36" y="44">UI</text><text class="t" x="36" y="63">界面层</text>
+        <text class="lyr" x="36" y="110">L6</text><text class="t" x="36" y="129">编排与协作</text>
+        <text class="lyr" x="36" y="176">L5</text><text class="t" x="36" y="195">监控</text>
+        <text class="lyr" x="36" y="242">L4</text><text class="t" x="36" y="261">治理</text>
+        <text class="lyr" x="36" y="308">L3</text><text class="t" x="36" y="327">组合</text>
+        <text class="lyr" x="36" y="374">L2</text><text class="t" x="36" y="393">统一验证关卡</text>
+        <text class="lyr" x="36" y="440">L1</text><text class="t" x="36" y="459">信号生产</text>
+        <text class="lyr" x="36" y="506">L0</text><text class="t" x="36" y="525">数据</text>
+
+        <!-- UI -->
+        <rect class="n todo" x="190" y="29" width="200" height="40" rx="5"/>
+        <text class="t" x="290" y="46" text-anchor="middle">Web 界面</text><text class="s" x="290" y="61" text-anchor="middle">React · ECharts · 每步一页</text>
+        <rect class="n todo" x="400" y="29" width="200" height="40" rx="5"/>
+        <text class="t" x="500" y="46" text-anchor="middle">后端接口</text><text class="s" x="500" y="61" text-anchor="middle">FastAPI · WebSocket 进度</text>
+        <rect class="n done" x="610" y="29" width="200" height="40" rx="5"/>
+        <text class="t" x="710" y="46" text-anchor="middle">RD-Agent 日志页</text><text class="s" x="710" y="61" text-anchor="middle">自带 · localhost:19899</text>
+
+        <!-- L6 -->
+        <rect class="n todo" x="190" y="95" width="620" height="40" rx="5"/>
+        <text class="t" x="500" y="112" text-anchor="middle">协作平台与审批工作流</text><text class="s" x="500" y="127" text-anchor="middle">nuke-ai-collaborator 候选 · 阶段 2 评估</text>
+
+        <!-- L5 -->
+        <rect class="n todo" x="190" y="161" width="620" height="40" rx="5"/>
+        <text class="t" x="500" y="178" text-anchor="middle">分市场监控</text><text class="s" x="500" y="193" text-anchor="middle">IC · 衰减 · 换手 · 数据漂移 · 只停用衰减的市场</text>
+
+        <!-- L4 -->
+        <rect class="n todo" x="190" y="227" width="147.5" height="40" rx="5"/>
+        <text class="t" x="263.75" y="244" text-anchor="middle">地区规则包</text><text class="s" x="263.75" y="259" text-anchor="middle">阻断 · 警告 · 提示</text>
+        <rect class="n todo" x="347.5" y="227" width="147.5" height="40" rx="5"/>
+        <text class="t" x="421.25" y="244" text-anchor="middle">跨地区审批</text><text class="s" x="421.25" y="259" text-anchor="middle">香港 → 伦敦 → 巴黎</text>
+        <rect class="n todo" x="505" y="227" width="147.5" height="40" rx="5"/>
+        <text class="t" x="578.75" y="244" text-anchor="middle">审计与版本锁定</text><text class="s" x="578.75" y="259" text-anchor="middle">证据包导出</text>
+        <rect class="n todo" x="662.5" y="227" width="147.5" height="40" rx="5"/>
+        <text class="t" x="736.25" y="244" text-anchor="middle">信号目录</text><text class="s" x="736.25" y="259" text-anchor="middle">地区适用性标签</text>
+
+        <!-- L3 -->
+        <rect class="n todo" x="190" y="293" width="200" height="40" rx="5"/>
+        <text class="t" x="290" y="310" text-anchor="middle">授权约束优化</text><text class="s" x="290" y="325" text-anchor="middle">skfolio · cvxpy</text>
+        <rect class="n todo" x="400" y="293" width="200" height="40" rx="5"/>
+        <text class="t" x="500" y="310" text-anchor="middle">多币种回测</text><text class="s" x="500" y="325" text-anchor="middle">本地收益 · 汇率贡献 · 税费</text>
+        <rect class="n todo" x="610" y="293" width="200" height="40" rx="5"/>
+        <text class="t" x="710" y="310" text-anchor="middle">归因</text><text class="s" x="710" y="325" text-anchor="middle">Brinson · 信号归因</text>
+
+        <!-- L2 -->
+        <rect class="n todo" x="190" y="359" width="305" height="40" rx="5"/>
+        <text class="t" x="342.5" y="376" text-anchor="middle">检验</text><text class="s" x="342.5" y="391" text-anchor="middle">显著性 · 去冗余 · 中性化 · 扣成本 · 人工确认</text>
+        <rect class="n part" x="505" y="359" width="305" height="40" rx="5"/>
+        <text class="t" x="657.5" y="376" text-anchor="middle">迁移性分类</text><text class="s" x="657.5" y="391" text-anchor="middle">通用 / 地区特定 / 需调参 / 无效</text>
+
+        <!-- L1 -->
+        <rect class="n done" x="190" y="425" width="200" height="40" rx="5"/>
+        <text class="t" x="290" y="442" text-anchor="middle">A 基础因子</text><text class="s" x="290" y="457" text-anchor="middle">Alpha158 · 三市场已评估</text>
+        <rect class="n part" x="400" y="425" width="200" height="40" rx="5"/>
+        <text class="t" x="500" y="442" text-anchor="middle">B 自动挖掘</text><text class="s" x="500" y="457" text-anchor="middle">RD-Agent · 港股已跑通</text>
+        <rect class="n todo" x="610" y="425" width="200" height="40" rx="5"/>
+        <text class="t" x="710" y="442" text-anchor="middle">C 文本信号</text><text class="s" x="710" y="457" text-anchor="middle">多语言公告 · 演示主线</text>
+
+        <!-- L0 -->
+        <rect class="n done" x="190" y="491" width="147.5" height="40" rx="5"/>
+        <text class="t" x="263.75" y="508" text-anchor="middle">行情 · 指数 · 汇率</text><text class="s" x="263.75" y="523" text-anchor="middle">yfinance · 2015 至今</text>
+        <rect class="n done" x="347.5" y="491" width="147.5" height="40" rx="5"/>
+        <text class="t" x="421.25" y="508" text-anchor="middle">交易日历</text><text class="s" x="421.25" y="523" text-anchor="middle">XHKG · XLON · XPAR</text>
+        <rect class="n done" x="505" y="491" width="147.5" height="40" rx="5"/>
+        <text class="t" x="578.75" y="508" text-anchor="middle">Qlib 数据集</text><text class="s" x="578.75" y="523" text-anchor="middle">每市场一套</text>
+        <rect class="n todo" x="662.5" y="491" width="147.5" height="40" rx="5"/>
+        <text class="t" x="736.25" y="508" text-anchor="middle">多语言公告</text><text class="s" x="736.25" y="523" text-anchor="middle">中 · 英 · 法 · 待调研</text>
+
+        <!-- 横切 -->
+        <text class="lyr" x="844" y="34">横切能力</text>
+        <rect class="n part" x="840" y="44" width="180" height="116" rx="6"/>
+        <text class="t" x="930" y="76" text-anchor="middle">实验追踪</text>
+        <text class="s" x="930" y="96" text-anchor="middle">MLflow</text>
+        <text class="s" x="930" y="114" text-anchor="middle">Qlib 回测已写入</text>
+        <text class="s" x="930" y="132" text-anchor="middle">运行信息待统一记录</text>
+        <rect class="n part" x="840" y="170" width="180" height="116" rx="6"/>
+        <text class="t" x="930" y="202" text-anchor="middle">存储</text>
+        <text class="s" x="930" y="222" text-anchor="middle">Parquet · Qlib 文件</text>
+        <text class="s" x="930" y="240" text-anchor="middle">阶段 2 引入 PostgreSQL</text>
+        <text class="s" x="930" y="258" text-anchor="middle">审批 · 审计 · 信号目录</text>
+        <rect class="n done" x="840" y="296" width="180" height="116" rx="6"/>
+        <text class="t" x="930" y="328" text-anchor="middle">运行环境</text>
+        <text class="s" x="930" y="348" text-anchor="middle">Docker · dind</text>
+        <text class="s" x="930" y="366" text-anchor="middle">只用容器内路径</text>
+        <text class="s" x="930" y="384" text-anchor="middle">Mac · WSL2 · 云服务器</text>
+        <rect class="n done" x="840" y="422" width="180" height="116" rx="6"/>
+        <text class="t" x="930" y="454" text-anchor="middle">大模型服务</text>
+        <text class="s" x="930" y="474" text-anchor="middle">DeepSeek · 对话</text>
+        <text class="s" x="930" y="492" text-anchor="middle">SiliconFlow · 向量</text>
+        <text class="s" x="930" y="510" text-anchor="middle">只发送代码与统计结果</text>
+      </svg>
+      </div>
+      <figcaption>数据层（L0）和基础因子已完成；自动挖掘、迁移性分类部分完成；组合、治理、监控、协作和界面尚未开始。各层组件独立，通过文件和接口对接，为阶段 2 包装成协作平台的工具做准备。</figcaption>
+    </figure>
+  </section>
+
+  <!-- 2 业务流程 -->
+  <section id="flow">
+    <h2><span class="no">图 2</span>业务流程：从研究假设到分市场监控</h2>
+    <p>十个环节对应业务 spec 的端到端工作流。机器负责检验和发现问题，带“人工”标记的环节由人判断。监控发现某一市场衰减时，只停用该市场的版本，并把结果反馈给因子生产。</p>
+    <figure>
+      <div class="scroll">
+      <svg class="dg" viewBox="0 0 1040 300" role="img" aria-label="业务流程分十步：研究方向输入、数据准备、因子生产、统一验证关卡、组合构建、规则预检、生成报告、跨地区审批、受控发布、分市场监控；监控发现衰减后反馈给因子生产。">
+        <defs>
+          <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="currentColor"/></marker>
+        </defs>
+        <!-- 第一行 -->
+        <rect class="n todo" x="20"  y="40" width="172" height="64" rx="6"/>
+        <text class="t" x="106" y="66" text-anchor="middle">① 研究方向输入</text><text class="s" x="106" y="86" text-anchor="middle">假设 · 授权 · 预测周期</text>
+        <rect class="tag" x="148" y="31" width="38" height="18" rx="9"/><text class="tagt" x="167" y="44" text-anchor="middle">人工</text>
+
+        <rect class="n done" x="222" y="40" width="172" height="64" rx="6"/>
+        <text class="t" x="308" y="66" text-anchor="middle">② 数据准备</text><text class="s" x="308" y="86" text-anchor="middle">三地行情 · 汇率 · 日历</text>
+
+        <rect class="n part" x="424" y="40" width="172" height="64" rx="6"/>
+        <text class="t" x="510" y="66" text-anchor="middle">③ 因子生产</text><text class="s" x="510" y="86" text-anchor="middle">Alpha158 · RD-Agent · 文本</text>
+
+        <rect class="n part" x="626" y="40" width="172" height="64" rx="6"/>
+        <text class="t" x="712" y="66" text-anchor="middle">④ 统一验证关卡</text><text class="s" x="712" y="86" text-anchor="middle">三市场分别检验</text>
+        <rect class="tag" x="752" y="31" width="38" height="18" rx="9"/><text class="tagt" x="771" y="44" text-anchor="middle">人工</text>
+
+        <rect class="n todo" x="828" y="40" width="172" height="64" rx="6"/>
+        <text class="t" x="914" y="66" text-anchor="middle">⑤ 组合构建</text><text class="s" x="914" y="86" text-anchor="middle">授权约束 · 汇率拆分</text>
+
+        <line class="e" x1="192" y1="72" x2="221" y2="72" marker-end="url(#a2)"/>
+        <line class="e" x1="394" y1="72" x2="423" y2="72" marker-end="url(#a2)"/>
+        <line class="e" x1="596" y1="72" x2="625" y2="72" marker-end="url(#a2)"/>
+        <line class="e plan" x1="798" y1="72" x2="827" y2="72" marker-end="url(#a2)"/>
+
+        <!-- 换行 -->
+        <line class="e plan" x1="914" y1="104" x2="914" y2="209" marker-end="url(#a2)"/>
+        <text class="s" x="924" y="160">组合生成后检查</text>
+
+        <!-- 第二行（从右向左） -->
+        <rect class="n todo" x="828" y="210" width="172" height="64" rx="6"/>
+        <text class="t" x="914" y="236" text-anchor="middle">⑥ 规则预检</text><text class="s" x="914" y="256" text-anchor="middle">阻断 · 警告 · 提示</text>
+
+        <rect class="n todo" x="626" y="210" width="172" height="64" rx="6"/>
+        <text class="t" x="712" y="236" text-anchor="middle">⑦ 生成报告</text><text class="s" x="712" y="256" text-anchor="middle">中文主报告 · 英法附件</text>
+
+        <rect class="n todo" x="424" y="210" width="172" height="64" rx="6"/>
+        <text class="t" x="510" y="236" text-anchor="middle">⑧ 跨地区审批</text><text class="s" x="510" y="256" text-anchor="middle">香港 → 伦敦 → 巴黎</text>
+        <rect class="tag" x="550" y="201" width="38" height="18" rx="9"/><text class="tagt" x="569" y="214" text-anchor="middle">人工</text>
+
+        <rect class="n todo" x="222" y="210" width="172" height="64" rx="6"/>
+        <text class="t" x="308" y="236" text-anchor="middle">⑨ 受控发布</text><text class="s" x="308" y="256" text-anchor="middle">锁定版本 · 进入信号目录</text>
+
+        <rect class="n todo" x="20" y="210" width="172" height="64" rx="6"/>
+        <text class="t" x="106" y="236" text-anchor="middle">⑩ 分市场监控</text><text class="s" x="106" y="256" text-anchor="middle">只停用衰减的市场</text>
+
+        <line class="e plan" x1="828" y1="242" x2="799" y2="242" marker-end="url(#a2)"/>
+        <line class="e plan" x1="626" y1="242" x2="597" y2="242" marker-end="url(#a2)"/>
+        <line class="e plan" x1="424" y1="242" x2="395" y2="242" marker-end="url(#a2)"/>
+        <line class="e plan" x1="222" y1="242" x2="193" y2="242" marker-end="url(#a2)"/>
+
+        <!-- 反馈 -->
+        <path class="e plan" d="M106 210 V160 H490 V105" marker-end="url(#a2)"/>
+        <text class="s" x="298" y="152" text-anchor="middle">衰减反馈：重新校准 · 限定地区 · 停用</text>
+      </svg>
+      </div>
+      <figcaption>规则检查不只发生在第 ⑥ 步：挖掘之前会先检查数据使用权限，组合构建时检查卖空、受限证券和集中度。第 ④ 步的“人工”指研究员填写经济逻辑后确认入库（VAL-06）。</figcaption>
+    </figure>
+  </section>
+
+  <!-- 3 RD-Agent 与 Qlib -->
+  <section id="loop">
+    <h2><span class="no">图 3</span>一轮 AI 挖掘：RD-Agent 想与写，Qlib 算与评</h2>
+    <p>RD-Agent 负责提出假设、编写因子代码和总结；判断因子好坏由 Qlib 回测完成。每轮一个想法，结果决定新因子是否进入“最佳组合”，并引出下一轮假设。</p>
+    <figure>
+      <div class="scroll">
+      <svg class="dg" viewBox="0 0 1040 370" role="img" aria-label="一轮 AI 挖掘的六个步骤：Qlib 准备数据，RD-Agent 提出假设、写因子代码、代码自检，Qlib 训练模型并模拟买卖，RD-Agent 总结并决定是否保留，再进入下一轮；场景信息输入尚未实施。">
+        <defs>
+          <marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="currentColor"/></marker>
+        </defs>
+        <rect class="band" x="20" y="54" width="1000" height="116" rx="8"/>
+        <rect class="band" x="20" y="224" width="1000" height="116" rx="8"/>
+        <text class="t" x="36" y="106">RD-Agent</text><text class="s" x="36" y="125">大模型 · 想与写</text>
+        <text class="t" x="36" y="276">Qlib</text><text class="s" x="36" y="295">数据 · 训练 · 回测</text>
+
+        <!-- RD-Agent 泳道 -->
+        <rect class="n todo" x="170" y="82" width="150" height="60" rx="6"/>
+        <text class="t" x="245" y="107" text-anchor="middle">场景信息</text><text class="s" x="245" y="126" text-anchor="middle">待实施 · MINE-07</text>
+        <rect class="n part" x="345" y="82" width="150" height="60" rx="6"/>
+        <text class="t" x="420" y="107" text-anchor="middle">② 提出假设</text><text class="s" x="420" y="126" text-anchor="middle">每轮 1 个想法</text>
+        <rect class="n part" x="520" y="82" width="150" height="60" rx="6"/>
+        <text class="t" x="595" y="107" text-anchor="middle">③ 写因子代码</text><text class="s" x="595" y="126" text-anchor="middle">1–3 个因子</text>
+        <rect class="n part" x="700" y="82" width="150" height="60" rx="6"/>
+        <text class="t" x="775" y="107" text-anchor="middle">④ 代码自检</text><text class="s" x="775" y="126" text-anchor="middle">只查能否运行</text>
+        <rect class="n part" x="870" y="82" width="150" height="60" rx="6"/>
+        <text class="t" x="945" y="107" text-anchor="middle">⑥ 总结与决策</text><text class="s" x="945" y="126" text-anchor="middle">保留或丢弃</text>
+
+        <!-- Qlib 泳道 -->
+        <rect class="n done" x="170" y="252" width="150" height="60" rx="6"/>
+        <text class="t" x="245" y="277" text-anchor="middle">① 准备数据</text><text class="s" x="245" y="296" text-anchor="middle">正式 + 调试数据 · 同市场</text>
+        <rect class="n part" x="700" y="252" width="150" height="60" rx="6"/>
+        <text class="t" x="775" y="277" text-anchor="middle">⑤ 训练 + 模拟买卖</text><text class="s" x="775" y="296" text-anchor="middle">LightGBM · 持股 20%</text>
+        <rect class="n ext" x="870" y="252" width="150" height="60" rx="6"/>
+        <text class="t" x="945" y="277" text-anchor="middle">MLflow 记录</text><text class="s" x="945" y="296" text-anchor="middle">参数 · 指标 · 预测</text>
+
+        <!-- 连线 -->
+        <line class="e plan" x1="320" y1="112" x2="344" y2="112" marker-end="url(#a3)"/>
+        <line class="e" x1="495" y1="112" x2="519" y2="112" marker-end="url(#a3)"/>
+        <line class="e" x1="670" y1="112" x2="699" y2="112" marker-end="url(#a3)"/>
+        <path class="e" d="M245 252 V197 H420 V143" marker-end="url(#a3)"/>
+        <text class="s" x="332" y="190" text-anchor="middle">价格 · 成交量（h5）</text>
+        <line class="e" x1="755" y1="142" x2="755" y2="251" marker-end="url(#a3)"/>
+        <text class="s" x="745" y="200" text-anchor="end">因子值 + 基础因子</text>
+        <path class="e" d="M815 252 V197 H945 V143" marker-end="url(#a3)"/>
+        <text class="s" x="880" y="190" text-anchor="middle">IC · 收益 · 回撤</text>
+        <line class="e" x1="850" y1="282" x2="869" y2="282" marker-end="url(#a3)"/>
+        <path class="e" d="M945 82 V30 H420 V81" marker-end="url(#a3)"/>
+        <text class="s" x="682" y="22" text-anchor="middle">下一轮假设 · 是否进入最佳组合</text>
+      </svg>
+      </div>
+      <figcaption>目前 AI 只收到通用的因子定义和五个量价字段，没有市场、研究方向和已有发现，所以只能提出教科书式的因子；补上虚线框里的场景信息后，挖掘才针对业务问题。第 ⑤ 步的预测周期默认 20 个交易日，原版的 1 天设置待改（MINE-09）。</figcaption>
+    </figure>
+  </section>
+
+  <!-- 4 运行部署 -->
+  <section id="deploy">
+    <h2><span class="no">图 4</span>运行部署：全部在 Docker 中，只用容器内路径</h2>
+    <p>RD-Agent 启动的回测容器交给 compose 内的独立 Docker 引擎（dind），而不是宿主机的 Docker。dind 与 rdagent 以相同路径挂载同一批命名卷，因此配置中不出现任何宿主机路径，Mac、Windows 和云服务器使用同一套配置。</p>
+    <figure>
+      <div class="scroll">
+      <svg class="dg" viewBox="0 0 1040 520" role="img" aria-label="运行部署：Docker 主机内有 app、rdagent、rdagent-ui、待建的 web 与 api 服务，以及 dind 引擎和其中的回测容器；数据存放在 runtime、rdagent_src、dind_data 三个命名卷；外部连接 Yahoo Finance 与维基百科、DeepSeek 与 SiliconFlow、GitHub 和浏览器。">
+        <defs>
+          <marker id="a4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="currentColor"/></marker>
+        </defs>
+        <!-- 外部 -->
+        <rect class="n ext" x="40" y="16" width="200" height="50" rx="6"/>
+        <text class="t" x="140" y="37" text-anchor="middle">Yahoo Finance · 维基百科</text><text class="s" x="140" y="55" text-anchor="middle">行情 · 成分股</text>
+        <rect class="n ext" x="280" y="16" width="200" height="50" rx="6"/>
+        <text class="t" x="380" y="37" text-anchor="middle">DeepSeek · SiliconFlow</text><text class="s" x="380" y="55" text-anchor="middle">对话模型 · 向量模型</text>
+        <rect class="n ext" x="840" y="16" width="180" height="50" rx="6"/>
+        <text class="t" x="930" y="37" text-anchor="middle">GitHub</text><text class="s" x="930" y="55" text-anchor="middle">nuke-yu/factopia · 私有</text>
+        <rect class="n ext" x="840" y="146" width="140" height="56" rx="6"/>
+        <text class="t" x="910" y="170" text-anchor="middle">浏览器</text><text class="s" x="910" y="189" text-anchor="middle">本机访问</text>
+
+        <!-- 主机 -->
+        <rect class="host" x="20" y="96" width="800" height="404" rx="10"/>
+        <text class="t" x="36" y="118">Docker 主机</text><text class="s" x="120" y="118">Mac · Windows（WSL2）· 云服务器 Linux x86</text>
+
+        <!-- 服务 -->
+        <rect class="n done" x="40" y="136" width="200" height="64" rx="6"/>
+        <text class="tm" x="140" y="162" text-anchor="middle">app</text><text class="s" x="140" y="182" text-anchor="middle">Python 3.12 · 数据 · 评估</text>
+        <rect class="n done" x="280" y="136" width="200" height="64" rx="6"/>
+        <text class="tm" x="380" y="162" text-anchor="middle">rdagent</text><text class="s" x="380" y="182" text-anchor="middle">RD-Agent v1.0.0 · Miniforge</text>
+        <rect class="n done" x="520" y="136" width="130" height="64" rx="6"/>
+        <text class="tm" x="585" y="162" text-anchor="middle">rdagent-ui</text><text class="s" x="585" y="182" text-anchor="middle">日志页 :19899</text>
+        <rect class="n todo" x="670" y="136" width="130" height="64" rx="6"/>
+        <text class="tm" x="735" y="162" text-anchor="middle">web + api</text><text class="s" x="735" y="182" text-anchor="middle">待建</text>
+
+        <!-- dind -->
+        <rect class="band" x="280" y="246" width="370" height="126" rx="8"/>
+        <text class="tm" x="296" y="270">dind</text><text class="s" x="336" y="270">docker:24-dind · 承载回测容器</text>
+        <rect class="n done" x="296" y="292" width="165" height="62" rx="6"/>
+        <text class="tm" x="378.5" y="318" text-anchor="middle">qlib-runner</text><text class="s" x="378.5" y="338" text-anchor="middle">每次回测启动一个</text>
+        <rect class="n done" x="471" y="292" width="165" height="62" rx="6"/>
+        <text class="tm" x="553.5" y="318" text-anchor="middle">qlib-runner</text><text class="s" x="553.5" y="338" text-anchor="middle">Qlib 2fb9380 · 多架构</text>
+
+        <!-- 卷 -->
+        <rect class="n vol" x="40" y="410" width="220" height="64" rx="6"/>
+        <text class="tm" x="150" y="436" text-anchor="middle">卷 runtime</text><text class="s" x="150" y="456" text-anchor="middle">/workspace/runtime</text>
+        <rect class="n vol" x="280" y="410" width="170" height="64" rx="6"/>
+        <text class="tm" x="365" y="436" text-anchor="middle">卷 rdagent_src</text><text class="s" x="365" y="456" text-anchor="middle">/opt/rdagent-src</text>
+        <rect class="n vol" x="470" y="410" width="180" height="64" rx="6"/>
+        <text class="tm" x="560" y="436" text-anchor="middle">卷 dind_data</text><text class="s" x="560" y="456" text-anchor="middle">回测镜像缓存</text>
+        <rect class="n ext" x="670" y="410" width="130" height="64" rx="6"/>
+        <text class="t" x="735" y="436" text-anchor="middle">项目代码</text><text class="s" x="735" y="456" text-anchor="middle">相对路径 . 挂载</text>
+
+        <!-- 连线 -->
+        <line class="e" x1="140" y1="66" x2="140" y2="135" marker-end="url(#a4)"/>
+        <text class="s" x="150" y="104">HTTPS 下载</text>
+        <line class="e" x1="380" y1="136" x2="380" y2="67" marker-end="url(#a4)"/>
+        <text class="s" x="390" y="104">LLM 调用</text>
+        <line class="e" x1="380" y1="200" x2="380" y2="245" marker-end="url(#a4)"/>
+        <text class="m" x="390" y="228">DOCKER_HOST=tcp://dind:2375</text>
+        <line class="e plan" x1="840" y1="174" x2="801" y2="174" marker-end="url(#a4)"/>
+        <path class="e" d="M910 202 V222 H585 V201" marker-end="url(#a4)"/>
+        <text class="m" x="748" y="238" text-anchor="middle">localhost:19899</text>
+        <path class="e" d="M800 442 H1005 V67" marker-end="url(#a4)"/>
+        <text class="s" x="995" y="320" text-anchor="end">git push</text>
+      </svg>
+      </div>
+      <figcaption>runtime 卷被 app、rdagent、rdagent-ui、dind 同时挂载，rdagent_src 卷被 rdagent 与 dind 共享；回测容器从 runtime 卷读取该市场的 Qlib 数据。API 密钥只放在本地 .env 文件中，不提交到 Git。</figcaption>
+    </figure>
+
+    <h3>本地与云服务器分工</h3>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>环境</th><th>用途</th><th>状态</th></tr></thead>
+        <tbody>
+          <tr><td>本地电脑（Mac / Windows WSL2）</td><td>写代码、调试、用小数据集验证、前端开发</td><td><span class="st done">在用</span></td></tr>
+          <tr><td>云服务器（预计 Linux x86）</td><td>RD-Agent 多轮挖掘、完整数据构建、共享 MLflow、演示环境；正式结果以此为准（基准环境）</td><td><span class="st todo">待到位</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- 5 数据流 -->
+  <section id="data">
+    <h2><span class="no">图 5</span>数据流：从下载到因子、组合与报告</h2>
+    <p>每个方框是一份数据，框内写明它由哪个程序生成。上面三行已实现；最下面一行是计划中的部分，其中多语言公告是业务 spec 的演示主线。</p>
+    <figure>
+      <div class="scroll">
+      <svg class="dg" viewBox="0 0 1080 360" role="img" aria-label="数据流：维基百科成分股生成股票清单，Yahoo Finance 行情生成原始数据，经标准化后导出全量 Qlib 数据集和截至 2023 年底的 RD-Agent 数据集，分别用于 Alpha158 评估和 RD-Agent 挖掘；计划中的公告、文本信号、验证关卡、因子库、组合和报告尚未实现。">
+        <defs>
+          <marker id="a5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="currentColor"/></marker>
+        </defs>
+        <!-- 第 1 列 来源 -->
+        <rect class="n ext" x="20" y="30" width="140" height="56" rx="6"/>
+        <text class="t" x="90" y="54" text-anchor="middle">维基百科</text><text class="s" x="90" y="73" text-anchor="middle">指数成分股</text>
+        <rect class="n ext" x="20" y="110" width="140" height="56" rx="6"/>
+        <text class="t" x="90" y="134" text-anchor="middle">Yahoo Finance</text><text class="s" x="90" y="153" text-anchor="middle">行情 · 指数 · 汇率</text>
+
+        <!-- 第 2 列 -->
+        <rect class="n done" x="200" y="30" width="140" height="56" rx="6"/>
+        <text class="tm" x="270" y="54" text-anchor="middle">configs/universe</text><text class="m" x="270" y="73" text-anchor="middle">universe.py</text>
+        <rect class="n done" x="200" y="110" width="140" height="56" rx="6"/>
+        <text class="tm" x="270" y="134" text-anchor="middle">data/raw</text><text class="m" x="270" y="153" text-anchor="middle">download.py</text>
+
+        <!-- 第 3 列 -->
+        <rect class="n done" x="380" y="110" width="140" height="56" rx="6"/>
+        <text class="tm" x="450" y="134" text-anchor="middle">data/standardized</text><text class="m" x="450" y="153" text-anchor="middle">standardize.py</text>
+
+        <!-- 第 4 列 -->
+        <rect class="n done" x="560" y="30" width="140" height="56" rx="6"/>
+        <text class="tm" x="630" y="54" text-anchor="middle">qlib_data</text><text class="s" x="630" y="73" text-anchor="middle">全量 · to_qlib.py</text>
+        <rect class="n done" x="560" y="190" width="140" height="56" rx="6"/>
+        <text class="tm" x="630" y="214" text-anchor="middle">rdagent_markets</text><text class="s" x="630" y="233" text-anchor="middle">截至 2023-12-31</text>
+
+        <!-- 第 5 列 -->
+        <rect class="n done" x="740" y="30" width="140" height="56" rx="6"/>
+        <text class="t" x="810" y="54" text-anchor="middle">Alpha158 评估</text><text class="m" x="810" y="73" text-anchor="middle">evaluate.py</text>
+        <rect class="n part" x="740" y="190" width="140" height="56" rx="6"/>
+        <text class="t" x="810" y="214" text-anchor="middle">RD-Agent 挖掘</text><text class="m" x="810" y="233" text-anchor="middle">fin_factor</text>
+
+        <!-- 第 6 列 -->
+        <rect class="n done" x="920" y="30" width="140" height="56" rx="6"/>
+        <text class="tm" x="990" y="54" text-anchor="middle">results/alpha158</text><text class="s" x="990" y="73" text-anchor="middle">IC · 迁移性分类</text>
+        <rect class="n part" x="920" y="190" width="140" height="56" rx="6"/>
+        <text class="t" x="990" y="214" text-anchor="middle">候选因子</text><text class="s" x="990" y="233" text-anchor="middle">RD-Agent 日志</text>
+
+        <!-- 已实现连线 -->
+        <line class="e" x1="160" y1="58" x2="199" y2="58" marker-end="url(#a5)"/>
+        <line class="e" x1="160" y1="138" x2="199" y2="138" marker-end="url(#a5)"/>
+        <line class="e" x1="270" y1="86" x2="270" y2="109" marker-end="url(#a5)"/>
+        <line class="e" x1="340" y1="138" x2="379" y2="138" marker-end="url(#a5)"/>
+        <path class="e" d="M520 138 H540 V58 H559" marker-end="url(#a5)"/>
+        <path class="e" d="M520 138 H540 V218 H559" marker-end="url(#a5)"/>
+        <line class="e" x1="700" y1="58" x2="739" y2="58" marker-end="url(#a5)"/>
+        <line class="e" x1="700" y1="218" x2="739" y2="218" marker-end="url(#a5)"/>
+        <line class="e" x1="880" y1="58" x2="919" y2="58" marker-end="url(#a5)"/>
+        <line class="e" x1="880" y1="218" x2="919" y2="218" marker-end="url(#a5)"/>
+
+        <!-- 计划行 -->
+        <rect class="n todo" x="20" y="290" width="140" height="56" rx="6"/>
+        <text class="t" x="90" y="314" text-anchor="middle">多语言公告</text><text class="s" x="90" y="333" text-anchor="middle">待调研来源与许可</text>
+        <rect class="n todo" x="200" y="290" width="140" height="56" rx="6"/>
+        <text class="t" x="270" y="314" text-anchor="middle">文本信号</text><text class="s" x="270" y="333" text-anchor="middle">风险表述变化打分</text>
+        <rect class="n todo" x="380" y="290" width="140" height="56" rx="6"/>
+        <text class="t" x="450" y="314" text-anchor="middle">统一验证关卡</text><text class="s" x="450" y="333" text-anchor="middle">三市场检验 · 扣成本</text>
+        <rect class="n todo" x="560" y="290" width="140" height="56" rx="6"/>
+        <text class="t" x="630" y="314" text-anchor="middle">因子库</text><text class="s" x="630" y="333" text-anchor="middle">人工确认 · 审批</text>
+        <rect class="n todo" x="740" y="290" width="140" height="56" rx="6"/>
+        <text class="t" x="810" y="314" text-anchor="middle">组合 · 归因</text><text class="s" x="810" y="333" text-anchor="middle">汇率贡献拆分</text>
+        <rect class="n todo" x="920" y="290" width="140" height="56" rx="6"/>
+        <text class="t" x="990" y="314" text-anchor="middle">报告 · 界面</text><text class="s" x="990" y="333" text-anchor="middle">中文 · 英法附件</text>
+
+        <line class="e plan" x1="160" y1="318" x2="199" y2="318" marker-end="url(#a5)"/>
+        <line class="e plan" x1="340" y1="318" x2="379" y2="318" marker-end="url(#a5)"/>
+        <line class="e plan" x1="520" y1="318" x2="559" y2="318" marker-end="url(#a5)"/>
+        <line class="e plan" x1="700" y1="318" x2="739" y2="318" marker-end="url(#a5)"/>
+        <line class="e plan" x1="880" y1="318" x2="919" y2="318" marker-end="url(#a5)"/>
+        <path class="e plan" d="M990 246 V268 H450 V289" marker-end="url(#a5)"/>
+        <text class="s" x="720" y="262" text-anchor="middle">候选因子 + 评估结果</text>
+      </svg>
+      </div>
+      <figcaption>所有数据存放在 Docker 命名卷 runtime（容器内 /workspace/runtime）中；股票清单和配置模板属于代码，提交到 Git。RD-Agent 用的数据集截止 2023-12-31，2024 年以后的数据只在最终报告中使用一次。</figcaption>
+    </figure>
+  </section>
+
+  <!-- 代码结构 -->
+  <section id="code">
+    <h2><span class="no">附 1</span>代码结构与负责范围</h2>
+    <p>按模块分工开发，每个模块可以单独调用。“待建”模块的目录按 spec 预留。</p>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>路径</th><th>内容</th><th>对应 spec</th><th>状态</th></tr></thead>
+        <tbody>
+          <tr><td><code>factopia/data/</code></td><td>股票池抓取、行情下载、标准化、Qlib 导出</td><td>DATA-01 至 09</td><td><span class="st done">已完成</span></td></tr>
+          <tr><td><code>factopia/factors/</code></td><td>Alpha158 三市场评估与迁移性分类</td><td>FAC-01 至 05</td><td><span class="st part">部分完成</span></td></tr>
+          <tr><td><code>factopia/mining/</code></td><td>RD-Agent 调度、持股数设置、候选因子导出</td><td>MINE-01 至 10</td><td><span class="st part">部分完成</span></td></tr>
+          <tr><td><code>configs/rdagent/</code></td><td>各市场 RD-Agent 模板、替换的数据生成脚本</td><td>MINE、第 3.5 节</td><td><span class="st part">部分完成</span></td></tr>
+          <tr><td><code>factopia/validation/</code></td><td>统一验证关卡</td><td>VAL-01 至 06</td><td><span class="st todo">待建</span></td></tr>
+          <tr><td><code>factopia/portfolio/</code></td><td>授权解析、组合优化、多币种回测、归因</td><td>PORT-01 至 09</td><td><span class="st todo">待建</span></td></tr>
+          <tr><td><code>factopia/rules/</code></td><td>规则包加载与预检</td><td>RULE-01 至 05、第 12 章</td><td><span class="st todo">待建</span></td></tr>
+          <tr><td><code>factopia/text/</code></td><td>公告采集、多语言理解、风险表述打分</td><td>第 11 章</td><td><span class="st todo">待建</span></td></tr>
+          <tr><td><code>factopia/report/</code></td><td>中文报告与英法附件</td><td>RPT-01 至 03</td><td><span class="st todo">待建</span></td></tr>
+          <tr><td><code>factopia/api/</code>、<code>web/</code></td><td>FastAPI 接口与 React 前端</td><td>UI-01 至 08、第 2.9 节</td><td><span class="st todo">待建</span></td></tr>
+          <tr><td><code>docker/</code></td><td>app、rdagent、qlib-runner 三个镜像（多架构）</td><td>全局设计第 7 节</td><td><span class="st done">已完成</span></td></tr>
+          <tr><td><code>docs/</code></td><td>Spec、全局设计、本架构图</td><td>—</td><td><span class="st done">持续更新</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- 开发约定 -->
+  <section id="rules">
+    <h2><span class="no">附 2</span>开发约定</h2>
+    <ol class="rules">
+      <li><b>只用容器内路径。</b>配置和代码中不出现宿主机绝对路径；数据放在命名卷 <code>/workspace/runtime</code>。</li>
+      <li><b>不改 RD-Agent 和 Qlib 源码。</b>依次用配置、模板覆盖、继承扩展解决；确需 fork 时单独记录原因。</li>
+      <li><b>市场相关设置放在配置里。</b>股票池、基准、成本、持股比例、预测周期都在 <code>configs/</code> 中，不写死在代码里。</li>
+      <li><b>2024 年以后的数据对 AI 不可见。</b>挖掘只用截至 2023-12-31 的数据集；测试集只在最终报告中使用一次。</li>
+      <li><b>AI 产出只是候选。</b>任何来源的因子都要通过统一验证关卡、三市场分别检验和人工确认，才能入库。</li>
+      <li><b>每次运行都要可复现。</b>记录代码版本、数据指纹、规则包版本、预测周期和随机种子；依赖由 <code>uv.lock</code> 和 Dockerfile 锁定。</li>
+      <li><b>只用可商用许可证的组件。</b>未声明许可证的开源项目不引入。</li>
+      <li><b>先测试，通过后再提交。</b>提交说明只描述改动本身；API 密钥只放在本地 <code>.env</code>。</li>
+      <li><b>Windows 同事在 WSL2 中开发，</b>代码放在 WSL2 文件系统内；仓库强制使用 LF 换行。</li>
+    </ol>
+  </section>
+
+  <footer>Factopia · 架构图对应 docs/Factopia-最小POC-Spec.md v0.3 与 docs/Factopia-全局设计与最小POC.md · 状态截至 2026-10-07</footer>
+</div>
