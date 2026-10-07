@@ -17,6 +17,9 @@ fi
 for t in factor_template model_template; do
   cp "$IMG/$EXP/$t/"*.yaml "$SRC/$EXP/$t/"
 done
+# 数据生成脚本也先恢复原版；并删除上次运行残留的数据文件，避免生成失败时误用旧数据
+cp "$IMG/$EXP/factor_data_template/generate.py" "$SRC/$EXP/factor_data_template/generate.py"
+rm -f "$SRC/$EXP/factor_data_template/"daily_pv_*.h5
 
 if [ -n "$FACTOPIA_MARKET" ]; then
   CONF=/workspace/configs/rdagent/$FACTOPIA_MARKET
@@ -26,6 +29,7 @@ if [ -n "$FACTOPIA_MARKET" ]; then
   for t in factor_template model_template; do
     cp "$CONF/$t/"*.yaml "$SRC/$EXP/$t/"
   done
+  cp /workspace/configs/rdagent/common/generate.py "$SRC/$EXP/factor_data_template/generate.py"
   # 回测容器挂载该市场的数据（RD-Agent 在容器内固定读取 /root/.qlib/qlib_data/cn_data）
   export QLIB_DOCKER_EXTRA_VOLUMES="{\"$HOME_DIR\": {\"bind\": \"/root/.qlib/\", \"mode\": \"rw\"}}"
   # 时间段：数据截止 2023-12-31，2024 年以后对 AI 完全不可见（Spec MINE-03）。
