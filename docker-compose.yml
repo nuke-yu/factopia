@@ -29,13 +29,13 @@ services:
       - rdagent_src:/opt/rdagent-src
       - dind_data:/var/lib/docker   # 保留 dind 中的镜像，重启后无需重新载入
 
-  rdagent:
+  rdagent: &rdagent
     build:
       context: docker/rdagent
     image: factopia-rdagent:dev
     env_file: .env
     depends_on: [dind]
-    environment:
+    environment: &rdagent_env
       DOCKER_HOST: tcp://dind:2375
       # v1.0.0 默认在本地 conda 环境中回测（model_coder/conf.py: env_type="conda"），改为在 Docker 回测镜像中运行
       MODEL_CoSTEER_ENV_TYPE: docker
@@ -49,6 +49,22 @@ services:
       - runtime:/workspace/runtime
       - rdagent_src:/opt/rdagent-src
     working_dir: /workspace/runtime/rdagent
+
+  # RD-Agent 自带的 Web UI（含 Playground）：在页面上选择场景、启动运行、实时查看过程。
+  # 从页面启动的运行在本容器内执行，使用启动时设置的市场：
+  #   FACTOPIA_MARKET=hk docker compose -f docker-compose.yml -f compose.local.yml --profile web up -d rdagent-web
+  #   打开 http://127.0.0.1:19900/?token=<.env 中的 UI_SERVER_AUTH_TOKEN>
+  rdagent-web:
+    <<: *rdagent
+    profiles: ["web"]
+    environment:
+      <<: *rdagent_env
+      FACTOPIA_MARKET: ${FACTOPIA_MARKET:-hk}
+      UI_STATIC_PATH: /opt/rdagent-web
+      UI_SERVER_HOST: 0.0.0.0          # 容器内监听全部地址；宿主机端口只绑定本机
+    ports:
+      - "127.0.0.1:19900:19900"
+    command: ["rdagent", "server_ui", "--port", "19900", "--host", "0.0.0.0"]
 
   # RD-Agent 自带的日志界面：docker compose --profile ui up -d rdagent-ui → http://localhost:19899
   rdagent-ui:

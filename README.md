@@ -37,6 +37,9 @@ docker compose -f docker-compose.yml -f compose.local.yml run --rm app python sp
 # Alpha158 三市场评估与迁移性分类 → /workspace/runtime/results/alpha158/
 docker compose -f docker-compose.yml -f compose.local.yml run --rm app python -m factopia.factors.evaluate
 
+# RD-Agent 各市场模板的持股数按股票池比例设置（股票池变化后重新运行）
+docker compose -f docker-compose.yml -f compose.local.yml run --rm app python -m factopia.mining.topk
+
 # RD-Agent：环境检查 / 在指定市场（hk / uk / fr）跑一轮因子挖掘
 docker compose run --rm rdagent rdagent health_check
 docker compose -f docker-compose.yml -f compose.local.yml run --rm -e FACTOPIA_MARKET=hk rdagent rdagent fin_factor --loop-n 1

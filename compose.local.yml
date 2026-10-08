@@ -5,9 +5,19 @@ services:
       - .:/workspace
 
   # RD-Agent 各市场配置模板（本地开发挂载；云端部署时打包进镜像）
+  # RD-Agent 扩展代码（factopia.mining.rdagent_ext）通过 PYTHONPATH 加载
   rdagent:
+    environment:
+      PYTHONPATH: /workspace/factopia
     volumes:
       - ./configs:/workspace/configs:ro
+      - ./factopia:/workspace/factopia/factopia:ro
   rdagent-ui:
     volumes:
       - ./configs:/workspace/configs:ro
+  rdagent-web:
+    environment:
+      PYTHONPATH: /workspace/factopia
+    volumes:
+      - ./configs:/workspace/configs:ro
+      - ./factopia:/workspace/factopia/factopia:ro

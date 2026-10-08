@@ -1,0 +1,19 @@
+# 研究场景文件（Spec MINE-07、第 2.3.1 节）。正式平台中由"研究方向与假设输入"页面生成，目前手写。
+# 使用：docker compose ... run --rm -e FACTOPIA_RESEARCH=/workspace/configs/research/hk_medium_term.yaml rdagent rdagent fin_factor --loop-n 5
+
+id: hk_medium_term
+market: hk               # hk / uk / fr
+horizon: 20              # 预测周期（交易日）：1 / 5 / 20 / 60，默认 20（Spec 第 3.6 节）
+
+# 研究方向与投资假设：保留研究员输入的原文（可为中文、英文或法文）
+direction: >-
+  寻找在香港市场有效、且可能迁移到伦敦和巴黎的中期（约 1 个月）价格与成交量类因子。
+hypothesis: >-
+  香港市场整体性波动大、行业集中，单纯的中期反转在香港不成立；
+  经过波动率、行业或成交量调整后的动量或反转信号，可能在香港更稳定，并具备跨市场迁移的可能。
+
+# 约束（来自模拟客户授权；POC 阶段为示例）
+constraints:
+  - Long-only portfolio; short selling is not allowed.
+  - Factors must have a clear economic rationale that a reviewer can explain.
+  - Prefer signals that do not require daily rebalancing, because trading costs (stamp duty) are material.

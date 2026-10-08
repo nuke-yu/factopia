@@ -1,0 +1,171 @@
+"""RD-Agent 场景子类：向 AI 提供场景信息（Spec MINE-07、第 2.3.1 节）。
+
+在 RD-Agent 原有的通用背景之后追加：
+- 市场介绍：configs/rdagent/context/<市场>.en.md（团队编写、人工审核）；
+- 研究方向、投资假设与约束：研究场景文件（环境变量 FACTOPIA_RESEARCH，可选）；
+- 预测周期说明；
+- 已有发现：从 Alpha158 评估结果自动提取的摘要。
+并把"实验设置"中写死的 CSI300 改为实际市场、时间段与预测周期。
+
+通过环境变量 QLIB_FACTOR_SCEN 启用（由 prepare_run.py 设置），不修改 RD-Agent 源码。
+"""
+import os
+import shutil
+from pathlib import Path
+
+import pandas as pd
+import yaml
+from rdagent.app.qlib_rd_loop.conf import FACTOR_PROP_SETTING
+from rdagent.components.coder.factor_coder.config import FACTOR_COSTEER_SETTINGS
+from rdagent.scenarios.qlib.experiment import utils as qlib_exp_utils
+from rdagent.scenarios.qlib.experiment.factor_experiment import QlibFactorScenario
+
+CONTEXT_DIR = Path(os.environ.get("FACTOPIA_CONTEXT_DIR", "/workspace/configs/rdagent/context"))
+RESULTS_DIR = Path(os.environ.get("FACTOPIA_RESULTS_DIR", "/workspace/runtime/results")) / "alpha158"
+
+MARKETS = {
+    "hk": {"name": "Hong Kong (Hang Seng Index constituents)", "currency": "HKD", "example": "0700_HK", "index": "Hang Seng Index"},
+    "uk": {"name": "UK (FTSE 100 constituents)", "currency": "GBP", "example": "HSBA_L", "index": "FTSE 100 Index"},
+    "fr": {"name": "France (CAC 40 constituents)", "currency": "EUR", "example": "MC_PA", "index": "CAC 40 Index"},
+}
+BENCHMARK_FILE = "daily_benchmark.h5"
+
+# Alpha158 因子名前缀的含义，用于把评估结果写成 AI 能理解的描述
+ALPHA158_FAMILIES = {
+    "ROC": "past price change: Ref($close, d)/$close",
+    "MA": "moving average relative to price: Mean($close, d)/$close",
+    "STD": "price volatility: Std($close, d)/$close",
+    "BETA": "price trend slope over d days",
+    "RSQR": "R-squared of the price trend over d days",
+    "RESI": "residual of the price trend over d days",
+    "MAX": "highest price over d days relative to close",
+    "MIN": "lowest price over d days relative to close",
+    "QTLU": "upper quantile of price over d days relative to close",
+    "QTLD": "lower quantile of price over d days relative to close",
+    "RANK": "percentile of today's close within d days",
+    "RSV": "position of close within the d-day high-low range",
+    "IMAX": "days since the d-day high",
+    "IMIN": "days since the d-day low",
+    "IMXD": "gap between days since high and days since low",
+    "CORR": "correlation between price and log volume over d days",
+    "CORD": "correlation between price change and volume change over d days",
+    "CNTP": "share of up days over d days",
+    "CNTN": "share of down days over d days",
+    "CNTD": "share of up days minus share of down days",
+    "SUMP": "share of total gains over d days",
+    "SUMN": "share of total losses over d days",
+    "SUMD": "gains minus losses share over d days",
+    "VMA": "moving average of volume relative to volume",
+    "VSTD": "volatility of volume over d days",
+    "WVMA": "volume-weighted volatility of returns over d days",
+    "VSUMP": "share of volume increases over d days",
+    "VSUMN": "share of volume decreases over d days",
+    "VSUMD": "volume increases minus decreases share over d days",
+    "KMID": "candlestick body relative to open", "KLEN": "candlestick range relative to open",
+    "KUP": "upper shadow", "KLOW": "lower shadow", "KSFT": "candlestick shift",
+}
+
+
+def _family(name: str) -> str:
+    for prefix in sorted(ALPHA158_FAMILIES, key=len, reverse=True):
+        if name.startswith(prefix):
+            return ALPHA158_FAMILIES[prefix]
+    return "Alpha158 price/volume factor"
+
+
+def _label_en(label: str) -> str:
+    """把迁移性分类标签（中文，Spec 第 3.4 节）译为英文。"""
+    if label.startswith("地区特定"):
+        return "market-specific " + label[len("地区特定"):]
+    return {"三市场通用": "universal across all three markets", "需调参": "needs re-parameterisation",
+            "扣成本后无效": "not significant after costs", "无效": "not significant"}.get(label, label)
+
+
+def _prior_findings(market: str, horizon: int) -> str:
+    folder = RESULTS_DIR / f"h{horizon}"
+    if not (folder / "transfer.csv").exists():
+        folder = RESULTS_DIR  # 早期结果未按周期分目录，默认为 20 个交易日
+    path = folder / "transfer.csv"
+    if not path.exists():
+        return "No prior evaluation results are available."
+    t = pd.read_csv(path, index_col=0)
+    lines = [
+        f"Evaluation of the 158 Alpha158 factors on the validation period 2022-2023 "
+        f"(rank IC with the next-{horizon if folder != RESULTS_DIR else 20}-trading-day return, Newey-West t-statistics):",
+        "- Classification across Hong Kong / UK / France: "
+        + "; ".join(f"{_label_en(k)}: {v}" for k, v in t["label"].value_counts().items()),
+    ]
+    col_t, col_r = f"t_{market}", f"ric_{market}"
+    top = t.reindex(t[col_t].abs().sort_values(ascending=False).index).head(5)
+    lines.append(f"- Strongest Alpha158 factors in this market (validation period):")
+    for name, row in top.iterrows():
+        others = ", ".join(f"{m}: t={row[f't_{m}']:.2f}" for m in MARKETS if m != market)
+        lines.append(f"  - {name} ({_family(name)}): rank IC {row[col_r]:.3f}, t={row[col_t]:.2f}; other markets {others}")
+    return "\n".join(lines)
+
+
+class FactopiaFactorScenario(QlibFactorScenario):
+    def __init__(self) -> None:
+        super().__init__()  # 首次运行时由 RD-Agent 生成数据目录（含模板目录中的 daily_benchmark.h5）
+        self._install_benchmark()
+        self.market = os.environ["FACTOPIA_MARKET"]
+        self.horizon = int(os.environ.get("FACTOPIA_HORIZON", 20))
+        research_path = os.environ.get("FACTOPIA_RESEARCH")
+        self.research = yaml.safe_load(Path(research_path).read_text(encoding="utf-8")) if research_path else {}
+        self._background = self._background + "\n\n" + self._context()
+        self._experiment_setting = self._setting_table()
+
+    def _install_benchmark(self) -> None:
+        """把基准指数文件放入正式与调试数据目录，并刷新提供给 AI 的数据说明。"""
+        src = Path(qlib_exp_utils.__file__).parent / "factor_data_template" / BENCHMARK_FILE
+        for folder in (FACTOR_COSTEER_SETTINGS.data_folder, FACTOR_COSTEER_SETTINGS.data_folder_debug):
+            target = Path(folder) / BENCHMARK_FILE
+            if src.exists():
+                shutil.copy(src, target)
+            if not target.exists():
+                raise FileNotFoundError(f"基准指数文件缺失：{target}（检查 generate.py 与 benchmark.txt）")
+        self._source_data = qlib_exp_utils.get_data_folder_intro()
+
+    def _context(self) -> str:
+        m = MARKETS[self.market]
+        parts = [
+            "====== Research context (Factopia cross-border research platform) ======",
+            f"You are researching factors for {m['name']}. The same research is run separately in Hong Kong, "
+            "the UK and France, and factors are compared across markets; signals that also work in other markets are preferred.",
+            "",
+            (CONTEXT_DIR / f"{self.market}.en.md").read_text(encoding="utf-8").strip(),
+            "",
+            "## Prediction horizon",
+            f"The model predicts the return over the next {self.horizon} trading days "
+            f"(label: Ref($close, -{self.horizon + 1})/Ref($close, -1) - 1). "
+            f"In the backtest each stock is held for at least {self.horizon} trading days, so factors should "
+            "carry information that persists over this horizon rather than one-day noise.",
+            "",
+            "## Prior findings",
+            _prior_findings(self.market, self.horizon),
+        ]
+        if self.research:
+            parts += ["", "## Research direction (written by the researcher; may be in Chinese, English or French)",
+                      f"Direction: {self.research.get('direction', '').strip()}",
+                      f"Hypothesis: {self.research.get('hypothesis', '').strip()}"]
+            if self.research.get("constraints"):
+                parts += ["", "## Constraints"] + [f"- {c}" for c in self.research["constraints"]]
+        parts += ["", "## Data notes",
+                  f"- daily_pv.h5: adjusted daily prices and volume of the constituent stocks, in {m['currency']}; "
+                  f"instrument codes look like {m['example']}; only trading days of this exchange are included.",
+                  f"- {BENCHMARK_FILE}: daily bars of the benchmark ({m['index']}), indexed by datetime only. "
+                  "Use it for market-relative factors such as relative strength or beta. "
+                  "The benchmark is NOT in daily_pv.h5 and is not a tradable instrument; "
+                  "index volume may be missing.",
+                  "- The output factor must contain values for the stocks in daily_pv.h5 only."]
+        return "\n".join(parts)
+
+    def _setting_table(self) -> str:
+        s = FACTOR_PROP_SETTING
+        return (
+            "| Dataset | Model | Factors | Horizon | Data Split |\n"
+            "|---|---|---|---|---|\n"
+            f"| {MARKETS[self.market]['name']} | LGBModel | Alpha158 Plus | {self.horizon} trading days | "
+            f"Train: {s.train_start} to {s.train_end} <br> Valid: {s.valid_start} to {s.valid_end} <br> "
+            f"Test: {s.test_start} to {s.test_end} |"
+        )

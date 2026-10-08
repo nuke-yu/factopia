@@ -19,7 +19,12 @@ for t in factor_template model_template; do
 done
 # 数据生成脚本也先恢复原版；并删除上次运行残留的数据文件，避免生成失败时误用旧数据
 cp "$IMG/$EXP/factor_data_template/generate.py" "$SRC/$EXP/factor_data_template/generate.py"
-rm -f "$SRC/$EXP/factor_data_template/"daily_pv_*.h5
+rm -f "$SRC/$EXP/factor_data_template/"daily_*.h5
+
+# 研究场景文件（可选）：决定市场与预测周期（Spec MINE-07、MINE-09）
+if [ -n "$FACTOPIA_RESEARCH" ]; then
+  eval "$(python -m factopia.mining.rdagent_ext.prepare_run env)"
+fi
 
 if [ -n "$FACTOPIA_MARKET" ]; then
   CONF=/workspace/configs/rdagent/$FACTOPIA_MARKET
@@ -32,16 +37,13 @@ if [ -n "$FACTOPIA_MARKET" ]; then
   cp /workspace/configs/rdagent/common/generate.py "$SRC/$EXP/factor_data_template/generate.py"
   # 回测容器挂载该市场的数据（RD-Agent 在容器内固定读取 /root/.qlib/qlib_data/cn_data）
   export QLIB_DOCKER_EXTRA_VOLUMES="{\"$HOME_DIR\": {\"bind\": \"/root/.qlib/\", \"mode\": \"rw\"}}"
-  # 时间段：数据截止 2023-12-31，2024 年以后对 AI 完全不可见（Spec MINE-03）。
-  # 测试期结束日须早于数据最后一天：Qlib 回测在最后一步要读取下一个交易日
-  for p in QLIB_FACTOR QLIB_MODEL QLIB_QUANT; do
-    export ${p}_TRAIN_START=2015-01-01 ${p}_TRAIN_END=2020-12-31
-    export ${p}_VALID_START=2021-01-01 ${p}_VALID_END=2021-12-31
-    export ${p}_TEST_START=2022-01-01 ${p}_TEST_END=2023-12-28
-  done
-  mkdir -p "/workspace/runtime/rdagent/$FACTOPIA_MARKET"
-  cd "/workspace/runtime/rdagent/$FACTOPIA_MARKET"
-  echo "[entrypoint] market=$FACTOPIA_MARKET data=$HOME_DIR workdir=$(pwd)"
+  # 预测周期（默认 20 个交易日）：改写标签与最短持有天数，按交易日历计算时间段（段间间隔 N 个交易日），
+  # 启用场景子类，并按市场和周期使用独立工作目录。数据截止 2023-12-31，2024 年以后对 AI 不可见（MINE-03）
+  export FACTOPIA_HORIZON="${FACTOPIA_HORIZON:-20}"
+  eval "$(python -m factopia.mining.rdagent_ext.prepare_run apply)"
+  mkdir -p "$FACTOPIA_WORKDIR"
+  cd "$FACTOPIA_WORKDIR"
+  echo "[entrypoint] market=$FACTOPIA_MARKET horizon=$FACTOPIA_HORIZON data=$HOME_DIR workdir=$(pwd)"
 fi
 
 exec "$@"

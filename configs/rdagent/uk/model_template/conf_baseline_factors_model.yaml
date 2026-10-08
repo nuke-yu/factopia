@@ -1,5 +1,6 @@
 # Factopia：由 RD-Agent v1.0.0 的 model_template/conf_baseline_factors_model.yaml 改写，市场 = UK
 # 改动：股票池、基准、region（cn→us，取消 A 股 100 股一手）、去掉涨跌停、交易成本（示例值，待合规确认）
+# 持股数按股票池比例设置（factopia/mining/topk.py）：股票池 99 只，topk=20（20%，最少 8），n_drop=2（持股数的 10%，最少 1）
 qlib_init:
     provider_uri: "~/.qlib/qlib_data/cn_data"
     region: us
@@ -46,8 +47,8 @@ port_analysis_config: &port_analysis_config
         module_path: qlib.contrib.strategy
         kwargs:
             signal: <PRED>
-            topk: 50
-            n_drop: 5
+            topk: 20
+            n_drop: 2
     backtest:
         start_time: {{ test_start | default("2017-01-01", true) }}
         end_time: {{ test_end | default("null", true) }}
