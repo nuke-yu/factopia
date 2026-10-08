@@ -4,7 +4,7 @@
 - 市场介绍：configs/rdagent/context/<市场>.en.md（团队编写、人工审核）；
 - 研究方向、投资假设与约束：研究场景文件（环境变量 FACTOPIA_RESEARCH，可选）；
 - 预测周期说明；
-- 已有发现：从 Alpha158 评估结果自动提取的摘要。
+- 已有发现：用回测测试期开始之前的数据，从 Alpha158 逐日 IC 重新计算的摘要（MINE-11，防止数据泄漏）。
 并把"实验设置"中写死的 CSI300 改为实际市场、时间段与预测周期。
 
 通过环境变量 QLIB_FACTOR_SCEN 启用（由 prepare_run.py 设置），不修改 RD-Agent 源码。
@@ -20,8 +20,11 @@ from rdagent.components.coder.factor_coder.config import FACTOR_COSTEER_SETTINGS
 from rdagent.scenarios.qlib.experiment import utils as qlib_exp_utils
 from rdagent.scenarios.qlib.experiment.factor_experiment import QlibFactorScenario
 
+from factopia.factors.stats import classify, newey_west_t
+
 CONTEXT_DIR = Path(os.environ.get("FACTOPIA_CONTEXT_DIR", "/workspace/configs/rdagent/context"))
 RESULTS_DIR = Path(os.environ.get("FACTOPIA_RESULTS_DIR", "/workspace/runtime/results")) / "alpha158"
+RDAGENT_HOME = Path(os.environ.get("FACTOPIA_RDAGENT_HOME", "/workspace/runtime/rdagent_markets"))
 
 MARKETS = {
     "hk": {"name": "Hong Kong (Hang Seng Index constituents)", "currency": "HKD", "example": "0700_HK", "index": "Hang Seng Index"},
@@ -63,6 +66,8 @@ ALPHA158_FAMILIES = {
     "VSUMD": "volume increases minus decreases share over d days",
     "KMID": "candlestick body relative to open", "KLEN": "candlestick range relative to open",
     "KUP": "upper shadow", "KLOW": "lower shadow", "KSFT": "candlestick shift",
+    "OPEN": "today's open relative to close", "HIGH": "today's high relative to close",
+    "LOW": "today's low relative to close", "VWAP": "today's VWAP relative to close",
 }
 
 
@@ -81,23 +86,50 @@ def _label_en(label: str) -> str:
             "扣成本后无效": "not significant after costs", "无效": "not significant"}.get(label, label)
 
 
-def _prior_findings(market: str, horizon: int) -> str:
+def _calendar(market: str) -> pd.DatetimeIndex:
+    days = (RDAGENT_HOME / market / "qlib_data/cn_data/calendars/day.txt").read_text().split()
+    return pd.DatetimeIndex(days)
+
+
+def _findings_window(market: str, horizon: int, test_start: str) -> pd.Timestamp:
+    """已有发现可使用的最后一个日期：该日标签用到的价格（t+N+1）必须早于回测测试期开始日（MINE-11）。"""
+    cal = _calendar(market)
+    i_test = cal.searchsorted(pd.Timestamp(test_start))
+    return cal[i_test - horizon - 2]
+
+
+def compute_prior_findings(horizon: int, test_start: str) -> tuple[pd.DataFrame, dict[str, pd.Timestamp]]:
+    """按回测测试期开始日之前的数据，重新计算 Alpha158 各因子在三个市场的 rank IC、t 值与迁移性分类。
+
+    不读取 transfer.csv：其验证期（2022–2023）与 RD-Agent 的测试期重叠，提供给 AI 会造成数据泄漏。
+    """
     folder = RESULTS_DIR / f"h{horizon}"
-    if not (folder / "transfer.csv").exists():
-        folder = RESULTS_DIR  # 早期结果未按周期分目录，默认为 20 个交易日
-    path = folder / "transfer.csv"
-    if not path.exists():
-        return "No prior evaluation results are available."
-    t = pd.read_csv(path, index_col=0)
+    stats, ends = {}, {}
+    for m in MARKETS:
+        ric = pd.read_parquet(folder / f"ic_daily_{m}.parquet")
+        ends[m] = _findings_window(m, horizon, test_start)
+        ric = ric.loc[:ends[m]]
+        stats[f"ric_{m}"] = ric.mean()
+        stats[f"t_{m}"] = ric.apply(newey_west_t, lags=horizon)
+    table = pd.DataFrame(stats)
+    table["label"] = table.apply(classify, axis=1)
+    return table, ends
+
+
+def _prior_findings(market: str, horizon: int, test_start: str) -> str:
+    if not (RESULTS_DIR / f"h{horizon}" / f"ic_daily_{market}.parquet").exists():
+        return "No prior evaluation results are available for this horizon."
+    t, ends = compute_prior_findings(horizon, test_start)
+    period = f"2015-01-02 to {ends[market]:%Y-%m-%d}"
     lines = [
-        f"Evaluation of the 158 Alpha158 factors on the validation period 2022-2023 "
-        f"(rank IC with the next-{horizon if folder != RESULTS_DIR else 20}-trading-day return, Newey-West t-statistics):",
+        f"Evaluation of the 158 Alpha158 factors on {period}, i.e. only data before the backtest test period "
+        f"(rank IC with the next-{horizon}-trading-day return, Newey-West t-statistics, significance threshold |t| > 3):",
         "- Classification across Hong Kong / UK / France: "
         + "; ".join(f"{_label_en(k)}: {v}" for k, v in t["label"].value_counts().items()),
     ]
     col_t, col_r = f"t_{market}", f"ric_{market}"
     top = t.reindex(t[col_t].abs().sort_values(ascending=False).index).head(5)
-    lines.append(f"- Strongest Alpha158 factors in this market (validation period):")
+    lines.append("- Strongest Alpha158 factors in this market over the same period:")
     for name, row in top.iterrows():
         others = ", ".join(f"{m}: t={row[f't_{m}']:.2f}" for m in MARKETS if m != market)
         lines.append(f"  - {name} ({_family(name)}): rank IC {row[col_r]:.3f}, t={row[col_t]:.2f}; other markets {others}")
@@ -142,7 +174,7 @@ class FactopiaFactorScenario(QlibFactorScenario):
             "carry information that persists over this horizon rather than one-day noise.",
             "",
             "## Prior findings",
-            _prior_findings(self.market, self.horizon),
+            _prior_findings(self.market, self.horizon, str(FACTOR_PROP_SETTING.test_start)),
         ]
         if self.research:
             parts += ["", "## Research direction (written by the researcher; may be in Chinese, English or French)",

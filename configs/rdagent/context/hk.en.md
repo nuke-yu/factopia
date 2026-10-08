@@ -26,7 +26,6 @@
 
 ## Features relevant to factor research
 
-- Since 2015 there have been several market-wide swings driven by mainland policy, regulation and geopolitics; market-wide moves often dominate stock-specific effects.
-- This project's Alpha158 evaluation (validation period 2022–2023): the medium-term reversal pattern (stocks that fell most over the past one to three months rebound over the following month) does **not** hold in Hong Kong (the sign was even reversed in the training period), while it is significant in Paris.
+- Between 2015 and 2021 there were several market-wide swings driven by mainland policy, regulation and geopolitics; market-wide moves often dominate stock-specific effects.
 - The universe has only 84 stocks and is concentrated by sector, so part of the cross-sectional variation comes from sector rotation.
 - Company announcements are published in both Chinese and English.

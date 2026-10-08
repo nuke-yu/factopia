@@ -26,6 +26,5 @@
 
 ## Features relevant to factor research
 
-- This project's Alpha158 evaluation (validation period 2022–2023): 14 factors are significant in Paris and they all express one pattern, **medium-term reversal**: stocks that fell most over the past one to three months are more likely to rebound over the following month. The pattern existed but was weaker in 2015–2021 and strengthened clearly in 2022–2023.
 - With only 40 stocks, each day's cross-sectional correlation is computed from 40 observations, so results are noisy; longer samples or cross-market validation are needed.
 - Company announcements are mainly in French, with English versions for large companies (available in the AMF open data).

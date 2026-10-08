@@ -4,6 +4,8 @@
   按 Qlib 惯例为 Ref($close, -(N+1)) / Ref($close, -1) - 1（次日起持有 N 日）
 - 每个交易日在横截面上计算 IC（Pearson）和 RankIC（Spearman）
 - 数据切分：训练 2015–2021、验证 2022–2023、测试 2024 至今；迁移性分类只使用验证集
+  （验证期与 RD-Agent 回测测试期重叠，因此 transfer.csv 不提供给 AI；AI 看到的已有发现由
+  rdagent_ext/scenario.py 用测试期开始之前的逐日 IC 重新计算，Spec MINE-11）
 - 显著性：相邻标签有 N-1 天重叠，逐日 IC 高度自相关，直接用逐日样本会高估 t 值；
   因此 t 值使用 Newey-West 修正（滞后 N 期），既使用全部逐日数据，又考虑重叠带来的自相关
 - 迁移性分类（门槛 T=3）：三市场通用 / 地区特定 / 需调参 / 无效（"扣成本后无效"需组合回测，后续补充）
@@ -15,11 +17,12 @@ import argparse
 import os
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import qlib
 from qlib.contrib.data.loader import Alpha158DL
 from qlib.data import D
+
+from factopia.factors.stats import classify, newey_west_t
 
 QLIB_DIR = Path(os.environ.get("FACTOPIA_QLIB_DIR", "/workspace/runtime/qlib_data"))
 RESULTS_DIR = Path(os.environ.get("FACTOPIA_RESULTS_DIR", "/workspace/runtime/results")) / "alpha158"
@@ -27,7 +30,6 @@ RESULTS_DIR = Path(os.environ.get("FACTOPIA_RESULTS_DIR", "/workspace/runtime/re
 MARKETS = {"hk": "hsi", "uk": "ftse100", "fr": "cac40"}
 SPLITS = {"train": ("2015-01-01", "2021-12-31"), "valid": ("2022-01-01", "2023-12-31"), "test": ("2024-01-01", None)}
 HORIZONS = (1, 5, 20, 60)
-T_THRESHOLD = 3.0
 MIN_STOCKS = 10  # 当日有效股票少于此数时不计算 IC
 
 
@@ -44,40 +46,15 @@ def _daily_ic(features: pd.DataFrame, label: pd.Series) -> tuple[pd.DataFrame, p
     return pd.DataFrame(ic).T, pd.DataFrame(ric).T
 
 
-def _newey_west_t(x: pd.Series, lags: int) -> float:
-    x = x.dropna().to_numpy()
-    n = len(x)
-    if n <= lags + 1:
-        return np.nan
-    d = x - x.mean()
-    lrv = d @ d / n
-    for k in range(1, lags + 1):
-        lrv += 2 * (1 - k / (lags + 1)) * (d[k:] @ d[:-k]) / n
-    return x.mean() / np.sqrt(lrv / n) if lrv > 0 else np.nan
-
-
 def _summarize(ic: pd.DataFrame, ric: pd.DataFrame, start: str, end: str | None, horizon: int) -> pd.DataFrame:
     sl = slice(start, end)
     ic, ric = ic.loc[sl], ric.loc[sl]
     return pd.DataFrame({
         "ic_mean": ic.mean(), "rank_ic_mean": ric.mean(),
         "icir": ic.mean() / ic.std(), "rank_icir": ric.mean() / ric.std(),
-        "rank_ic_t": ric.apply(_newey_west_t, lags=horizon), "n_days": ric.notna().sum(),
+        "rank_ic_t": ric.apply(newey_west_t, lags=horizon), "n_days": ric.notna().sum(),
         "positive_ratio": (ric > 0).mean(),
     })
-
-
-def _classify(row: pd.Series) -> str:
-    t = row[[f"t_{m}" for m in MARKETS]]
-    passed = [m for m in MARKETS if abs(row[f"t_{m}"]) > T_THRESHOLD]
-    same_sign = len(set(np.sign(t.dropna()))) == 1
-    if len(passed) == len(MARKETS) and same_sign:
-        return "三市场通用"
-    if same_sign and passed and all(abs(row[f"t_{m}"]) > T_THRESHOLD / 2 for m in MARKETS):
-        return "需调参"
-    if passed:
-        return "地区特定(" + "/".join(m.upper() for m in passed) + ")"
-    return "无效"
 
 
 def main() -> None:
@@ -113,7 +90,7 @@ def main() -> None:
     for m in MARKETS:
         transfer[f"ric_{m}"] = valid[("rank_ic_mean", m)]
         transfer[f"t_{m}"] = valid[("rank_ic_t", m)]
-    transfer["label"] = transfer.apply(_classify, axis=1)
+    transfer["label"] = transfer.apply(classify, axis=1)
     transfer.sort_values("label").to_csv(OUT_DIR / "transfer.csv")
 
     print(f"\n迁移性分类（预测周期 {horizon} 个交易日，验证集 2022–2023，门槛 |t|>3）：")

@@ -24,7 +24,6 @@
 
 ## Features relevant to factor research
 
-- The 2016 Brexit referendum, the 2020 pandemic, and the 2022 energy price shock and gilt market turmoil all caused clear sector rotations.
-- This project's Alpha158 evaluation (validation period 2022–2023): medium-term reversal has the same sign in the UK as in Paris but is not statistically significant; only one factor (VSTD10, a volume volatility factor) is significant in the UK.
+- The 2016 Brexit referendum and the 2020 pandemic both caused clear sector rotations.
 - Stamp duty applies only on purchases, so frequent rebalancing is costly.
 - Company announcements are published in English.
