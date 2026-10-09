@@ -21,3 +21,30 @@ services:
     volumes:
       - ./configs:/workspace/configs:ro
       - ./factopia:/workspace/factopia/factopia:ro
+
+  # 后端接口：挂载源码并自动重载
+  api:
+    volumes:
+      - ./factopia:/workspace/factopia/factopia:ro
+      - ./configs:/workspace/configs:ro
+    command: ["uvicorn", "factopia.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload",
+              "--reload-dir", "/workspace/factopia/factopia"]
+
+  # 前端开发服务器（热更新）：docker compose -f docker-compose.yml -f compose.local.yml --profile dev up -d web-dev
+  #   → http://localhost:5173 ；依赖装在命名卷中，避免与宿主机的系统架构混用
+  web-dev:
+    image: node:22-slim
+    profiles: ["dev"]
+    working_dir: /app
+    depends_on: [api]
+    environment:
+      API_UPSTREAM: http://api:8000
+    volumes:
+      - ./web:/app
+      - web_node_modules:/app/node_modules
+    ports:
+      - "127.0.0.1:5173:5173"
+    command: ["sh", "-c", "npm ci && npm run dev"]
+
+volumes:
+  web_node_modules:

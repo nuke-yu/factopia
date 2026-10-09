@@ -20,6 +20,7 @@ from rdagent.components.coder.factor_coder.config import FACTOR_COSTEER_SETTINGS
 from rdagent.scenarios.qlib.experiment import utils as qlib_exp_utils
 from rdagent.scenarios.qlib.experiment.factor_experiment import QlibFactorScenario
 
+from factopia.factors.families import family
 from factopia.factors.stats import classify, newey_west_t
 
 CONTEXT_DIR = Path(os.environ.get("FACTOPIA_CONTEXT_DIR", "/workspace/configs/rdagent/context"))
@@ -33,49 +34,9 @@ MARKETS = {
 }
 BENCHMARK_FILE = "daily_benchmark.h5"
 
-# Alpha158 因子名前缀的含义，用于把评估结果写成 AI 能理解的描述
-ALPHA158_FAMILIES = {
-    "ROC": "past price change: Ref($close, d)/$close",
-    "MA": "moving average relative to price: Mean($close, d)/$close",
-    "STD": "price volatility: Std($close, d)/$close",
-    "BETA": "price trend slope over d days",
-    "RSQR": "R-squared of the price trend over d days",
-    "RESI": "residual of the price trend over d days",
-    "MAX": "highest price over d days relative to close",
-    "MIN": "lowest price over d days relative to close",
-    "QTLU": "upper quantile of price over d days relative to close",
-    "QTLD": "lower quantile of price over d days relative to close",
-    "RANK": "percentile of today's close within d days",
-    "RSV": "position of close within the d-day high-low range",
-    "IMAX": "days since the d-day high",
-    "IMIN": "days since the d-day low",
-    "IMXD": "gap between days since high and days since low",
-    "CORR": "correlation between price and log volume over d days",
-    "CORD": "correlation between price change and volume change over d days",
-    "CNTP": "share of up days over d days",
-    "CNTN": "share of down days over d days",
-    "CNTD": "share of up days minus share of down days",
-    "SUMP": "share of total gains over d days",
-    "SUMN": "share of total losses over d days",
-    "SUMD": "gains minus losses share over d days",
-    "VMA": "moving average of volume relative to volume",
-    "VSTD": "volatility of volume over d days",
-    "WVMA": "volume-weighted volatility of returns over d days",
-    "VSUMP": "share of volume increases over d days",
-    "VSUMN": "share of volume decreases over d days",
-    "VSUMD": "volume increases minus decreases share over d days",
-    "KMID": "candlestick body relative to open", "KLEN": "candlestick range relative to open",
-    "KUP": "upper shadow", "KLOW": "lower shadow", "KSFT": "candlestick shift",
-    "OPEN": "today's open relative to close", "HIGH": "today's high relative to close",
-    "LOW": "today's low relative to close", "VWAP": "today's VWAP relative to close",
-}
-
 
 def _family(name: str) -> str:
-    for prefix in sorted(ALPHA158_FAMILIES, key=len, reverse=True):
-        if name.startswith(prefix):
-            return ALPHA158_FAMILIES[prefix]
-    return "Alpha158 price/volume factor"
+    return family(name)[1]
 
 
 def _label_en(label: str) -> str:

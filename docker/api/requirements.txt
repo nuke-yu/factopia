@@ -1,0 +1,5 @@
+fastapi==0.115.12
+uvicorn[standard]==0.34.2
+pandas==2.3.3
+pyarrow==21.0.0
+pyyaml==6.0.2

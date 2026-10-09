@@ -81,6 +81,33 @@ services:
     # 查看某个市场的日志：RDAGENT_UI_MARKET=hk docker compose --profile ui up -d rdagent-ui
     command: ["rdagent", "ui", "--port", "19899", "--log-dir", "/workspace/runtime/rdagent/${RDAGENT_UI_MARKET:-hk}/log"]
 
+  # ── Factopia 平台（可独立部署，见 README「部署 Web 界面」）────────────────────────
+  # 后端接口：只读挂载结果目录，不依赖 Qlib / RD-Agent 镜像
+  api:
+    build:
+      context: .
+      dockerfile: docker/api/Dockerfile
+    image: factopia-api:dev
+    profiles: ["platform", "dev"]
+    restart: unless-stopped
+    volumes:
+      - runtime:/workspace/runtime:ro
+
+  # 前端：nginx 提供静态页面，并把 /api 转发到后端（API_UPSTREAM）
+  web:
+    build:
+      context: .
+      dockerfile: docker/web/Dockerfile
+    image: factopia-web:dev
+    profiles: ["platform"]
+    restart: unless-stopped
+    depends_on: [api]
+    environment:
+      API_UPSTREAM: http://api:8000
+    ports:
+      # 默认只允许本机访问；云服务器在 .env 中设置 FACTOPIA_WEB_BIND=0.0.0.0（须先在前面加 HTTPS 与登录，见 README）
+      - "${FACTOPIA_WEB_BIND:-127.0.0.1}:${FACTOPIA_WEB_PORT:-18080}:8080"
+
 volumes:
   runtime:
   rdagent_src:

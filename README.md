@@ -51,6 +51,27 @@ RDAGENT_UI_MARKET=hk docker compose -f docker-compose.yml -f compose.local.yml -
 docker compose run --rm rdagent ls /workspace/runtime
 ```
 
+## Factopia Web 界面
+
+三个页面：研究立项 → 审核 → 结果（3D 图表）。由两个可独立部署的服务组成：`web`（nginx + 静态页面）与 `api`（FastAPI，只读结果文件）。
+
+```bash
+# 1. 导出结果（每次运行 RD-Agent 或重新评估后执行）
+DC="docker compose -f docker-compose.yml -f compose.local.yml"
+$DC run --rm --entrypoint "" rdagent sh -c 'cd /workspace/factopia && /opt/conda/envs/rdagent/bin/python -m factopia.export.rdagent_run'
+$DC run --rm app python -m factopia.export.backtests
+$DC run --rm app python -m factopia.export.alpha158
+
+# 2a. 部署方式（与云服务器相同的镜像）→ http://localhost:18080
+docker compose --profile platform up -d --build api web
+
+# 2b. 前端开发（热更新）→ http://localhost:5173
+$DC --profile dev up -d api web-dev
+```
+
+**部署到云服务器：** 在服务器上 `git clone` 后执行同样的命令（`--profile platform`）。`api` 只读挂载 `runtime` 卷，结果由服务器上的数据与挖掘流程生成；`web` 的字体和图表库已打包进镜像，不访问任何外部 CDN。
+默认只监听本机；对外开放前**必须**在前面加 HTTPS 反向代理与登录（目前接口没有身份验证），再在 `.env` 中设置 `FACTOPIA_WEB_BIND=0.0.0.0`、`FACTOPIA_WEB_PORT`。
+
 ## 架构
 
 | 服务 | 说明 |
@@ -60,6 +81,9 @@ docker compose run --rm rdagent ls /workspace/runtime
 | `dind` | 独立 Docker 引擎；RD-Agent 启动的回测容器运行在这里 |
 | `rdagent-ui` | RD-Agent 日志界面（profile `ui`） |
 | `qlib-runner` | 回测镜像，只构建（profile `build-only`），载入 dind 后由 RD-Agent 按需启动 |
+| `api` | Factopia 后端接口（FastAPI，profile `platform`），只读结果文件，镜像不含 Qlib / RD-Agent |
+| `web` | Factopia 前端（nginx，profile `platform`），转发 `/api` 到 `api` |
+| `web-dev` | 前端开发服务器（仅 compose.local.yml，profile `dev`） |
 
 | 命名卷 | 内容 |
 |---|---|
@@ -72,6 +96,9 @@ docker compose run --rm rdagent ls /workspace/runtime
 | 路径 | 内容 |
 |---|---|
 | `docker/` | 各镜像的 Dockerfile（均为多架构） |
+| `factopia/export/` | 结果导出：RD-Agent 日志、回测与持仓、Alpha158 汇总 → `/workspace/runtime/results/` |
+| `factopia/api/` | 后端接口 |
+| `web/` | 前端（React 19、Vite、Tailwind v4、ECharts GL、React Three Fiber） |
 | `spikes/` | 跑通验证脚本 |
 | `docs/` | 需求规格与全局设计 |
 | `vendor/` | RD-Agent、Qlib 源码，仅供阅读（不入库，不参与运行） |

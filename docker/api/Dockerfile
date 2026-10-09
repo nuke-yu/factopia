@@ -1,0 +1,26 @@
+# Factopia 后端接口：独立部署的轻量镜像（不含 Qlib / RD-Agent），只读取导出的结果文件。
+# 构建上下文为仓库根目录：docker compose build api
+FROM python:3.12-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    FACTOPIA_RESULTS_DIR=/workspace/runtime/results \
+    FACTOPIA_CONFIGS_DIR=/workspace/configs
+
+WORKDIR /workspace/factopia
+
+COPY docker/api/requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
+
+# 代码与配置随镜像发布，云端部署无需挂载源码（本地开发时由 compose.local.yml 挂载覆盖）
+COPY factopia/__init__.py factopia/__init__.py
+COPY factopia/api factopia/api
+COPY configs/research /workspace/configs/research
+COPY configs/rdagent/context /workspace/configs/rdagent/context
+
+RUN useradd --uid 10001 --no-create-home factopia
+USER factopia
+
+EXPOSE 8000
+HEALTHCHECK --interval=30s --timeout=3s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health')"
+CMD ["uvicorn", "factopia.api.main:app", "--host", "0.0.0.0", "--port", "8000"]

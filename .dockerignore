@@ -1,0 +1,13 @@
+# 构建上下文为仓库根目录的镜像（api、web）只需要源码与配置
+.git
+.env
+.venv
+**/__pycache__
+**/*.pyc
+runtime
+vendor
+spikes
+docs
+web/node_modules
+web/dist
+.DS_Store

@@ -1,0 +1,106 @@
+@import "tailwindcss";
+@import "@fontsource/chakra-petch/500.css";
+@import "@fontsource/chakra-petch/600.css";
+@import "@fontsource/jetbrains-mono/400.css";
+@import "@fontsource/jetbrains-mono/500.css";
+
+/* 主题：深色为默认（UI-04），浅色通过 html[data-theme="light"] 切换。三个市场颜色固定。 */
+:root {
+  --bg: #070b14;
+  --bg-2: #0c1322;
+  --bg-3: #121c31;
+  --line: #1b2741;
+  --line-2: #2b3b5e;
+  --text: #dde6f5;
+  --muted: #8592ad;
+  --faint: #56637e;
+  --accent: #3ee0cf;
+  --good: #3ddc84;
+  --bad: #ff6b6b;
+  --warn: #f5a524;
+  --hk: #ff5a76;
+  --uk: #4f9dff;
+  --fr: #f2c14e;
+  --grid: rgba(62, 224, 207, 0.06);
+  color-scheme: dark;
+}
+:root[data-theme="light"] {
+  --bg: #f2f4f8;
+  --bg-2: #ffffff;
+  --bg-3: #eaeef5;
+  --line: #d8deea;
+  --line-2: #bcc6d8;
+  --text: #111a2c;
+  --muted: #55627a;
+  --faint: #8a95aa;
+  --accent: #0b968a;
+  --good: #14935a;
+  --bad: #d63b3b;
+  --warn: #b77400;
+  --hk: #db2d4c;
+  --uk: #1d68d6;
+  --fr: #b07d00;
+  --grid: rgba(11, 150, 138, 0.07);
+  color-scheme: light;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-bg-2: var(--bg-2);
+  --color-bg-3: var(--bg-3);
+  --color-line: var(--line);
+  --color-line-2: var(--line-2);
+  --color-text: var(--text);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-accent: var(--accent);
+  --color-good: var(--good);
+  --color-bad: var(--bad);
+  --color-warn: var(--warn);
+  --color-hk: var(--hk);
+  --color-uk: var(--uk);
+  --color-fr: var(--fr);
+  --font-display: "Chakra Petch", "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+  --font-sans: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+}
+
+html, body, #root { height: 100%; }
+body {
+  margin: 0;
+  background-color: var(--bg);
+  background-image:
+    linear-gradient(var(--grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size: 32px 32px;
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+}
+h1, h2, h3 { text-wrap: balance; }
+.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.label { font-family: var(--font-display); letter-spacing: 0.08em; text-transform: uppercase; font-size: 11px; color: var(--muted); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* 面板：只有图表区域使用描边与角标，其他内容保持平铺 */
+.panel { background: color-mix(in oklab, var(--bg-2) 92%, transparent); border: 1px solid var(--line); border-radius: 6px; position: relative; }
+.panel::before, .panel::after { content: ""; position: absolute; width: 10px; height: 10px; border-color: var(--accent); opacity: 0.7; pointer-events: none; }
+.panel::before { top: -1px; left: -1px; border-top: 1px solid; border-left: 1px solid; }
+.panel::after { bottom: -1px; right: -1px; border-bottom: 1px solid; border-right: 1px solid; }
+
+.btn { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; border-radius: 4px; border: 1px solid var(--line-2); background: var(--bg-3); color: var(--text); font-size: 13px; cursor: pointer; transition: border-color .15s, background .15s; }
+.btn:hover:not(:disabled) { border-color: var(--accent); }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: #04121a; font-weight: 600; }
+.btn-primary:hover:not(:disabled) { filter: brightness(1.08); }
+.seg { display: inline-flex; border: 1px solid var(--line-2); border-radius: 4px; overflow: hidden; }
+.seg > button { height: 28px; padding: 0 10px; font-size: 12px; background: transparent; color: var(--muted); border: 0; cursor: pointer; }
+.seg > button + button { border-left: 1px solid var(--line-2); }
+.seg > button[aria-pressed="true"] { background: color-mix(in oklab, var(--accent) 18%, transparent); color: var(--text); }
+.field { width: 100%; background: var(--bg); border: 1px solid var(--line-2); border-radius: 4px; color: var(--text); padding: 8px 10px; font: inherit; }
+.field:focus { outline: none; border-color: var(--accent); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}

@@ -1,0 +1,28 @@
+server {
+    listen 8080;
+    server_name _;
+    root /usr/share/nginx/html;
+
+    gzip on;
+    gzip_types application/json application/javascript text/css image/svg+xml;
+    gzip_min_length 1024;
+
+    location = /healthz { access_log off; return 200 "ok\n"; }
+
+    # 后端接口（含 WebSocket，用于运行进度推送）
+    location /api/ {
+        proxy_pass ${API_UPSTREAM};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_read_timeout 300s;
+    }
+
+    # 带哈希的静态资源长期缓存
+    location /assets/ { expires 30d; add_header Cache-Control "public, immutable"; }
+
+    # 前端路由：未知路径回到 index.html
+    location / { try_files $uri /index.html; }
+}
