@@ -82,6 +82,29 @@ export type ResearchSpec = {
   id: string; market: Market; horizon: number; direction: string; hypothesis: string; constraints?: string[];
 };
 
+export type ProjectRun = {
+  run_id: string; market: Market; rounds: number; adopted: number; cost_usd: number; started_at: string | null;
+  state: "已完成" | "运行中" | "已中止"; context_leak: boolean | null; linked: "记录" | "推断";
+  baseline_return: number | null; best_return: number | null;
+};
+export type Project = {
+  id: string; market: Market; horizon: number; direction: string; hypothesis: string;
+  status: "草稿" | "运行中" | "已完成" | "已中止"; runs: ProjectRun[];
+};
+
+type EventBase = { index: number; t: number; loop: number; step: string; has_prompt: boolean };
+export type RunEvent = EventBase & (
+  | { kind: "step"; name: string; phase: "start" | "end" }
+  | { kind: "hypothesis"; text: string; reason: string }
+  | { kind: "factors"; factors: { name: string; description: string }[] }
+  | { kind: "llm"; purpose: string; seconds: number | null; prompt_chars: number; response: string }
+  | { kind: "check"; attempt: number; items: { name: string; ok: boolean; message: string }[] }
+  | { kind: "coded"; passed: number; total: number }
+  | { kind: "backtest"; metrics: Metrics | null }
+  | { kind: "decision"; decision: boolean; observations: string; new_hypothesis: string }
+  | { kind: "cost"; total_usd: number }
+);
+
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(`/api${path}`);
   if (!res.ok) {
@@ -99,6 +122,9 @@ export const api = {
   run: (id: string) => get<{ run: Run; rounds: Round[] }>(`/runs/${id}`),
   backtest: (id: string) => get<Record<string, Columns>>(`/runs/${id}/backtest`),
   positions: (id: string, key: string, step = 5) => get<Positions>(`/runs/${id}/positions/${key}?step=${step}`),
+  projects: () => get<Project[]>("/projects"),
+  events: (id: string) => get<RunEvent[]>(`/runs/${id}/events`),
+  prompt: (id: string, index: number) => get<{ system: string; user: string; response: string | null }>(`/runs/${id}/events/${index}/prompt`),
   researchExamples: () => get<ResearchSpec[]>("/research/examples"),
   context: (m: Market, lang: "zh" | "en" = "zh") => get<{ markdown: string }>(`/context/${m}?lang=${lang}`),
 };

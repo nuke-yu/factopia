@@ -4,13 +4,17 @@ import { ResearchDraftProvider } from "./draft";
 import ResearchPage from "./pages/ResearchPage";
 import AuditPage from "./pages/AuditPage";
 
-// 结果页包含 3D 库，按需加载
+// 含 3D 库的页面按需加载
+const ProjectsPage = lazy(() => import("./pages/ProjectsPage"));
+const RunPage = lazy(() => import("./pages/RunPage"));
 const ResultsPage = lazy(() => import("./pages/ResultsPage"));
 
 const STEPS = [
-  { to: "/research", no: "01", name: "研究立项", hint: "选择与筛选" },
+  { to: "/projects", no: "00", name: "研究项目", hint: "选择或新建" },
+  { to: "/research", no: "01", name: "研究立项", hint: "范围与假设" },
   { to: "/audit", no: "02", name: "审核", hint: "确认研究规格" },
-  { to: "/results", no: "03", name: "结果", hint: "挖掘与验证" },
+  { to: "/run", no: "03", name: "运行中", hint: "AI 研究过程" },
+  { to: "/results", no: "04", name: "结果", hint: "挖掘与验证" },
 ];
 
 function ThemeToggle() {
@@ -54,7 +58,7 @@ export default function App() {
                   >
                     <span className="num text-xs text-accent">{s.no}</span>
                     <span className="font-medium">{s.name}</span>
-                    <span className="hidden xl:inline text-xs text-faint">{s.hint}</span>
+                    <span className="hidden 2xl:inline text-xs text-faint">{s.hint}</span>
                   </NavLink>
                 </div>
               ))}
@@ -65,11 +69,13 @@ export default function App() {
         <main className="flex-1 mx-auto w-full max-w-[1680px] px-4 md:px-6 py-6">
           <Suspense fallback={<div className="label">加载中…</div>}>
             <Routes>
-              <Route path="/" element={<Navigate to="/results" replace />} />
+              <Route path="/" element={<Navigate to="/projects" replace />} />
+              <Route path="/projects" element={<ProjectsPage />} />
+              <Route path="/run" element={<RunPage />} />
               <Route path="/research" element={<ResearchPage />} />
               <Route path="/audit" element={<AuditPage />} />
               <Route path="/results" element={<ResultsPage />} />
-              <Route path="*" element={<Navigate to="/results" replace />} />
+              <Route path="*" element={<Navigate to="/projects" replace />} />
             </Routes>
           </Suspense>
         </main>

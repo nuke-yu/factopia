@@ -50,7 +50,7 @@ function Pillar({ node, colors, selected, onSelect }: {
           <meshBasicMaterial color={barColor} transparent opacity={0.75} toneMapped={false} />
         </mesh>
       )}
-      <Html position={[0.55, 0.15, 0]} distanceFactor={11} style={{ pointerEvents: "none" }}>
+      <Html position={[0.55, 0.15, 0]} distanceFactor={11} zIndexRange={[10, 0]} style={{ pointerEvents: "none" }}>
         <div className="whitespace-nowrap text-[11px] leading-tight select-none" style={{ color: selected ? colors.text : colors.muted }}>
           <div className="font-display tracking-wider">{node.label}</div>
           <div className="num" style={{ color }}>{pct(node.ret)}</div>

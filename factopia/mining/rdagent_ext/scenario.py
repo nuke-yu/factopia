@@ -16,6 +16,7 @@ from pathlib import Path
 import pandas as pd
 import yaml
 from rdagent.app.qlib_rd_loop.conf import FACTOR_PROP_SETTING
+from rdagent.log import rdagent_logger as logger
 from rdagent.components.coder.factor_coder.config import FACTOR_COSTEER_SETTINGS
 from rdagent.scenarios.qlib.experiment import utils as qlib_exp_utils
 from rdagent.scenarios.qlib.experiment.factor_experiment import QlibFactorScenario
@@ -105,6 +106,10 @@ class FactopiaFactorScenario(QlibFactorScenario):
         self.horizon = int(os.environ.get("FACTOPIA_HORIZON", 20))
         research_path = os.environ.get("FACTOPIA_RESEARCH")
         self.research = yaml.safe_load(Path(research_path).read_text(encoding="utf-8")) if research_path else {}
+        if self.research:  # 记录本次运行所属的研究规格，供结果导出关联研究项目（factopia.export.rdagent_run）
+            logger.log_object({"id": self.research.get("id"), "version": self.research.get("version"),
+                               "path": research_path, "market": self.market, "horizon": self.horizon},
+                              tag="factopia.research")
         self._background = self._background + "\n\n" + self._context()
         self._experiment_setting = self._setting_table()
 

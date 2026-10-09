@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, type Metrics, type Overview, type Round, type Run } from "../api";
+import { Link, useSearchParams } from "react-router-dom";
+import { api, type Metrics, type Round, type Run } from "../api";
 import { cssVar, fix, MARKET_LABEL, pct, useAsync } from "../lib";
 import { Badge, ErrorBox, Loading, Notice, Panel, Stat, ViewToggle } from "../components/ui";
-import Globe from "../components/charts/Globe";
 import ResearchTrail from "../components/charts/ResearchTrail";
 import TransferCube from "../components/charts/TransferCube";
 import IcSurface from "../components/charts/IcSurface";
@@ -11,22 +11,19 @@ import PositionsBars from "../components/charts/PositionsBars";
 
 export default function ResultsPage() {
   const runs = useAsync(() => api.runs(), []);
-  const overview = useAsync(() => api.overview(), []);
-  const [runId, setRunId] = useState<string>("");
-  useEffect(() => {
-    if (!runId && runs.data?.length) setRunId((runs.data.find((r) => r.rounds >= 3) ?? runs.data[0]).run_id);
-  }, [runs.data, runId]);
+  const [params, setParams] = useSearchParams();
+  const runId = params.get("run") ?? runs.data?.find((r) => r.rounds >= 3)?.run_id ?? runs.data?.[0]?.run_id ?? "";
 
   return (
     <div className="flex flex-col gap-5">
       <div className="flex flex-wrap items-end gap-4">
         <div>
-          <div className="label">03 · 结果</div>
+          <div className="label">04 · 结果</div>
           <h1 className="font-display text-2xl font-semibold tracking-wide mt-1">挖掘与验证结果</h1>
         </div>
         <div className="ml-auto flex items-center gap-2">
           <label htmlFor="run" className="label whitespace-nowrap">运行</label>
-          <select id="run" className="field w-auto num text-sm" value={runId} onChange={(e) => setRunId(e.target.value)}>
+          <select id="run" className="field w-auto num text-sm" value={runId} onChange={(e) => setParams({ run: e.target.value })}>
             {runs.data?.map((r) => (
               <option key={r.run_id} value={r.run_id}>{r.run_id} · {MARKET_LABEL[r.market]} · {r.rounds} 轮</option>
             ))}
@@ -37,7 +34,7 @@ export default function ResultsPage() {
       {runs.data && runs.data.length === 0 && (
         <Notice tone="accent" title="还没有导出的运行结果">先运行 factopia.export.rdagent_run 与 factopia.export.backtests（见 README）。</Notice>
       )}
-      {runId && <RunSection runId={runId} overview={overview} />}
+      {runId && <RunSection key={runId} runId={runId} />}
       <Panel eyebrow="Alpha158 · 三市场" title="迁移性立方体" className="min-w-0">
         <CubeSection />
       </Panel>
@@ -55,7 +52,7 @@ function CubeSection() {
   return <TransferCube cube={cube.data} />;
 }
 
-function RunSection({ runId, overview }: { runId: string; overview: { data?: Overview } }) {
+function RunSection({ runId }: { runId: string }) {
   const detail = useAsync(() => api.run(runId), [runId]);
   const backtest = useAsync(() => api.backtest(runId), [runId]);
   const [selected, setSelected] = useState("baseline");
@@ -84,40 +81,29 @@ function RunSection({ runId, overview }: { runId: string; overview: { data?: Ove
         </Notice>
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
-        <Panel eyebrow="香港 · 伦敦 · 巴黎" title="三地市场">
-          <div className="h-[300px] -mx-1">{overview.data ? <Globe overview={overview.data} /> : <Loading what="市场概况" />}</div>
-          {overview.data && (
-            <div className="grid grid-cols-3 gap-3 mt-3">
-              {(["hk", "uk", "fr"] as const).map((m) => {
-                const o = overview.data!.markets[m];
-                return (
-                  <div key={m} className="border-t-2 pt-2" style={{ borderColor: cssVar(`--${m}`) }}>
-                    <div className="text-sm font-medium">{o.name} <span className="text-xs text-muted">{o.index}</span></div>
-                    <div className="num text-xs text-muted mt-1">{o.stocks} 只 · {o.currency}{o.fx_to_hkd ? ` · 1=${o.fx_to_hkd} HKD` : ""}</div>
-                    <div className="num text-xs text-faint">{o.first} 至 {o.last}</div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </Panel>
+      <div>
         <Panel eyebrow={`${MARKET_LABEL[run.market]} · 预测周期 ${run.horizon} 个交易日`} title="本次运行">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <Stat label="轮数 / 采纳" value={`${run.rounds} / ${run.adopted}`} />
-            <Stat label="大模型费用" value={`$${run.cost_usd.toFixed(2)}`} sub="DeepSeek" />
-            <Stat label="起点（扣成本年化）" value={pct(run.baseline?.metrics?.annual_return_with_cost)} sub="20 个基础因子" />
-            <Stat label="最好（扣成本年化）" value={pct(best?.metrics?.annual_return_with_cost ?? run.baseline?.metrics?.annual_return_with_cost)}
-              tone={cssVar("--good")} sub={best ? `第 ${best.loop} 轮` : "没有采纳"} />
-          </div>
-          <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs mt-4">
-            <dt className="text-faint">训练</dt><dd className="num">{run.settings.train_start} 至 {run.settings.train_end}</dd>
-            <dt className="text-faint">验证</dt><dd className="num">{run.settings.valid_start} 至 {run.settings.valid_end}</dd>
-            <dt className="text-faint">测试（回测）</dt><dd className="num">{run.settings.test_start} 至 {run.settings.test_end}</dd>
-          </dl>
-          <div className="mt-4">
-            <div className="label mb-1">回测净值（测试期，扣成本后超额）</div>
-            {backtest.data ? <NavChart backtest={backtest.data} rounds={rounds} selected={selected} /> : <Loading what="回测" />}
+          <div className="grid gap-6 lg:grid-cols-[minmax(0,4fr)_minmax(0,8fr)]">
+            <div className="flex flex-col gap-4">
+              <div className="grid grid-cols-2 gap-4">
+                <Stat label="轮数 / 采纳" value={`${run.rounds} / ${run.adopted}`} />
+                <Stat label="大模型费用" value={`$${run.cost_usd.toFixed(2)}`} sub="DeepSeek" />
+                <Stat label="起点（扣成本年化）" value={pct(run.baseline?.metrics?.annual_return_with_cost)} sub="20 个基础因子" />
+                <Stat label="最好（扣成本年化）" value={pct(best?.metrics?.annual_return_with_cost ?? run.baseline?.metrics?.annual_return_with_cost)}
+                  tone={cssVar("--good")} sub={best ? `第 ${best.loop} 轮` : "没有采纳"} />
+              </div>
+              <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs">
+                <dt className="text-faint">训练</dt><dd className="num">{run.settings.train_start} 至 {run.settings.train_end}</dd>
+                <dt className="text-faint">验证</dt><dd className="num">{run.settings.valid_start} 至 {run.settings.valid_end}</dd>
+                <dt className="text-faint">测试（回测）</dt><dd className="num">{run.settings.test_start} 至 {run.settings.test_end}</dd>
+              </dl>
+              <p className="text-xs text-muted leading-relaxed">净值为各轮在测试期的扣成本后超额收益累计，虚线为基准指数。模型训练不使用测试期数据，但 AI 每轮会看到测试期成绩来决定是否采纳，因此仍需在 2024 年以后的数据上复核。</p>
+              <Link className="btn self-start" to={`/run?run=${run.run_id}`}>回放研究过程 →</Link>
+            </div>
+            <div>
+              <div className="label mb-1">回测净值（测试期，扣成本后超额）</div>
+              {backtest.data ? <NavChart backtest={backtest.data} rounds={rounds} selected={selected} /> : <Loading what="回测" />}
+            </div>
           </div>
         </Panel>
       </div>

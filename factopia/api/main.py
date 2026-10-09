@@ -8,6 +8,7 @@
 import json
 import os
 import re
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
 
@@ -121,6 +122,75 @@ def positions(run_id: str, key: str, step: int = Query(5, ge=1, le=60)):
         "instruments": order,
         "weights": [[round(float(v), 5) for v in row] for row in pivot.to_numpy()],
     }
+
+
+@app.get("/api/runs/{run_id}/events")
+def run_events(run_id: str):
+    """过程事件（供运行中页面显示或回放）。完整提示词较长，按需从 /prompt 接口读取。"""
+    events = _json(_run_dir(run_id) / "events.json")
+    return [{**{k: v for k, v in e.items() if k not in ("system", "user")}, "index": i, "has_prompt": bool(e.get("user"))}
+            for i, e in enumerate(events)]
+
+
+@app.get("/api/runs/{run_id}/events/{index}/prompt")
+def run_event_prompt(run_id: str, index: int):
+    events = _json(_run_dir(run_id) / "events.json")
+    if not 0 <= index < len(events) or not events[index].get("user"):
+        raise HTTPException(404, "该事件没有保存提示词")
+    e = events[index]
+    return {"system": e["system"], "user": e["user"], "response": e.get("response")}
+
+
+RUNNING_WINDOW = timedelta(minutes=30)  # 未完成的运行在最后一次记录后 30 分钟内视为"运行中"
+
+
+def _run_state(run: dict) -> str:
+    if run.get("status") == "done":
+        return "已完成"
+    ended = run.get("ended_at")
+    if ended and datetime.now(timezone.utc) - datetime.fromisoformat(ended) < RUNNING_WINDOW:
+        return "运行中"
+    return "已中止"
+
+
+@app.get("/api/projects")
+def projects():
+    """研究项目：每份研究规格（configs/research）及其关联的运行。
+
+    运行日志中记录了研究规格编号的直接关联；更早的运行按市场与预测周期推断（linked = "推断"）。
+    """
+    specs = [yaml.safe_load(p.read_text(encoding="utf-8")) for p in sorted((CONFIGS / "research").glob("*.yaml"))]
+    all_runs = [_json(p) for p in sorted((RESULTS / "runs").glob("*/run.json"), reverse=True)]
+    items = []
+    for spec in specs:
+        linked = []
+        for run in all_runs:
+            rid = (run.get("research") or {}).get("id")
+            if rid == spec["id"]:
+                how = "记录"
+            elif rid is None and run["market"] == spec["market"] and run["horizon"] == spec.get("horizon", 20):
+                how = "推断"
+            else:
+                continue
+            linked.append({
+                "run_id": run["run_id"], "market": run["market"], "rounds": run["rounds"], "adopted": run["adopted"],
+                "cost_usd": run["cost_usd"], "started_at": run["started_at"], "state": _run_state(run),
+                "context_leak": run.get("context_leak"), "linked": how,
+                "baseline_return": (((run.get("baseline") or {}).get("metrics")) or {}).get("annual_return_with_cost"),
+                "best_return": _best_return(run["run_id"]),
+            })
+        states = [r["state"] for r in linked]
+        status = "运行中" if "运行中" in states else "已完成" if "已完成" in states else "已中止" if linked else "草稿"
+        items.append({"id": spec["id"], "market": spec["market"], "horizon": spec.get("horizon", 20),
+                      "direction": spec.get("direction", ""), "hypothesis": spec.get("hypothesis", ""),
+                      "status": status, "runs": linked})
+    return items
+
+
+def _best_return(run_id: str) -> float | None:
+    rounds = _json(RESULTS / "runs" / run_id / "rounds.json")
+    adopted = [r["metrics"]["annual_return_with_cost"] for r in rounds if r.get("decision") and r.get("metrics")]
+    return adopted[-1] if adopted else None
 
 
 @app.get("/api/research/examples")

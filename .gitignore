@@ -17,6 +17,7 @@ __pycache__/
 # 前端
 web/node_modules/
 web/dist/
+web/*.tsbuildinfo
 
 .DS_Store
 /runtime/
