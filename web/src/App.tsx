@@ -30,6 +30,8 @@ const DataPage = lazyPage(() => import("./pages/DataPage"));
 const RulesPage = lazyPage(() => import("./pages/RulesPage"));
 const PortfolioPage = lazyPage(() => import("./pages/PortfolioPage"));
 const ApprovalsPage = lazyPage(() => import("./pages/ApprovalsPage"));
+const SignalsPage = lazyPage(() => import("./pages/SignalsPage"));
+const OverviewPage = lazyPage(() => import("./pages/OverviewPage"));
 
 /** 页面出错时显示原因与刷新按钮，而不是空白页。切换页面后自动恢复。 */
 class PageBoundary extends Component<{ children: ReactNode; resetKey: string }, { error: Error | null }> {
@@ -68,6 +70,8 @@ function Pages() {
           <Route path="/rules" element={<RulesPage />} />
           <Route path="/portfolio" element={<PortfolioPage />} />
           <Route path="/approvals" element={<ApprovalsPage />} />
+          <Route path="/signals" element={<SignalsPage />} />
+          <Route path="/overview" element={<OverviewPage />} />
           <Route path="*" element={<Navigate to="/projects" replace />} />
         </Routes>
       </Suspense>
@@ -88,7 +92,7 @@ function ThemeToggle() {
   const next = theme === "dark" ? "light" : "dark";
   return (
     <button
-      className="btn"
+      className="btn whitespace-nowrap shrink-0"
       aria-label={`切换为${next === "dark" ? "深色" : "浅色"}主题`}
       onClick={() => {
         document.documentElement.dataset.theme = next;
@@ -129,12 +133,13 @@ export default function App() {
                 </div>
               ))}
               <span className="mx-2 h-5 border-l border-line" aria-hidden />
-              {[{ to: "/intel", name: "情报台", hint: "多语言公告" }, { to: "/data", name: "数据台", hint: "主数据与时间点" }, { to: "/rules", name: "风控台", hint: "规则包与预检" }, { to: "/portfolio", name: "组合台", hint: "授权组合与报告" }, { to: "/approvals", name: "审批台", hint: "跨地区审批与审计" }].map((d) => (
+              {[{ to: "/intel", name: "情报台", hint: "多语言公告" }, { to: "/data", name: "数据台", hint: "主数据与时间点" }, { to: "/rules", name: "风控台", hint: "规则包与预检" }, { to: "/portfolio", name: "组合台", hint: "授权组合与报告" }, { to: "/approvals", name: "审批台", hint: "跨地区审批与审计" },
+                { to: "/signals", name: "信号目录", hint: "分市场版本与监控" }, { to: "/overview", name: "总览", hint: "管理总览" }].map((d) => (
                 <NavLink
                   key={d.to}
                   to={d.to}
                   className={({ isActive }) =>
-                    `flex items-center gap-2 h-9 px-3 rounded border transition-colors whitespace-nowrap ${
+                    `flex items-center gap-2 h-9 px-2 rounded border transition-colors whitespace-nowrap ${
                       isActive ? "border-accent/60 bg-accent/10 text-text" : "border-transparent text-muted hover:text-text"
                     }`}
                 >

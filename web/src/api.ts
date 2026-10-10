@@ -424,6 +424,38 @@ export type ApprovalDetail = { submission: Submission; summary: ApprovalSummary;
   action_zh: Record<string, string> };
 export type ApprovalAct = { role: string; action: string; note?: string; rule?: string; markets?: Market[]; thresholds?: Record<string, number> };
 
+// 信号目录、监控与管理总览（Spec 第 14.15 节；BR-24、30、31、41、42、48）
+export type SignalEntry = {
+  signal_id: string; research_id: string; version: number; market: Market; market_zh: string; title: string; submission: string;
+  state: string; state_zh: string; reason: string | null; production: boolean;
+  labels: { languages: string[]; mandate: string; data_scope: { categories: string[]; universe: string; snapshot: string };
+    rule_versions: string[]; last_validated: string | null; next_review: string | null; applicability?: string | null };
+  run: { run_id: string | null; loop: number | string | null; rank_ic: number | null; rank_ic_t: number | null; credibility: string | null };
+  thresholds: Record<string, number>; monitor: { computed_at: string; suggestion: string; suggestion_zh: string; alerts: number } | null;
+  events: { action: string; role: string; note: string; at: string; hash: string }[]; monitor_job?: Job | null;
+};
+export type MonitorPeriod = { start: string; end: string; days: number; rank_ic: number | null; rank_ic_t: number | null;
+  rolling_rank_ic_60d_last: number | null; rolling_rank_ic_60d_min: number | null; monthly_rank_ic: Record<string, number | null>;
+  hit_rate_months: number | null; hit_rate_top: number | null; excess_gross_ann: number | null; cost_ann: number | null; excess_net_ann: number | null;
+  max_drawdown_vs_universe: number | null; implementation_delay_ann: number | null; turnover_monthly: number | null;
+  exposure: Record<string, number | null>; crowding: number | null; capacity_local: number | null;
+  regime: { high_vol: number | null; low_vol: number | null; up_months: number | null; down_months: number | null } };
+export type MonitorResult = { signal_id: string; market: Market; computed_at: string; horizon: number;
+  factors: { name: string; sign: number; ref_rank_ic: number | null; coverage_ref: number | null; coverage_live: number | null }[];
+  reference: MonitorPeriod; live: MonitorPeriod; decay: { reference: Record<string, number | null>; live: Record<string, number | null> };
+  data_drift: { psi: number | null; missing_live: number | null }; alerts: { kind: string; level: string; title: string; detail: string }[];
+  suggestion: string; suggestion_zh: string; diagnosis: string[]; thresholds: Record<string, number>;
+  rolling: { dates: string[]; values: (number | null)[]; live_start: string }; note: string };
+export type Management = {
+  regions: Record<string, { runs: number; runs_done: number; adopted_rounds: number; cost_usd: number; avg_duration_min: number;
+    jobs_failed: number; jobs_queued: number; validations: number }>;
+  approvals: { total: number; by_status: Record<string, number>; status_zh: Record<string, string>;
+    pending: { id: string; role: string; waiting_hours: number; title: string }[]; bottleneck: { role: string; decisions: number; avg_hours: number }[] };
+  signal_health: Record<string, { active: number; paused: number; retired: number; alerts: number; pause_suggested: number; not_production: number }>;
+  incidents: { signal_id: string; market: Market; suggestion_zh: string; alerts: string[]; detected_at: string; state_zh: string;
+    handled: { action: string; role: string; at: string; note: string }[] }[];
+  generated_at: string };
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`/api${path}`, init);
   if (!res.ok) {
@@ -440,6 +472,11 @@ const post = <T,>(path: string, body: unknown) =>
 export const api = {
   pit: () => get<PitStatus>("/pit"),
   rulePacks: () => get<RulePacks>("/rules/packs"),
+  signals: () => get<{ items: SignalEntry[]; state_zh: Record<string, string> }>("/signals"),
+  signal: (sid: string) => get<{ entry: SignalEntry; monitor: MonitorResult | null; job: Job | null }>(`/signals/${sid}`),
+  startMonitor: (sid: string) => post<Job>(`/signals/${sid}/monitor`, {}),
+  signalAct: (sid: string, body: { action: string; role: string; note: string }) => post<SignalEntry>(`/signals/${sid}/actions`, body),
+  management: () => get<Management>("/overview/management"),
   approvals: (researchId?: string) => get<{ items: ApprovalSummary[]; roles: string[] }>(`/approvals${researchId ? `?research_id=${researchId}` : ""}`),
   approval: (sid: string) => get<ApprovalDetail>(`/approvals/${sid}`),
   submitApproval: (research_id: string, version: number, note: string) => post<Submission>("/approvals", { research_id, version, note }),

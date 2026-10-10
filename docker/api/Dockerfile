@@ -19,6 +19,7 @@ COPY factopia/research factopia/research
 COPY factopia/rules factopia/rules
 COPY factopia/portfolio factopia/portfolio
 COPY factopia/approval factopia/approval
+COPY factopia/signals factopia/signals
 COPY factopia/factors/__init__.py factopia/factors/stats.py factopia/factors/families.py factopia/factors/
 COPY factopia/validate/__init__.py factopia/validate/metrics.py factopia/validate/
 COPY factopia/text/__init__.py factopia/text/common.py factopia/text/review.py factopia/text/understand.py factopia/text/search.py factopia/text/

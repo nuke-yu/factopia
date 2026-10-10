@@ -221,10 +221,27 @@ def run_validation(job: dict) -> None:
     log(f"{job['job_id']}: {job['state']}{'：' + job['error'] if job.get('error') else ''}")
 
 
+def run_monitor(job: dict) -> None:
+    """信号监控（第 14.15 节）：在运行器进程内执行（需要 pandas / PyTables 读取完整数据）。"""
+    from factopia import signals
+    from factopia.signals import monitor
+    job.update(state="running", started_at=store.now())
+    store.write_job(job)
+    log(f"{job['job_id']}: 信号监控 {job['target_signal']}")
+    try:
+        res = monitor.run(signals.monitor_entry(job["target_signal"]), log=log)
+        job.update(state="done", summary=res["suggestion_zh"])
+    except Exception as e:
+        job.update(state="failed", error=str(e)[:800])
+    job["ended_at"] = store.now()
+    store.write_job(job)
+    log(f"{job['job_id']}: {job['state']}{'：' + job['error'] if job.get('error') else ''}")
+
+
 def init_dirs() -> None:
     """研究规格、任务、组合、报告与审批目录由后端写入：交给 api 的用户，运行器以 root 运行仍可读写。"""
     for d in (store.RESEARCH_DIR, store.JOBS_DIR, store.RUNTIME / "portfolio", store.RUNTIME / "reports",
-              store.RUNTIME / "approvals"):
+              store.RUNTIME / "approvals", store.RUNTIME / "signals"):
         d.mkdir(parents=True, exist_ok=True)
         os.chown(d, API_UID, API_UID)
         d.chmod(0o775)
@@ -232,7 +249,7 @@ def init_dirs() -> None:
 
 def execute(job: dict) -> None:
     try:
-        (run_validation if job.get("kind") == "validate" else run_job)(job)
+        {"validate": run_validation, "monitor": run_monitor}.get(job.get("kind"), run_job)(job)
     except Exception:
         job.update(state="failed", ended_at=store.now(), error=traceback.format_exc()[-1200:])
         store.write_job(job)

@@ -8,6 +8,7 @@
     /workspace/runtime/jobs/.paused                排队暂停（大模型余额不足、密钥无效等，处理后由页面恢复）
 
 可信度检查任务（kind = "validate"）也在同一队列中：target_run 为被检查的运行，loop 为轮次；run_id 始终为空。
+信号监控任务（kind = "monitor"）同样排在这个队列中：target_signal 为信号目录中的市场版本。
 
 任务状态：queued 排队 → running 运行中 → done 完成 / failed 失败 / cancelled 已停止 / budget_stopped 超出预算停止。
 """
@@ -95,6 +96,18 @@ def create_validate_job(run: dict, loop: int, placebo_n: int = 20) -> dict:
     return job
 
 
+def create_monitor_job(signal_id: str, market: str) -> dict:
+    """信号监控任务（factopia/signals/monitor.py）：用冻结的因子代码重算上线期信号并计算监控指标，不调用大模型。"""
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    rid, ver = signal_id.rsplit(".", 2)[0], int(signal_id.rsplit(".", 2)[1][1:])
+    job = {"job_id": f"{stamp}_{secrets.token_hex(2)}_0_{market}", "batch_id": f"{stamp}_m", "kind": "monitor",
+           "research_id": rid, "version": ver, "market": market, "horizon": 0, "loops": 0, "budget_usd": 0.0,
+           "target_signal": signal_id, "state": "queued", "created_at": now(), "started_at": None, "ended_at": None,
+           "run_id": None, "cost_usd": 0.0, "rounds": 0, "error": None}
+    write_job(job)
+    return job
+
+
 def write_job(job: dict) -> None:
     _atomic_write(JOBS_DIR / f"{job['job_id']}.json", json.dumps(job, ensure_ascii=False, indent=2))
 
@@ -155,6 +168,9 @@ def resume() -> None:
 
 def retry_job(job: dict) -> dict:
     """失败或停止的任务：用同一版本、市场与参数重新排队（新的批次）。"""
+    if job.get("kind") == "monitor":
+        new = create_monitor_job(job["target_signal"], job["market"])
+        return {"batch_id": new["batch_id"], "jobs": [new]}
     if job.get("kind") == "validate":
         run = json.loads((RUNTIME / "results" / "runs" / job["target_run"] / "run.json").read_text(encoding="utf-8"))
         new = create_validate_job(run, job["loop"], job.get("placebo_n", 20))

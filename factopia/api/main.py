@@ -272,7 +272,7 @@ def projects():
                 linked.append(_run_summary(run, "推断", jobs_by_run))
         exported = {r["run_id"] for r in linked}
         pending = [_job_public(j) for j in reversed(all_jobs)
-                   if j["research_id"] == spec["id"] and j.get("kind") != "validate" and j.get("run_id") not in exported
+                   if j["research_id"] == spec["id"] and j.get("kind") not in ("validate", "monitor") and j.get("run_id") not in exported
                    and j["state"] in ("queued", "running", "failed")]
         states = [r["state"] for r in linked] + [j["state_zh"] for j in pending]
         status = ("运行中" if "运行中" in states else "排队中" if "排队中" in states else "已完成" if "已完成" in states
@@ -690,7 +690,7 @@ def study(research_id: str, version: int):
     rule = verdict.rules(spec)
     runs = [r for r in (_json(p) for p in sorted((RESULTS / "runs").glob("*/run.json"), reverse=True))
             if (r.get("research") or {}).get("id") == research_id and (r.get("research") or {}).get("version") == version]
-    jobs = [j for j in store.list_jobs() if j["research_id"] == research_id and j["version"] == version]
+    jobs = [j for j in store.list_jobs() if j["research_id"] == research_id and j["version"] == version and j.get("kind") != "monitor"]
     markets = {m: _study_market(m, runs, jobs, rule) for m in rule["markets"]}
     diags = {m: (e.get("focus") or {}).get("diagnostics") for m, e in markets.items()}
     exp = store.RESEARCH_DIR / research_id / f"explain_v{version}.json"
@@ -929,6 +929,125 @@ def approval_evidence(sid: str):
     except A.ApprovalError as e:
         raise HTTPException(404, str(e))
     return Response(data, media_type="application/zip", headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+# ---------------------------------------------------------------- 信号目录、监控与管理总览（第 14.15 节）
+
+def _signals_mod():
+    from factopia import signals
+    return signals
+
+
+@app.get("/api/signals")
+def list_signals():
+    S = _signals_mod()
+    jobs = [j for j in store.list_jobs() if j.get("kind") == "monitor"]
+    items = S.catalog()
+    for e in items:
+        j = next((x for x in reversed(jobs) if x.get("target_signal") == e["signal_id"]), None)
+        e["monitor_job"] = _job_public(j) if j else None
+    return {"items": items, "state_zh": S.STATE_ZH}
+
+
+@app.get("/api/signals/{signal_id}")
+def get_signal(signal_id: str):
+    S = _signals_mod()
+    try:
+        e = S.entry(signal_id)
+    except S.CatalogError as x:
+        raise HTTPException(404, str(x))
+    jobs = [j for j in store.list_jobs() if j.get("kind") == "monitor" and j.get("target_signal") == signal_id]
+    return {"entry": e, "monitor": S.monitor_result(signal_id), "job": _job_public(jobs[-1]) if jobs else None}
+
+
+@app.post("/api/signals/{signal_id}/monitor")
+def start_monitor(signal_id: str):
+    """排入监控任务（后台运行器执行，约 1–3 分钟）。只有获批版本（生产中或已暂停）进入监控层（BR-41）。"""
+    S = _signals_mod()
+    try:
+        e = S.entry(signal_id)
+    except S.CatalogError as x:
+        raise HTTPException(404, str(x))
+    if e["state"] not in ("active", "paused"):
+        raise HTTPException(422, f"「{e['state_zh']}」的版本不进入监控层：只有获批版本才能上线监控")
+    busy = [j for j in store.list_jobs() if j.get("kind") == "monitor" and j.get("target_signal") == signal_id and j["state"] in ("queued", "running")]
+    if busy:
+        return _job_public(busy[-1])
+    return _job_public(store.create_monitor_job(signal_id, e["market"]))
+
+
+class SignalActIn(BaseModel):
+    action: str
+    role: str
+    note: str = ""
+
+
+@app.post("/api/signals/{signal_id}/actions")
+def signal_action(signal_id: str, body: SignalActIn):
+    """暂停 / 恢复 / 停用一个市场版本（BR-24：只影响该市场，其他市场的版本不变）。"""
+    S = _signals_mod()
+    try:
+        return S.act(signal_id, body.action, body.role, body.note)
+    except S.CatalogError as x:
+        raise HTTPException(422, str(x))
+
+
+@app.get("/api/overview/management")
+def management_overview():
+    """管理总览（BR-48）：按地区的研究吞吐量、审批瓶颈、信号健康度与异常处置。"""
+    from factopia import approval as A
+    S = _signals_mod()
+    jobs = store.list_jobs()
+    runs = [_json(p) for p in (RESULTS / "runs").glob("*/run.json")]
+    research = [j for j in jobs if j.get("kind") not in ("validate", "monitor")]
+    regions = {}
+    for m in MARKETS:
+        mr = [r for r in runs if r["market"] == m]
+        mj = [j for j in research if j["market"] == m]
+        regions[m] = {
+            "runs": len(mr), "runs_done": sum(1 for r in mr if r.get("status") == "done"),
+            "adopted_rounds": sum((r.get("adopted") if isinstance(r.get("adopted"), int) else len(r.get("adopted") or [])) for r in mr),
+            "cost_usd": round(sum(r.get("cost_usd") or 0 for r in mr), 3),
+            "avg_duration_min": round(sum(r.get("duration_s") or 0 for r in mr) / max(1, sum(1 for r in mr if r.get("duration_s"))) / 60, 1),
+            "jobs_failed": sum(1 for j in mj if j["state"] == "failed"), "jobs_queued": sum(1 for j in mj if j["state"] in ("queued", "running")),
+            "validations": sum(1 for j in jobs if j.get("kind") == "validate" and j["market"] == m and j["state"] == "done"),
+        }
+    subs = A.list_all()
+    # 审批瓶颈：各角色从上一步完成到本步处理的平均用时；审批中的提交卡在哪一步
+    role_wait: dict[str, list[float]] = {}
+    for s in subs:
+        evs = A.events(s["id"])
+        for a, b in zip(evs, evs[1:]):
+            if b["action"] in ("approve", "restrict", "return", "reject", "complete"):
+                dt = (datetime.fromisoformat(b["at"]) - datetime.fromisoformat(a["at"])).total_seconds() / 3600
+                role_wait.setdefault(b["role"], []).append(dt)
+    bottleneck = sorted(({"role": r, "decisions": len(v), "avg_hours": round(sum(v) / len(v), 4)} for r, v in role_wait.items()),
+                        key=lambda x: -x["avg_hours"])
+    pending = [{"id": s["id"], "role": s["current_role"], "waiting_hours": s["waiting_hours"], "title": s["title"]}
+               for s in subs if s["status"] == "in_review"]
+    cat = S.catalog()
+    health = {m: {"active": 0, "paused": 0, "retired": 0, "alerts": 0, "pause_suggested": 0, "not_production": 0} for m in MARKETS}
+    for e in cat:
+        h = health[e["market"]]
+        if e["state"] in ("active", "paused", "retired"):
+            h[e["state"]] += 1
+        else:
+            h["not_production"] += 1
+        if e["monitor"]:
+            h["alerts"] += e["monitor"]["alerts"]
+            h["pause_suggested"] += e["monitor"]["suggestion"] == "pause"
+    incidents = []
+    for e in cat:
+        mon = S.monitor_result(e["signal_id"]) if e["monitor"] else None
+        if mon and mon["alerts"]:
+            handled = [x for x in e["events"] if x["at"] >= mon["computed_at"]]
+            incidents.append({"signal_id": e["signal_id"], "market": e["market"], "suggestion_zh": mon["suggestion_zh"],
+                              "alerts": [a["title"] for a in mon["alerts"]], "detected_at": mon["computed_at"],
+                              "handled": [{"action": S.ACTION_ZH[x["action"]], "role": x["role"], "at": x["at"], "note": x["note"]} for x in handled],
+                              "state_zh": e["state_zh"]})
+    return {"regions": regions, "approvals": {"total": len(subs), "by_status": {k: sum(1 for s in subs if s["status"] == k) for k in A.STATUS_ZH},
+                                              "status_zh": A.STATUS_ZH, "pending": pending, "bottleneck": bottleneck},
+            "signal_health": health, "incidents": incidents, "generated_at": store.now()}
 
 
 class RunIn(BaseModel):
