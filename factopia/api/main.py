@@ -429,8 +429,10 @@ def _version_rules(research_id: str, version: int, overrides: dict) -> dict:
     setup = setup or rulebook.evaluate(rule_ctx.setup_context(spec, overrides), ["setup"])
     st = study(research_id, version)
     has_pf = any((e.get("focus") or {}) for e in st["markets"].values())
-    pf = rulebook.evaluate(rule_ctx.portfolio_context(spec, st, overrides), ["portfolio"]) if has_pf else None
+    pctx = rule_ctx.portfolio_context(spec, st, overrides) if has_pf else None
+    pf = rulebook.evaluate(pctx, ["portfolio"]) if has_pf else None
     return {"research_id": research_id, "version": version, "setup": setup, "portfolio": pf,
+            "portfolio_source": {m: v["source"] for m, v in (pctx or {}).get("portfolio", {}).items()},
             "portfolio_note": None if has_pf else "还没有完成的运行：组合生成后才能做组合预检",
             "focus": {m: {"run_id": e.get("run_id"), "loop": (e.get("focus") or {}).get("loop")} for m, e in st["markets"].items()},
             "overrides": overrides}
@@ -714,6 +716,108 @@ def explain_study(research_id: str, version: int):
     path = store.RESEARCH_DIR / research_id / f"explain_v{version}.json"
     path.write_text(json.dumps(out, ensure_ascii=False, indent=1), encoding="utf-8")
     return out
+
+
+# ---------------------------------------------------------------- 授权组合与报告（第 14.13 节）
+
+def _portfolio_mod():
+    from factopia import portfolio
+    return portfolio
+
+
+@app.get("/api/research/{research_id}/versions/{version}/portfolio")
+def get_portfolio(research_id: str, version: int):
+    """已构建的授权组合（没有则 summary 为 null）与研究员记录的反馈决定。"""
+    get_version(research_id, version)
+    P = _portfolio_mod()
+    return {"summary": P.load(research_id, version), "feedback": P.feedback(research_id, version)}
+
+
+@app.post("/api/research/{research_id}/versions/{version}/portfolio")
+def build_portfolio(research_id: str, version: int):
+    """按授权构建组合并回测（约数秒）：多币种、汇率拆分、Brinson 归因、反馈建议。"""
+    P = _portfolio_mod()
+    spec = get_version(research_id, version)
+    try:
+        summary = P.build(spec, study(research_id, version))
+    except P.PortfolioError as e:
+        raise HTTPException(422, str(e))
+    return {"summary": summary, "feedback": P.feedback(research_id, version)}
+
+
+@app.get("/api/research/{research_id}/versions/{version}/portfolio/series")
+def portfolio_series(research_id: str, version: int):
+    """净值序列（基础币种）与各市场权重，供组合台画图。"""
+    get_version(research_id, version)
+    p = _portfolio_mod().out_dir(research_id, version) / "daily.parquet"
+    if not p.exists():
+        raise HTTPException(404, "尚未构建组合")
+    d = pd.read_parquet(p)
+    ms = [c[:-2] for c in d.columns if c.endswith("_w")]
+    return {"dates": d["date"].dt.strftime("%Y-%m-%d").tolist(),
+            "port": [round(float(x), 6) for x in (1 + d["port"]).cumprod()],
+            "bench": [round(float(x), 6) for x in (1 + d["bench"]).cumprod()],
+            "weights": {m: [round(float(x), 4) for x in d[f"{m}_w"]] for m in ms}}
+
+
+class FeedbackIn(BaseModel):
+    market: str
+    action: str
+    note: str = ""
+    by: str = "研究员（演示，未登录）"
+
+
+@app.post("/api/research/{research_id}/versions/{version}/portfolio/feedback")
+def portfolio_feedback(research_id: str, version: int, body: FeedbackIn):
+    """记录研究员对反馈建议的决定（BR-32）：保留 / 进一步研究 / 限定地区 / 重新校准 / 停用。"""
+    P = _portfolio_mod()
+    if P.load(research_id, version) is None:
+        raise HTTPException(404, "尚未构建组合")
+    if body.action not in P.ACTIONS or body.market not in MARKETS:
+        raise HTTPException(422, f"决定须为 {list(P.ACTIONS)} 之一")
+    return P.record_feedback(research_id, version, body.model_dump() | {"action_zh": P.ACTIONS[body.action]})
+
+
+REPORTS = Path(os.environ.get("FACTOPIA_RUNTIME", "/workspace/runtime")) / "reports"
+REPORT_NAME = re.compile(r"^[a-z][a-z0-9_]{2,39}_v\d+_\d{14}\.html$")
+
+
+@app.post("/api/research/{research_id}/versions/{version}/report")
+def make_report(research_id: str, version: int):
+    """生成研究报告（BR-40；RPT-01 至 03）：中文主报告 + 英文 / 法文证据附件，单文件 HTML，存档于 runtime/reports。"""
+    from factopia.portfolio import report
+    P = _portfolio_mod()
+    spec = get_version(research_id, version)
+    st = study(research_id, version)
+    pf = P.load(research_id, version)
+    dp = P.out_dir(research_id, version) / "daily.parquet"
+    exp = store.RESEARCH_DIR / research_id / f"explain_v{version}.json"
+    qp = Path(os.environ.get("FACTOPIA_RUNTIME", "/workspace/runtime")) / "data" / "standardized" / "quality_report.json"
+    pit = RESULTS / "pit_status.json"
+    data = {"spec": spec, "study": st, "rules": _version_rules(research_id, version, {}), "portfolio": pf,
+            "daily": pd.read_parquet(dp).set_index("date") if dp.exists() and pf else None,
+            "pit": _json(pit) if pit.exists() else None, "quality": _json(qp) if qp.exists() else None,
+            "explanation": json.loads(exp.read_text(encoding="utf-8")) if exp.exists() else None,
+            "feedback": P.feedback(research_id, version)}
+    page = report.render(data)
+    REPORTS.mkdir(parents=True, exist_ok=True)
+    name = f"{research_id}_v{version}_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}.html"
+    (REPORTS / name).write_text(page, encoding="utf-8")
+    return {"name": name, "url": f"/api/reports/{name}", "bytes": len(page.encode("utf-8")), "has_portfolio": pf is not None}
+
+
+@app.get("/api/research/{research_id}/versions/{version}/reports")
+def list_reports(research_id: str, version: int):
+    return [{"name": p.name, "url": f"/api/reports/{p.name}", "bytes": p.stat().st_size}
+            for p in sorted(REPORTS.glob(f"{research_id}_v{version}_*.html"), reverse=True)] if REPORTS.exists() else []
+
+
+@app.get("/api/reports/{name}")
+def get_report(name: str):
+    from fastapi.responses import HTMLResponse
+    if not REPORT_NAME.match(name) or not (REPORTS / name).exists():
+        raise HTTPException(404, "报告不存在")
+    return HTMLResponse((REPORTS / name).read_text(encoding="utf-8"))
 
 
 class RunIn(BaseModel):

@@ -21,22 +21,25 @@
 import json
 import math
 import os
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import yaml
 
 from factopia import rules
 from factopia.factors.stats import newey_west_t
 
 RUNTIME = Path(os.environ.get("FACTOPIA_RUNTIME", "/workspace/runtime"))
+CONFIGS = Path(os.environ.get("FACTOPIA_CONFIGS_DIR", "/workspace/configs"))
 RESULTS = Path(os.environ.get("FACTOPIA_RESULTS_DIR", "/workspace/runtime/results"))
 N = 238                       # 年化交易日（与 Qlib 一致）
 ADV_DAYS = 20
 PARTICIPATION = 0.10          # 每笔调仓不超过日均成交额的比例
 MIN_TRADE = 0.005             # 权重变化小于此值视为未交易
-CAPACITY_FLOOR = 50e6         # 基础币种容量低于 5000 万视为"容量不足"
-BASE_CURRENCY = os.environ.get("FACTOPIA_BASE_CURRENCY", "HKD")   # 第 0.4 节第 6 步改为按授权配置
+CAPACITY_FLOOR = 50e6         # 容量低于 5000 万港元（换算为基础币种）视为"容量不足"
+BASE_CURRENCY = os.environ.get("FACTOPIA_BASE_CURRENCY", "HKD")   # 运行不属于任何研究版本（或授权未写明）时的默认值
 LOCAL = {"hk": "HKD", "uk": "GBP", "fr": "EUR"}
 # 单边成本与其中的税费：(开仓, 平仓)，来自市场规则包的 costs（RULE-04），与 RD-Agent 回测配置一致（open_cost / close_cost）
 _COSTS = {m: rules.costs(m) for m in LOCAL}
@@ -240,6 +243,13 @@ def _cs_corr(a: pd.DataFrame, b: pd.DataFrame) -> pd.Series:
     return ((ac * bc).sum(axis=1) / np.sqrt((ac ** 2).sum(axis=1) * (bc ** 2).sum(axis=1))).where(ok.sum(axis=1) >= 10).dropna()
 
 
+@lru_cache(maxsize=8)
+def capacity_floor(base: str) -> float:
+    """容量门槛按港元定义，换算为基础币种（最新汇率）。"""
+    fx = fx_rate("HKD", base)
+    return CAPACITY_FLOOR if fx is None or fx.empty else float(CAPACITY_FLOOR * fx.iloc[-1])
+
+
 def economic(ct: dict, fxi: dict, lc: dict) -> dict:
     """第四类迁移标签：扣除成本、汇率或容量（市场结构）后是否仍有经济意义（BR-05）。"""
     reasons = []
@@ -247,8 +257,9 @@ def economic(ct: dict, fxi: dict, lc: dict) -> dict:
         reasons.append("扣交易成本（含税费）后超额收益不再为正")
     if not fxi.get("same_currency") and (fxi.get("excess_local") or 0) > 0 and (fxi.get("excess_base") or 0) <= 0:
         reasons.append(f"换算为基础币种（{fxi['base']}）后超额收益不再为正")
-    if lc.get("capacity_base") is not None and lc["capacity_base"] < CAPACITY_FLOOR:
-        reasons.append(f"容量约 {lc['capacity_base'] / 1e6:.0f} 百万 {fxi['base']}，低于门槛 {CAPACITY_FLOOR / 1e6:.0f} 百万")
+    floor = capacity_floor(fxi["base"])
+    if lc.get("capacity_base") is not None and lc["capacity_base"] < floor:
+        reasons.append(f"容量约 {lc['capacity_base'] / 1e6:.0f} 百万 {fxi['base']}，低于门槛 {floor / 1e6:.0f} 百万")
     meaningful = not reasons and (ct["net_excess"] or 0) > 0
     return {"meaningful": meaningful, "reasons": reasons,
             "label": "扣除成本 / 汇率 / 容量后不再具有经济意义" if reasons else
@@ -257,7 +268,20 @@ def economic(ct: dict, fxi: dict, lc: dict) -> dict:
 
 # ---------------------------------------------------------------- 入口
 
-def diagnose_round(run_dir: Path, key: str, md: dict, fx: pd.Series | None, run: dict) -> dict | None:
+def base_currency(run: dict) -> str:
+    """基础币种按研究版本所用的授权配置（BR-03）：run.json → 研究规格 → 授权 base_currency。"""
+    r = run.get("research") or {}
+    spec_p = RUNTIME / "research" / str(r.get("id")) / f"v{r.get('version')}.yaml"
+    if r.get("id") and spec_p.exists():
+        mid = (yaml.safe_load(spec_p.read_text(encoding="utf-8")) or {}).get("mandate")
+        for p in (CONFIGS / "mandates").glob("*.yaml"):
+            m = yaml.safe_load(p.read_text(encoding="utf-8"))
+            if m.get("id") == mid and m.get("base_currency"):
+                return m["base_currency"]
+    return BASE_CURRENCY
+
+
+def diagnose_round(run_dir: Path, key: str, md: dict, fx: pd.Series | None, run: dict, base: str = BASE_CURRENCY) -> dict | None:
     bt_p, pos_p = run_dir / "backtest" / f"{key}.parquet", run_dir / "positions" / f"{key}.parquet"
     if not bt_p.exists() or not pos_p.exists():
         return None
@@ -266,9 +290,9 @@ def diagnose_round(run_dir: Path, key: str, md: dict, fx: pd.Series | None, run:
     bt["date"] = pd.to_datetime(bt["date"])
     ct = cost_turnover(bt, market)
     lc = liquidity_capacity(pos, md, fx)
-    fxi = fx_impact(bt, fx, LOCAL[market], BASE_CURRENCY)
+    fxi = fx_impact(bt, fx, LOCAL[market], base)
     pre_fix = (run.get("started_at") or "") < TIE_FIX_AT
-    out = {"run_id": run_dir.name, "round": key, "market": market, "horizon": horizon, "base_currency": BASE_CURRENCY,
+    out = {"run_id": run_dir.name, "round": key, "market": market, "horizon": horizon, "base_currency": base,
            "backtest_note": "基于 RD-Agent 原始回测（并列顺序修正前，收益受随机选股影响，见第 14.7–14.8 节）" if pre_fix else "",
            "cost": ct, "liquidity": lc, "fx": fxi, "exposure": exposures(bt, pos, md), "economic": economic(ct, fxi, lc)}
     sc_p = run_dir / "score" / f"{key}.parquet"
@@ -289,12 +313,13 @@ def diagnose_round(run_dir: Path, key: str, md: dict, fx: pd.Series | None, run:
 def diagnose_run(run_dir: Path) -> int:
     run = json.loads((run_dir / "run.json").read_text())
     md = market_data(run["market"])
-    fx = fx_rate(LOCAL[run["market"]], BASE_CURRENCY)
+    base = base_currency(run)
+    fx = fx_rate(LOCAL[run["market"]], base)
     (run_dir / "diagnostics").mkdir(exist_ok=True)
     keys = sorted(p.stem for p in (run_dir / "backtest").glob("*.parquet"))
     n = 0
     for key in keys:
-        d = diagnose_round(run_dir, key, md, fx, run)
+        d = diagnose_round(run_dir, key, md, fx, run, base)
         if d:
             tmp = run_dir / "diagnostics" / f"{key}.json.tmp"
             tmp.write_text(json.dumps(d, ensure_ascii=False, allow_nan=False), encoding="utf-8")

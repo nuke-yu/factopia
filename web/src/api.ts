@@ -372,7 +372,34 @@ export type RulePacks = {
     category_sources: Record<string, Partial<Record<Market, string>>>; always: string[] };
 };
 export type VersionRules = { research_id: string; version: number; setup: Precheck; portfolio: Precheck | null; portfolio_note: string | null;
-  focus: Record<string, { run_id: string | null; loop: number | string | null }>; overrides: Record<string, unknown> };
+  focus: Record<string, { run_id: string | null; loop: number | string | null }>; overrides: Record<string, unknown>;
+  portfolio_source?: Record<string, string> };
+
+// 授权组合与报告（Spec 第 14.13 节；BR-03、14、32、40）
+export type PerfStats = { return_ann: number; return_total: number; vol: number; sharpe: number | null; max_drawdown: number;
+  bench_return_ann?: number; excess_ann?: number; tracking_error?: number; info_ratio?: number | null };
+export type FeedbackSuggestion = { market: Market; action: string; action_zh: string; reasons: string[]; signal: { run_id: string | null; loop: number | string | null } };
+export type FeedbackDecision = { market: Market; action: string; action_zh: string; note: string; by: string; at: string };
+export type PortfolioSummary = {
+  research_id: string; version: number; mandate: string; mandate_name: string; built_at: string; markets: Market[];
+  base_currency: string; report_currency: string;
+  benchmark: { weights: Record<string, number>; indices: Record<string, string>; label: string };
+  period: { start: string; end: string; days: number; rebalances: number };
+  terms: { max_tracking_error: number; max_turnover: number; holdings_per_market: number; max_stock_weight: number; long_only: boolean;
+    market_limits: Record<string, number>; benchmark_weights: Record<string, number>; restricted: string[] };
+  signals: Record<string, { run_id: string | null; loop: number | string | null; factors?: string[]; rank_ic_t?: number | null; note?: string }>;
+  constraints: { name: string; value: string; source: string; status: string }[];
+  metrics: { total: PerfStats; avg_turnover: number | null; markets: Record<string, { local: PerfStats; base: PerfStats; avg_weight: number; cost_ann: number }> };
+  fx_split: Record<string, { local: number; fx: number; base: number; cross: number; identity_max_error: number }>;
+  attribution: { total_excess: number; sum_of_effects: number; linking_error: number; daily_identity_max_error: number; method: string;
+    markets: Record<string, { allocation: number; selection: number; fx_interaction: number }>;
+    by_effect: { allocation: number; selection: number; fx_interaction: number }; fx_contribution_abs: Record<string, number>;
+    local_contribution_abs: Record<string, number> };
+  feedback: FeedbackSuggestion[]; backtest_note: string;
+};
+export type PortfolioResp = { summary: PortfolioSummary | null; feedback: FeedbackDecision[] };
+export type PortfolioSeries = { dates: string[]; port: number[]; bench: number[]; weights: Record<string, number[]> };
+export type ReportRef = { name: string; url: string; bytes: number; has_portfolio?: boolean };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`/api${path}`, init);
@@ -390,6 +417,13 @@ const post = <T,>(path: string, body: unknown) =>
 export const api = {
   pit: () => get<PitStatus>("/pit"),
   rulePacks: () => get<RulePacks>("/rules/packs"),
+  portfolio: (id: string, v: number) => get<PortfolioResp>(`/research/${id}/versions/${v}/portfolio`),
+  buildPortfolio: (id: string, v: number) => post<PortfolioResp>(`/research/${id}/versions/${v}/portfolio`, {}),
+  portfolioSeries: (id: string, v: number) => get<PortfolioSeries>(`/research/${id}/versions/${v}/portfolio/series`),
+  portfolioFeedback: (id: string, v: number, body: { market: Market; action: string; note: string }) =>
+    post<FeedbackDecision[]>(`/research/${id}/versions/${v}/portfolio/feedback`, body),
+  makeReport: (id: string, v: number) => post<ReportRef>(`/research/${id}/versions/${v}/report`, {}),
+  reports: (id: string, v: number) => get<ReportRef[]>(`/research/${id}/versions/${v}/reports`),
   precheck: (spec: Partial<Spec>, overrides: Record<string, unknown> = {}) => post<Precheck>("/rules/precheck", { spec, overrides }),
   versionRules: (id: string, version: number, overrides?: Record<string, unknown>) => overrides
     ? post<VersionRules>(`/research/${id}/versions/${version}/rules`, { overrides })

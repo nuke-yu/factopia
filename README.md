@@ -121,6 +121,7 @@ $DC run --rm app python -m factopia.export.alpha158
 | `factopia/refdata/` | 参考数据与时间点一致性：证券主数据（GLEIF 法律实体、OpenFIGI 标识、跨市场挂牌与存托凭证、主要上市地、行业、财务年度、会计口径）、公司行动、成分股起止日期、各数据域的时间点状态（Spec 第 14.10 节）；`python -m factopia.refdata all`，页面「数据台」 |
 | `factopia/diagnostics/` | 研究结果诊断：成本与换手、流动性与容量、汇率影响、风险暴露、中性化与定义稳定性、经济意义（Spec 第 14.11 节）；导出后自动运行，`python -m factopia.diagnostics` |
 | `factopia/rules/` | 地区规则包与预检：通用 / 香港 / 英国 / 法国规则包与数据来源登记表（`configs/rules/`），立项锁定前与组合生成后两次预检、建议审批路径；成本与税费从规则包读取（Spec 第 14.12 节）；`python -m factopia.rules`，页面「风控台」 |
+| `factopia/portfolio/` | 授权组合与研究报告：月度只做多组合（约束逐条注明来源）、多币种回测与汇率拆分、Brinson 归因、反馈闭环；中文主报告 + 英文 / 法文证据附件（Spec 第 14.13 节）；页面「组合台」 |
 | `configs/refdata/`、`configs/universe/membership/` | 市场规则、数据字典、人工确认；成分股起止日期（目前为当前名单） |
 | `configs/mandates/` | 模拟客户授权（不含真实客户信息） |
 | `factopia/api/` | 后端接口 |

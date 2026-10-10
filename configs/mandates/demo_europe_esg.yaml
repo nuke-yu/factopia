@@ -12,5 +12,13 @@ risk_budget: 跟踪误差 ≤ 4%
 sustainability: 偏好可持续投资
 data_visibility: 公开市场数据
 report_language: 英文主报告，法文附件
+# 组合层结构化参数（第 0.4 节第 6 步；PORT-01、02）
+portfolio:
+  benchmark_weights: {uk: 0.6, fr: 0.4}             # 复合基准：富时 100 60% + CAC 40 40%（换算为基础币种）
+  max_tracking_error: 0.04
+  market_limits: {uk: 0.7, fr: 0.5}
+  max_turnover: 0.3
+  holdings_per_market: 20
+  rebalance: monthly
 free_text:
   - 避免烟草与争议性武器行业

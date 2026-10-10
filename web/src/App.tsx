@@ -28,6 +28,7 @@ const ResultsPage = lazyPage(() => import("./pages/ResultsPage"));
 const IntelPage = lazyPage(() => import("./pages/IntelPage"));
 const DataPage = lazyPage(() => import("./pages/DataPage"));
 const RulesPage = lazyPage(() => import("./pages/RulesPage"));
+const PortfolioPage = lazyPage(() => import("./pages/PortfolioPage"));
 
 /** 页面出错时显示原因与刷新按钮，而不是空白页。切换页面后自动恢复。 */
 class PageBoundary extends Component<{ children: ReactNode; resetKey: string }, { error: Error | null }> {
@@ -64,6 +65,7 @@ function Pages() {
           <Route path="/intel" element={<IntelPage />} />
           <Route path="/data" element={<DataPage />} />
           <Route path="/rules" element={<RulesPage />} />
+          <Route path="/portfolio" element={<PortfolioPage />} />
           <Route path="*" element={<Navigate to="/projects" replace />} />
         </Routes>
       </Suspense>
@@ -125,7 +127,7 @@ export default function App() {
                 </div>
               ))}
               <span className="mx-2 h-5 border-l border-line" aria-hidden />
-              {[{ to: "/intel", name: "情报台", hint: "多语言公告" }, { to: "/data", name: "数据台", hint: "主数据与时间点" }, { to: "/rules", name: "风控台", hint: "规则包与预检" }].map((d) => (
+              {[{ to: "/intel", name: "情报台", hint: "多语言公告" }, { to: "/data", name: "数据台", hint: "主数据与时间点" }, { to: "/rules", name: "风控台", hint: "规则包与预检" }, { to: "/portfolio", name: "组合台", hint: "授权组合与报告" }].map((d) => (
                 <NavLink
                   key={d.to}
                   to={d.to}

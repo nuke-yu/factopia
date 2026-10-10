@@ -63,13 +63,19 @@ def portfolio_context(spec: dict, study: dict, overrides: dict | None = None) ->
     """study：研究结论（factopia.api.main.study 的输出）。overrides["positions"]：{市场: [{date, symbol, weight}]} 用于合成违规演示。"""
     ctx = setup_context(spec, overrides)
     pf = {}
+    # 已构建授权组合（第 14.13 节）时检查授权组合的持仓；否则检查 RD-Agent 回测组合的持仓
+    built = RUNTIME / "portfolio" / f"{spec.get('id')}_v{spec.get('version')}" / "weights.parquet"
+    bw = pd.read_parquet(built) if built.exists() else None
     for m, e in (study.get("markets") or {}).items():
         f = e.get("focus")
         if not f:
             continue
         p = RESULTS / "runs" / str(e["run_id"]) / "positions" / f"{f['loop']}.parquet"
-        pos = None
-        if p.exists():
+        pos, source = None, "RD-Agent 回测组合"
+        if bw is not None and (bw["market"] == m).any():
+            pos = bw.loc[bw["market"] == m, ["date", "symbol", "weight_in_market"]].rename(columns={"weight_in_market": "weight"})
+            source = "授权组合"
+        elif p.exists():
             pos = pd.read_parquet(p, columns=["date", "instrument", "weight"])
             pos["symbol"] = pos["instrument"].map(_symbol)
         extra = ((overrides or {}).get("positions") or {}).get(m)
@@ -77,7 +83,7 @@ def portfolio_context(spec: dict, study: dict, overrides: dict | None = None) ->
             add = pd.DataFrame(extra)
             add["date"] = pd.to_datetime(add["date"])
             pos = add if pos is None else pd.concat([pos, add], ignore_index=True)
-        pf[m] = {"run_id": e["run_id"], "loop": f["loop"], "positions": pos, "diagnostics": f.get("diagnostics")}
+        pf[m] = {"run_id": e["run_id"], "loop": f["loop"], "positions": pos, "diagnostics": f.get("diagnostics"), "source": source}
     ctx["portfolio"] = pf
     pit = RESULTS / "pit_status.json"
     ctx["pit"] = json.loads(pit.read_text(encoding="utf-8")) if pit.exists() else None
