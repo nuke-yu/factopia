@@ -26,6 +26,13 @@ def _artifacts(workspace: str) -> Path | None:
     return found[-1].parent.parent if found else None
 
 
+def _to_parquet(df: pd.DataFrame, path: Path) -> None:
+    """先写临时文件再替换：运行中导出时，后端可能正在读取同一个文件。"""
+    tmp = path.with_suffix(".tmp")
+    df.to_parquet(tmp, index=False)
+    tmp.replace(path)
+
+
 def _load(path: Path):
     with path.open("rb") as f:
         return pickle.load(f)
@@ -77,19 +84,20 @@ def export_round(art: Path, out: Path, key: str, horizon: int) -> None:
     # 回撤与 Qlib 的最大回撤指标算法一致：累计超额收益（逐日相加）离此前最高点的距离，起点为 0
     cum = bt["excess_with_cost"].cumsum()
     bt["drawdown_with_cost"] = cum - cum.cummax().clip(lower=0.0)
-    bt.rename_axis("date").reset_index().to_parquet(out / "backtest" / f"{key}.parquet", index=False)
+    _to_parquet(bt.rename_axis("date").reset_index(), out / "backtest" / f"{key}.parquet")
 
     positions = _load(art / "portfolio_analysis/positions_normal_1day.pkl")
     rows = [(d, inst, w) for d, pos in positions.items()
             for inst, w in pos.get_stock_weight_dict(only_stock=True).items()]
-    pd.DataFrame(rows, columns=["date", "instrument", "weight"]).to_parquet(
-        out / "positions" / f"{key}.parquet", index=False)
+    _to_parquet(pd.DataFrame(rows, columns=["date", "instrument", "weight"]), out / "positions" / f"{key}.parquet")
 
     sig = pd.DataFrame({"ic": _load(art / "sig_analysis/ic.pkl"), "rank_ic": _load(art / "sig_analysis/ric.pkl")})
-    sig.rename_axis("date").reset_index().to_parquet(out / "signal" / f"{key}.parquet", index=False)
+    _to_parquet(sig.rename_axis("date").reset_index(), out / "signal" / f"{key}.parquet")
 
     q = quantile_returns(_load(art / "pred.pkl")["score"], _load(art / "label.pkl").iloc[:, 0], horizon)
-    (out / "quantile" / f"{key}.json").write_text(json.dumps(q, ensure_ascii=False), encoding="utf-8")
+    tmp = out / "quantile" / f"{key}.json.tmp"
+    tmp.write_text(json.dumps(q, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(out / "quantile" / f"{key}.json")
 
 
 def export_run(run_dir: Path) -> int:

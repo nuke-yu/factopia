@@ -218,6 +218,8 @@ def _run_summary(run: dict, how: str, jobs_by_run: dict) -> dict:
         "cost_usd": run["cost_usd"], "started_at": run["started_at"], "state": _run_state(run, job),
         "context_leak": run.get("context_leak"), "linked": how,
         "version": ((run.get("research") or {}).get("version")),
+        "job_id": job["job_id"] if job else None, "job_state": job["state"] if job else None,
+        "job_error": job.get("error") if job else None,
         "baseline_return": (((run.get("baseline") or {}).get("metrics")) or {}).get("annual_return_with_cost"),
         "best_return": _best_return(run["run_id"]),
     }
@@ -420,6 +422,36 @@ def get_job(job_id: str):
     path = store.log_path(job_id)
     tail = path.read_text(errors="replace").splitlines()[-40:] if path.exists() else []
     return {**_job_public(job), "log_tail": tail, "exported": bool(job.get("run_id")) and (RESULTS / "runs" / job["run_id"] / "run.json").exists()}
+
+
+@app.get("/api/jobs/{job_id}/live")
+def job_live(job_id: str):
+    """运行中的实时状态（运行器每 3 秒更新）：当前步骤、最近活动、各次回测结果。"""
+    _load_job(job_id)
+    return store.load_live(job_id) or {}
+
+
+@app.post("/api/jobs/{job_id}/retry")
+def retry_job(job_id: str):
+    job = _load_job(job_id)
+    if job["state"] not in ("failed", "cancelled", "budget_stopped"):
+        raise HTTPException(409, "只有失败或已停止的任务可以重新运行")
+    return store.retry_job(job)
+
+
+@app.get("/api/runner")
+def runner_status():
+    """后台运行器：是否暂停（及原因）、排队与运行中的任务数。"""
+    jobs = store.list_jobs()
+    return {"paused": store.paused(), "queued": sum(j["state"] == "queued" for j in jobs),
+            "running": sum(j["state"] == "running" for j in jobs)}
+
+
+@app.post("/api/runner/resume")
+def runner_resume():
+    """处理完暂停原因（如充值）后继续运行排队中的任务。"""
+    store.resume()
+    return runner_status()
 
 
 @app.post("/api/jobs/{job_id}/cancel")

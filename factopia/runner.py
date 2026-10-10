@@ -4,8 +4,9 @@
     python -m factopia.runner
 
 每个任务：用锁定的研究规格版本启动一次 RD-Agent（与命令行方式走同一个启动脚本），
-运行期间每隔 15 秒导出一次进度（results/runs/<运行编号>/，供"运行中"页面显示），
-累计费用超过预算或收到停止请求时中止；结束后标记回测结果待导出（由 exporter 服务完成）。
+运行期间每 3 秒解析一次控制台输出，写入实时状态（jobs/<任务>.live.json：当前步骤、最近活动、回测结果），
+每隔 15 秒导出一次结构化进度（results/runs/<运行编号>/）；每完成一轮回测即标记回测明细待导出（exporter 服务），
+累计费用超过预算或收到停止请求时中止。大模型余额不足、密钥无效时，中止并暂停排队，避免后面的任务连续失败。
 
 任务按顺序执行，不并行：RD-Agent 每次运行都会改写共享源码卷中的配置模板，并使用按市场与周期固定的工作目录。
 """
@@ -20,6 +21,7 @@ from pathlib import Path
 
 from factopia.export import rdagent_run
 from factopia.research import store
+from factopia.research.live import ANSI, LiveParser
 
 ENTRYPOINT = os.environ.get("FACTOPIA_ENTRYPOINT", "/usr/local/bin/entrypoint.sh")
 POLL_S, EXPORT_EVERY_S, STOP_GRACE_S = 3, 15, 90
@@ -41,6 +43,8 @@ def recover() -> None:
 
 
 def next_job() -> dict | None:
+    if store.paused():
+        return None
     for job in store.list_jobs():
         if job["state"] != "queued":
             continue
@@ -61,6 +65,33 @@ def export_progress(job: dict, log_dir: Path) -> dict | None:
     run = json.loads((out / "run.json").read_text())
     job.update(cost_usd=run["cost_usd"], rounds=run["rounds"])
     return run
+
+
+def follow(tail, live: LiveParser, job: dict) -> None:
+    """读取控制台的新输出，更新并写入实时状态。"""
+    for line in tail:
+        live.feed(line)
+    store.write_live(job["job_id"], {**live.state(), "updated_at": store.now()})
+
+
+def mark_new_backtests(run_id: str, done: int) -> int:
+    """有新的一轮完成回测时，标记回测明细待导出，运行中即可查看各轮净值。"""
+    try:
+        rounds = json.loads((rdagent_run.RUNS_DIR / run_id / "rounds.json").read_text())
+    except (OSError, json.JSONDecodeError):
+        return done
+    n = sum(1 for r in rounds if r.get("metrics"))
+    if n > done:
+        (rdagent_run.RUNS_DIR / run_id / ".backtest_pending").write_text(store.now())
+    return max(n, done)
+
+
+def last_error(log_file: Path) -> str:
+    """控制台输出中最后一条异常信息；没有时取最后几行。"""
+    import re
+    lines = [ANSI.sub("", x) for x in log_file.read_text(errors="replace").splitlines()[-400:]]
+    found = [x.strip() for x in lines if re.match(r"^\s*\w*(Error|Exception): ", x)]
+    return (found[-1] if found else " | ".join(x.strip() for x in lines[-6:] if x.strip()))[:600]
 
 
 def stop(proc: subprocess.Popen) -> None:
@@ -95,34 +126,44 @@ def run_job(job: dict) -> None:
     env = {**os.environ,
            "FACTOPIA_RESEARCH": str(store.version_path(job["research_id"], job["version"])),
            "FACTOPIA_MARKET": job["market"], "FACTOPIA_JOB_ID": job["job_id"], "LOG_TRACE_PATH": str(log_dir)}
-    with store.log_path(job["job_id"]).open("ab") as out:
+    live = LiveParser()
+    log_file = store.log_path(job["job_id"])
+    with log_file.open("ab") as out, log_file.open("r", errors="replace") as tail:
         proc = subprocess.Popen([ENTRYPOINT, "rdagent", "fin_factor", "--loop-n", str(job["loops"])],
                                 stdout=out, stderr=subprocess.STDOUT, env=env, start_new_session=True)
-        reason, last_export = None, 0.0
+        reason, last_export, backtested = None, 0.0, 0
         while proc.poll() is None:
             time.sleep(POLL_S)
-            if store.cancel_requested(job["job_id"]):
+            follow(tail, live, job)
+            if live.fatal:
+                reason = "fatal"
+            elif store.cancel_requested(job["job_id"]):
                 reason = "cancelled"
             elif time.time() - last_export >= EXPORT_EVERY_S:
                 last_export = time.time()
                 if export_progress(job, log_dir) is not None:
                     store.write_job(job)
+                    backtested = mark_new_backtests(run_id, backtested)
                 if job["cost_usd"] >= job["budget_usd"]:
                     reason = "budget_stopped"
             if reason:
-                log(f"{job['job_id']}: 停止（{reason}）")
+                log(f"{job['job_id']}: 停止（{live.fatal or reason}）")
                 stop(proc)
                 break
+        follow(tail, live, job)
 
     run = export_progress(job, log_dir)
-    if reason:
+    if live.fatal:
+        job.update(state="failed", error=live.fatal)
+        store.pause(live.fatal)
+        log(f"暂停排队：{live.fatal}")
+    elif reason:
         job["state"] = reason
     elif proc.returncode == 0:
         job["state"] = "done"
     else:
         job["state"] = "failed"
-        tail = store.log_path(job["job_id"]).read_text(errors="replace").strip().splitlines()[-15:]
-        job["error"] = f"RD-Agent 退出码 {proc.returncode}：" + " | ".join(tail)[-1200:]
+        job["error"] = f"RD-Agent 退出码 {proc.returncode}：{last_error(log_file)}"
     if run is None and job["state"] == "done":
         job.update(state="failed", error="RD-Agent 已结束，但没有完成任何一轮")
     job["ended_at"] = store.now()

@@ -4,6 +4,8 @@
     /workspace/runtime/jobs/<任务编号>.json         运行任务：后端新建，此后只由后台运行器更新状态
     /workspace/runtime/jobs/<任务编号>.cancel       停止请求（后端写入，运行器读取）
     /workspace/runtime/jobs/<任务编号>.log          RD-Agent 的控制台输出
+    /workspace/runtime/jobs/<任务编号>.live.json    运行中的实时状态（运行器每 3 秒更新，factopia/research/live.py）
+    /workspace/runtime/jobs/.paused                排队暂停（大模型余额不足、密钥无效等，处理后由页面恢复）
 
 任务状态：queued 排队 → running 运行中 → done 完成 / failed 失败 / cancelled 已停止 / budget_stopped 超出预算停止。
 """
@@ -89,6 +91,8 @@ def load_job(job_id: str) -> dict:
 def list_jobs() -> list[dict]:
     jobs = []
     for p in JOBS_DIR.glob("*.json"):
+        if p.name.endswith(".live.json"):  # 实时状态文件，不是任务
+            continue
         try:
             jobs.append(json.loads(p.read_text(encoding="utf-8")))
         except (json.JSONDecodeError, OSError):  # 正在替换的文件，下次再读
@@ -106,3 +110,34 @@ def cancel_requested(job_id: str) -> bool:
 
 def log_path(job_id: str) -> Path:
     return JOBS_DIR / f"{job_id}.log"
+
+
+def write_live(job_id: str, state: dict) -> None:
+    _atomic_write(JOBS_DIR / f"{job_id}.live.json", json.dumps(state, ensure_ascii=False))
+
+
+def load_live(job_id: str) -> dict | None:
+    path = JOBS_DIR / f"{job_id}.live.json"
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+
+
+# ── 排队暂停：大模型账户或密钥出错时，后面的任务不再启动 ───────────────────
+
+PAUSE_FILE = JOBS_DIR / ".paused"
+
+
+def pause(reason: str) -> None:
+    _atomic_write(PAUSE_FILE, json.dumps({"reason": reason, "at": now()}, ensure_ascii=False))
+
+
+def paused() -> dict | None:
+    return json.loads(PAUSE_FILE.read_text(encoding="utf-8")) if PAUSE_FILE.exists() else None
+
+
+def resume() -> None:
+    PAUSE_FILE.unlink(missing_ok=True)
+
+
+def retry_job(job: dict) -> dict:
+    """失败或停止的任务：用同一版本、市场与参数重新排队（新的批次）。"""
+    return create_jobs(job["research_id"], job["version"], [job["market"]], job["horizon"], job["loops"], job["budget_usd"])

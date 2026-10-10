@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { api, MARKETS, type Job, type Market, type Round, type RunEvent } from "../api";
+import { api, MARKETS, type Job, type LiveState, type Market, type Round, type RunEvent } from "../api";
 import { cssVar, fix, MARKET_LABEL, pct, reducedMotion, useAsync } from "../lib";
 import { Badge, ErrorBox, Loading, Notice, Panel, Seg } from "../components/ui";
 import ResearchTrail from "../components/charts/ResearchTrail";
+import NavChart from "../components/charts/NavChart";
+import LiveStatus from "../components/LiveStatus";
 
 const PIPELINE = ["提出假设", "编写代码", "Qlib 回测", "评审结果"];
 const LIVE_POLL_MS = 5000;
@@ -55,6 +57,7 @@ function JobWaiting({ jobId, onRun }: { jobId: string; onRun: (runId: string) =>
   const tick = useTick(!final, 3000);
   const job = useAsync(() => api.job(jobId), [jobId, tick]);
   const queue = useAsync(() => api.jobs(), [tick]);
+  const live = useAsync(() => api.jobLive(jobId), [jobId, tick]);
   const j = job.data;
   useEffect(() => {
     if (!j) return;
@@ -74,14 +77,33 @@ function JobWaiting({ jobId, onRun }: { jobId: string; onRun: (runId: string) =>
         {j.state === "queued" && <span className="text-sm text-muted">前面还有 {ahead} 个任务</span>}
         {j.state === "running" && <span className="text-sm text-muted">RD-Agent 正在准备数据与基准回测，第一轮开始后自动切换到过程视图…</span>}
         {(j.state === "queued" || j.state === "running") && <div className="ml-auto"><StopButton jobId={j.job_id} /></div>}
+        {["failed", "cancelled", "budget_stopped"].includes(j.state) && <div className="ml-auto"><RetryButton jobId={j.job_id} /></div>}
       </section>
-      {j.error && <ErrorBox error={j.error} />}
-      <Panel eyebrow="RD-Agent 控制台" title="最近输出">
-        <pre className="num text-[11px] whitespace-pre-wrap leading-relaxed text-muted max-h-[420px] overflow-y-auto bg-bg rounded p-3">
+      {j.error && <Notice tone="bad" title="运行失败">{j.error}</Notice>}
+      {isLive(live.data) && <LiveStatus job={j} live={live.data} />}
+      <details className="panel p-4" open={!isLive(live.data)}>
+        <summary className="cursor-pointer label">RD-Agent 原始输出（最后 40 行）</summary>
+        <pre className="num text-[11px] whitespace-pre-wrap leading-relaxed text-muted max-h-[420px] overflow-y-auto bg-bg rounded p-3 mt-2">
           {j.log_tail.length ? j.log_tail.join("\n").replace(/\x1b\[[0-9;]*m/g, "") : "等待输出…"}
         </pre>
-      </Panel>
+      </details>
     </div>
+  );
+}
+
+const isLive = (x: LiveState | Record<string, never> | undefined): x is LiveState => !!x && "phase" in x;
+
+/** 失败或停止的任务：用同一版本、市场与参数重新排队。 */
+function RetryButton({ jobId }: { jobId: string }) {
+  const [, setParams] = useSearchParams();
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <span className="inline-flex items-center gap-2">
+      <button className="btn" onClick={async () => {
+        try { const r = await api.retryJob(jobId); setParams({ job: r.jobs[0].job_id }); } catch (e) { setError((e as Error).message); }
+      }}>重新运行</button>
+      {error && <span className="text-xs text-bad">{error}</span>}
+    </span>
   );
 }
 
@@ -104,10 +126,13 @@ function StopButton({ jobId }: { jobId: string }) {
 }
 
 function Replay({ runId }: { runId: string }) {
-  const [live, setLive] = useState(false);
-  const tick = useTick(live, LIVE_POLL_MS);
+  const [running, setLive] = useState(false);
+  const tick = useTick(running, LIVE_POLL_MS);
   const detail = useAsync(() => api.run(runId), [runId, tick]);
   const events = useAsync(() => api.events(runId), [runId, tick]);
+  const jobId = detail.data?.job?.job_id;
+  const liveState = useAsync(() => (jobId && running ? api.jobLive(jobId) : Promise.resolve({})), [jobId, tick]);
+  const backtest = useAsync(() => (running ? api.backtest(runId) : Promise.resolve({})), [runId, Math.floor(tick / 3)]);
   const total = events.data?.at(-1)?.t ?? 0;
   const [clock, setClock] = useState(0);
   const [playing, setPlaying] = useState(!reducedMotion());
@@ -116,8 +141,8 @@ function Replay({ runId }: { runId: string }) {
   const [prompt, setPrompt] = useState<number | null>(null);
 
   useEffect(() => { if (detail.data) setLive(detail.data.run.state === "运行中"); }, [detail.data]);
-  useEffect(() => { if (live) setPlaying(false); }, [live]);
-  useEffect(() => { if (live && follow) setClock(total); }, [live, follow, total]);
+  useEffect(() => { if (running) setPlaying(false); }, [running]);
+  useEffect(() => { if (running && follow) setClock(total); }, [running, follow, total]);
   useEffect(() => { if (events.data && reducedMotion()) setClock(total); }, [events.data, total]);
   useEffect(() => {
     if (!playing || !events.data) return;
@@ -138,7 +163,7 @@ function Replay({ runId }: { runId: string }) {
   }
   const { run, rounds, job, batch } = detail.data;
   const visible = events.data.filter((e) => e.t <= clock);
-  const finished = !live && clock >= total;
+  const finished = !running && clock >= total;
 
   return (
     <>
@@ -146,7 +171,7 @@ function Replay({ runId }: { runId: string }) {
         <Notice tone="bad" title="此次运行受数据泄漏影响（MINE-11 修复前），仅用于展示过程">运行时提供给 AI 的已有发现包含测试期的评估结论。</Notice>
       )}
       <section className="panel p-4 flex flex-wrap items-center gap-3">
-        {live ? (
+        {running ? (
           <>
             <span className="inline-flex items-center gap-2 text-sm text-accent"><span className="size-2 rounded-full bg-accent animate-pulse" />实时 · 每 5 秒刷新</span>
             {!follow && <button className="btn" onClick={() => setFollow(true)}>回到最新</button>}
@@ -163,7 +188,7 @@ function Replay({ runId }: { runId: string }) {
         <input aria-label="回放进度" type="range" min={0} max={total} step={0.5} value={clock} className="flex-1 min-w-48 accent-[var(--accent)]"
           onChange={(e) => { setPlaying(false); setFollow(false); setClock(Number(e.target.value)); }} />
         <span className="num text-sm text-muted w-28 text-right">{mmss(clock)} / {mmss(total)}</span>
-        {live && job ? <StopButton jobId={job.job_id} /> : <button className="btn" onClick={() => { setPlaying(false); setClock(total); }}>跳到结尾</button>}
+        {running && job ? <StopButton jobId={job.job_id} /> : <button className="btn" onClick={() => { setPlaying(false); setClock(total); }}>跳到结尾</button>}
       </section>
       {job && (
         <div className="text-xs text-muted flex flex-wrap gap-x-4">
@@ -174,6 +199,7 @@ function Replay({ runId }: { runId: string }) {
         </div>
       )}
 
+      {running && job && isLive(liveState.data) && <LiveStatus job={job} live={liveState.data} />}
       <div className="grid gap-4 md:grid-cols-3">
         {MARKETS.map((m) => {
           if (m === run.market) return <Lane key={m} market={m} loops={job?.loops ?? run.rounds} visible={visible} clock={clock} />;
@@ -193,6 +219,11 @@ function Replay({ runId }: { runId: string }) {
         </Panel>
       </div>
 
+      {running && backtest.data && Object.keys(backtest.data).length > 0 && (
+        <Panel eyebrow="每完成一轮更新" title="各轮回测净值（实时，扣成本后超额）">
+          <NavChart backtest={backtest.data} rounds={rounds} selected={String(rounds.filter((r) => r.decision).at(-1)?.loop ?? "")} className="h-[320px]" />
+        </Panel>
+      )}
       {finished && (
         <Notice tone="accent" title={run.state === "已完成" ? "运行结束" : `运行${run.state}`}>
           共 {run.rounds} 轮，采纳 {run.adopted} 轮，大模型费用 ${run.cost_usd.toFixed(2)}。<Link to={`/results?run=${run.run_id}`} className="text-accent underline">查看结果分析 →</Link>

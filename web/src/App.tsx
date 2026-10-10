@@ -3,6 +3,7 @@ import { NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom"
 import { ResearchDraftProvider } from "./draft";
 import ResearchPage from "./pages/ResearchPage";
 import AuditPage from "./pages/AuditPage";
+import RunnerBanner from "./components/RunnerBanner";
 
 /** 按需加载页面。重新部署后旧页面引用的文件名已不存在：加载失败时自动刷新一次，取得新版本。 */
 function lazyPage(load: () => Promise<{ default: ComponentType }>) {
@@ -122,6 +123,7 @@ export default function App() {
           </div>
         </header>
         <main className="flex-1 mx-auto w-full max-w-[1680px] px-4 md:px-6 py-6">
+          <RunnerBanner />
           <Pages />
         </main>
       </div>

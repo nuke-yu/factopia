@@ -94,6 +94,7 @@ export type ResearchSpec = {
 export type ProjectRun = {
   run_id: string; market: Market; rounds: number; adopted: number; cost_usd: number; started_at: string | null;
   state: "已完成" | "运行中" | "已中止"; context_leak: boolean | null; linked: "记录" | "推断"; version: number | null;
+  job_id: string | null; job_state: JobState | null; job_error: string | null;
   baseline_return: number | null; best_return: number | null;
 };
 export type ProjectStatus = "示例" | "已锁定" | "排队中" | "运行中" | "已完成" | "已中止";
@@ -144,6 +145,16 @@ export type Job = {
   run_id: string | null; cost_usd: number; rounds: number; error: string | null;
 };
 export type JobDetail = Job & { log_tail: string[]; exported: boolean };
+export type LiveMetrics = { annualized_return?: number; information_ratio?: number; max_drawdown?: number };
+export type LiveState = {
+  phase: "prepare" | "loop"; loop: number | null; step: string | null; step_zh: string | null; step_started_at: string | null;
+  docker: { name: string; text: string; started_at: string | null } | null;
+  counters: { llm: number; exec_ok: number; docker: number };
+  activity: { t: string | null; kind: "step" | "docker" | "exec" | "result" | "error"; text: string }[];
+  backtests: { loop: number | null; t: string | null; with_cost?: LiveMetrics; without_cost?: LiveMetrics }[];
+  fatal: string | null; last_log_at: string | null; updated_at?: string;
+};
+export type RunnerStatus = { paused: { reason: string; at: string } | null; queued: number; running: number };
 export type Preview = { market: Market; test_start: string; dates: Record<string, string>; text: string; chars: number };
 
 type EventBase = { index: number; t: number; loop: number; step: string; has_prompt: boolean };
@@ -196,5 +207,9 @@ export const api = {
   jobs: (batch?: string) => get<Job[]>(`/jobs${batch ? `?batch=${batch}` : ""}`),
   job: (id: string) => get<JobDetail>(`/jobs/${id}`),
   cancelJob: (id: string) => post<{ ok: boolean }>(`/jobs/${id}/cancel`, {}),
+  jobLive: (id: string) => get<LiveState | Record<string, never>>(`/jobs/${id}/live`),
+  retryJob: (id: string) => post<{ batch_id: string; jobs: Job[] }>(`/jobs/${id}/retry`, {}),
+  runner: () => get<RunnerStatus>("/runner"),
+  resumeRunner: () => post<RunnerStatus>("/runner/resume", {}),
   context: (m: Market, lang: "zh" | "en" = "zh") => get<{ markdown: string }>(`/context/${m}?lang=${lang}`),
 };

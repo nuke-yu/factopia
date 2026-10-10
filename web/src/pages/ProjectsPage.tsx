@@ -95,6 +95,16 @@ function ProjectCard({ p }: { p: Project }) {
   );
 }
 
+function RetryButton({ jobId }: { jobId: string }) {
+  const navigate = useNavigate();
+  return (
+    <button className="btn mr-2" onClick={async () => {
+      const r = await api.retryJob(jobId);
+      navigate(`/run?job=${r.jobs[0].job_id}`);
+    }}>重新运行</button>
+  );
+}
+
 /** 已发起但还没有进度的任务（排队中、准备数据中、启动失败）。 */
 function JobRow({ j }: { j: Job }) {
   return (
@@ -106,7 +116,10 @@ function JobRow({ j }: { j: Job }) {
       <td className="num text-right pr-3 text-faint">0 / {j.loops}</td>
       <td className="num text-right pr-3 text-faint">—</td>
       <td className="num text-right pr-3">${j.cost_usd.toFixed(2)}</td>
-      <td className="text-right whitespace-nowrap"><Link className="btn" to={`/run?job=${j.job_id}`}>查看任务</Link></td>
+      <td className="text-right whitespace-nowrap">
+        {["failed", "cancelled", "budget_stopped"].includes(j.state) && <RetryButton jobId={j.job_id} />}
+        <Link className="btn" to={`/run?job=${j.job_id}`}>查看任务</Link>
+      </td>
     </tr>
   );
 }
@@ -120,6 +133,7 @@ function RunRow({ r }: { r: ProjectRun }) {
           {r.context_leak && <Badge tone="bad">受泄漏影响</Badge>}
           {r.linked === "推断" && <Badge>按市场与周期关联</Badge>}
         </div>
+        {r.job_error && <div className="text-xs text-bad mt-1 max-w-[60ch] truncate" title={r.job_error}>{r.job_error}</div>}
       </td>
       <td className="pr-3"><span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full" style={{ background: cssVar(`--${r.market}`) }} />{MARKET_LABEL[r.market]}</span></td>
       <td className="pr-3"><Badge tone={STATUS_TONE[r.state]}>{r.state}</Badge></td>
@@ -127,6 +141,7 @@ function RunRow({ r }: { r: ProjectRun }) {
       <td className="num text-right pr-3">{pct(r.baseline_return)} → <span className={r.best_return != null ? "text-good" : "text-faint"}>{pct(r.best_return)}</span></td>
       <td className="num text-right pr-3">${r.cost_usd.toFixed(2)}</td>
       <td className="text-right whitespace-nowrap">
+        {r.job_id && r.job_state && ["failed", "cancelled", "budget_stopped"].includes(r.job_state) && <RetryButton jobId={r.job_id} />}
         <Link className="btn mr-2" to={`/run?run=${r.run_id}`}>{r.state === "运行中" ? "查看过程" : "回放过程"}</Link>
         <Link className="btn" to={`/results?run=${r.run_id}`}>查看结果</Link>
       </td>
