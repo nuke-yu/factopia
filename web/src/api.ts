@@ -93,13 +93,58 @@ export type ResearchSpec = {
 
 export type ProjectRun = {
   run_id: string; market: Market; rounds: number; adopted: number; cost_usd: number; started_at: string | null;
-  state: "已完成" | "运行中" | "已中止"; context_leak: boolean | null; linked: "记录" | "推断";
+  state: "已完成" | "运行中" | "已中止"; context_leak: boolean | null; linked: "记录" | "推断"; version: number | null;
   baseline_return: number | null; best_return: number | null;
 };
+export type ProjectStatus = "示例" | "已锁定" | "排队中" | "运行中" | "已完成" | "已中止";
 export type Project = {
-  id: string; market: Market; horizon: number; direction: string; hypothesis: string;
-  status: "草稿" | "运行中" | "已完成" | "已中止"; runs: ProjectRun[];
+  id: string; title: string; markets: Market[]; horizon: number; hypothesis: string; versions: number[]; example: boolean;
+  status: ProjectStatus; runs: ProjectRun[]; jobs: Job[];
 };
+
+// ── 研究规格：授权、起草、版本、运行任务（Spec 第 16 章）──
+export type Mandate = {
+  id: string; name: string; markets: Market[]; constraints: string[]; free_text: string[];
+  terms: { key: string; name: string; value: string; usage: string }[];
+};
+export type DataNeed = { category: string; name: string; detail: string; usable: boolean; status: Partial<Record<Market, string>> };
+export type Rationale = { category: "behavioural" | "risk_premium" | "friction" | "flows" | "other"; note: string };
+export type EvidenceAlpha = {
+  id: string; market: Market; source: string; period: { start: string; end: string }; test_start: string; significant: number;
+  factors: { name: string; group: string; desc: string; t: number; ric: number; label: string }[];
+};
+export type DraftResult = {
+  draft: {
+    id: string | null; title_zh: string; hypothesis: string; hypothesis_zh: string; rationale: Rationale;
+    directions: string[]; exclusions: string[]; falsification: string; data_needs: DataNeed[];
+    mandate_interpretations: { term: string; interpretation_zh: string; constraint_en: string | null }[];
+    open_questions: string[]; leak_flags: string[]; system_questions: string[]; constraints: string[];
+  };
+  evidence: { groups: string[]; alpha158: EvidenceAlpha[]; past_runs: { run_id: string; market: Market; loop: number; hypothesis: string; adopted: boolean }[] };
+  mandate: Mandate;
+  meta: { model: string; prompt_version: string; prompt_tokens: number; completion_tokens: number; seconds: number; at: string };
+};
+export type DraftInput = {
+  hypothesis: string; direction: string; markets: Market[]; horizon: number; mandate: string; groups: string[]; include_past_runs: boolean;
+};
+export type Question = { text: string; source: "AI" | "系统" | "平台"; confirmed: boolean };
+export type Spec = {
+  id: string; version?: number; title_zh: string; mandate: string; markets: Market[]; horizon: number;
+  hypothesis_original: string; direction_original: string; hypothesis: string; hypothesis_zh: string; rationale: Rationale;
+  directions: string[]; exclusions: string[]; falsification: string; data_needs: DataNeed[]; constraints: string[];
+  evidence: { groups: string[]; include_past_runs: boolean; items: string[] }; questions: Question[];
+  run: { loops: number; budget_usd: number };
+  ai_draft: DraftResult["meta"] & { original: Pick<Spec, "hypothesis" | "rationale" | "directions" | "exclusions" | "falsification"> };
+  locked_at?: string; locked_by?: string; edits?: { field: string; by: string; at: string }[]; past_runs?: string[];
+};
+export type JobState = "queued" | "running" | "done" | "failed" | "cancelled" | "budget_stopped";
+export type Job = {
+  job_id: string; batch_id: string; research_id: string; version: number; market: Market; horizon: number; loops: number;
+  budget_usd: number; state: JobState; state_zh: string; created_at: string; started_at: string | null; ended_at: string | null;
+  run_id: string | null; cost_usd: number; rounds: number; error: string | null;
+};
+export type JobDetail = Job & { log_tail: string[]; exported: boolean };
+export type Preview = { market: Market; test_start: string; dates: Record<string, string>; text: string; chars: number };
 
 type EventBase = { index: number; t: number; loop: number; step: string; has_prompt: boolean };
 export type RunEvent = EventBase & (
@@ -114,21 +159,25 @@ export type RunEvent = EventBase & (
   | { kind: "cost"; total_usd: number }
 );
 
-async function get<T>(path: string): Promise<T> {
-  const res = await fetch(`/api${path}`);
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`/api${path}`, init);
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body.detail ?? `请求失败：${res.status} ${path}`);
+    const detail = Array.isArray(body.detail) ? body.detail.map((d: { msg: string }) => d.msg).join("；") : body.detail;
+    throw new Error(detail ?? `请求失败：${res.status} ${path}`);
   }
   return res.json() as Promise<T>;
 }
+const get = <T,>(path: string) => request<T>(path);
+const post = <T,>(path: string, body: unknown) =>
+  request<T>(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
 export const api = {
   overview: () => get<Overview>("/overview"),
   cube: (h: number) => get<Cube>(`/alpha158/${h}/cube`),
   surface: (h: number, m: Market) => get<Surface>(`/alpha158/${h}/surface?market=${m}`),
   runs: () => get<Run[]>("/runs"),
-  run: (id: string) => get<{ run: Run; rounds: Round[] }>(`/runs/${id}`),
+  run: (id: string) => get<{ run: Run & { state: ProjectRun["state"] }; rounds: Round[]; job: Job | null; batch: Job[] }>(`/runs/${id}`),
   backtest: (id: string) => get<Record<string, Columns>>(`/runs/${id}/backtest`),
   monthly: (id: string) => get<Record<string, Monthly>>(`/runs/${id}/monthly`),
   quantiles: (id: string) => get<Record<string, Quantiles>>(`/runs/${id}/quantiles`),
@@ -137,5 +186,15 @@ export const api = {
   events: (id: string) => get<RunEvent[]>(`/runs/${id}/events`),
   prompt: (id: string, index: number) => get<{ system: string; user: string; response: string | null }>(`/runs/${id}/events/${index}/prompt`),
   researchExamples: () => get<ResearchSpec[]>("/research/examples"),
+  mandates: () => get<Mandate[]>("/mandates"),
+  draft: (body: DraftInput) => post<DraftResult>("/research/draft", body),
+  preview: (spec: Partial<Spec>, market: Market) => post<Preview>("/research/preview", { spec, market }),
+  lock: (spec: Spec) => post<Spec>("/research/versions", spec),
+  versions: (id: string) => get<Spec[]>(`/research/${id}/versions`),
+  startRuns: (id: string, version: number, body: { markets: Market[]; loops: number; budget_usd: number }) =>
+    post<{ batch_id: string; jobs: Job[] }>(`/research/${id}/versions/${version}/runs`, body),
+  jobs: (batch?: string) => get<Job[]>(`/jobs${batch ? `?batch=${batch}` : ""}`),
+  job: (id: string) => get<JobDetail>(`/jobs/${id}`),
+  cancelJob: (id: string) => post<{ ok: boolean }>(`/jobs/${id}/cancel`, {}),
   context: (m: Market, lang: "zh" | "en" = "zh") => get<{ markdown: string }>(`/context/${m}?lang=${lang}`),
 };

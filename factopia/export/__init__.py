@@ -3,6 +3,7 @@
 - rdagent_run.py：读取 RD-Agent 日志（在 rdagent 容器中运行，日志对象需要 RD-Agent 环境才能读取）
 - backtests.py：读取 Qlib 回测结果与持仓（在 app 容器中运行，需要 Qlib）
 - alpha158.py：汇总 Alpha158 评估结果与市场概况（在 app 容器中运行）
+- watch.py：常驻服务，后台运行器结束一次运行后自动执行 backtests.py（exporter 服务）
 
 输出目录 /workspace/runtime/results/（容器内路径）：
     runs/<运行编号>/run.json、rounds.json、backtest/、positions/

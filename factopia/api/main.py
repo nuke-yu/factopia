@@ -3,7 +3,9 @@
 运行（独立服务，见 docker/api/Dockerfile 与 docker-compose.yml 的 api 服务）：
     uvicorn factopia.api.main:app --host 0.0.0.0 --port 8000
 
-数据来自 /workspace/runtime/results（只读挂载），由 factopia.export 导出；研究规格示例与市场介绍来自 /workspace/configs。
+数据来自 /workspace/runtime/results，由 factopia.export 导出；研究规格示例、模拟授权与市场介绍来自 /workspace/configs。
+研究规格的起草、版本与运行任务（Spec 第 16 章）：起草调用大模型；锁定的版本写入 /workspace/runtime/research；
+发起运行只新建任务文件（/workspace/runtime/jobs），由后台运行器（runner 服务）执行。
 """
 import json
 import os
@@ -15,6 +17,12 @@ from pathlib import Path
 import pandas as pd
 import yaml
 from fastapi import FastAPI, HTTPException, Query
+from pydantic import BaseModel, Field
+
+from factopia.research import draft as drafting
+from factopia.research import evidence, mandates, store
+from factopia.research.context import build_context
+from factopia.research.periods import HORIZONS, split_dates
 
 RESULTS = Path(os.environ.get("FACTOPIA_RESULTS_DIR", "/workspace/runtime/results"))
 CONFIGS = Path(os.environ.get("FACTOPIA_CONFIGS_DIR", "/workspace/configs"))
@@ -23,6 +31,12 @@ ROUND_KEY = re.compile(r"^(baseline|\d{1,3})$")
 MARKETS = ("hk", "uk", "fr")
 
 app = FastAPI(title="Factopia API", version="0.1.0", docs_url="/api/docs", openapi_url="/api/openapi.json")
+
+
+@app.exception_handler(PermissionError)
+def _storage_not_ready(request, exc: PermissionError):
+    from fastapi.responses import JSONResponse
+    return JSONResponse(status_code=503, content={"detail": "研究存储目录尚未初始化：请先启动后台运行器（runner 服务）"})
 
 
 def _json(path: Path):
@@ -89,7 +103,11 @@ def runs():
 @app.get("/api/runs/{run_id}")
 def run_detail(run_id: str):
     d = _run_dir(run_id)
-    return {"run": _json(d / "run.json"), "rounds": _json(d / "rounds.json")}
+    run = _json(d / "run.json")
+    job = _job_of_run(run_id)
+    batch = [_job_public(j) for j in store.list_jobs() if job and j["batch_id"] == job["batch_id"]]
+    return {"run": {**run, "state": _run_state(run, job)}, "rounds": _json(d / "rounds.json"),
+            "job": _job_public(job) if job else None, "batch": batch}
 
 
 @app.get("/api/runs/{run_id}/backtest")
@@ -169,10 +187,22 @@ def run_event_prompt(run_id: str, index: int):
     return {"system": e["system"], "user": e["user"], "response": e.get("response")}
 
 
-RUNNING_WINDOW = timedelta(minutes=30)  # 未完成的运行在最后一次记录后 30 分钟内视为"运行中"
+RUNNING_WINDOW = timedelta(minutes=30)  # 没有任务记录的运行（命令行启动）：最后一次记录后 30 分钟内视为"运行中"
+JOB_STATE = {"queued": "排队中", "running": "运行中", "done": "已完成", "failed": "失败", "cancelled": "已停止",
+             "budget_stopped": "超出预算停止"}
 
 
-def _run_state(run: dict) -> str:
+def _job_of_run(run_id: str) -> dict | None:
+    return next((j for j in store.list_jobs() if j.get("run_id") == run_id), None)
+
+
+def _job_public(job: dict) -> dict:
+    return {k: v for k, v in job.items() if k != "log_dir"} | {"state_zh": JOB_STATE.get(job["state"], job["state"])}
+
+
+def _run_state(run: dict, job: dict | None = None) -> str:
+    if job:
+        return {"running": "运行中", "done": "已完成"}.get(job["state"], "已中止")
     if run.get("status") == "done":
         return "已完成"
     ended = run.get("ended_at")
@@ -181,37 +211,56 @@ def _run_state(run: dict) -> str:
     return "已中止"
 
 
+def _run_summary(run: dict, how: str, jobs_by_run: dict) -> dict:
+    job = jobs_by_run.get(run["run_id"])
+    return {
+        "run_id": run["run_id"], "market": run["market"], "rounds": run["rounds"], "adopted": run["adopted"],
+        "cost_usd": run["cost_usd"], "started_at": run["started_at"], "state": _run_state(run, job),
+        "context_leak": run.get("context_leak"), "linked": how,
+        "version": ((run.get("research") or {}).get("version")),
+        "baseline_return": (((run.get("baseline") or {}).get("metrics")) or {}).get("annual_return_with_cost"),
+        "best_return": _best_return(run["run_id"]),
+    }
+
+
 @app.get("/api/projects")
 def projects():
-    """研究项目：每份研究规格（configs/research）及其关联的运行。
+    """研究项目：页面上锁定的研究规格（runtime/research，取最新版本）与示例（configs/research），及其运行与任务。
 
-    运行日志中记录了研究规格编号的直接关联；更早的运行按市场与预测周期推断（linked = "推断"）。
+    运行日志中记录了研究规格编号的直接关联；更早的运行按市场与预测周期关联到示例（linked = "推断"）。
     """
-    specs = [yaml.safe_load(p.read_text(encoding="utf-8")) for p in sorted((CONFIGS / "research").glob("*.yaml"))]
+    specs = []
+    for rid in store.research_ids():
+        vs = store.versions(rid)
+        specs.append({**store.load_version(rid, vs[-1]), "versions": vs, "example": False})
+    known = {s["id"] for s in specs}
+    for p in sorted((CONFIGS / "research").glob("*.yaml")):
+        ex = yaml.safe_load(p.read_text(encoding="utf-8"))
+        if ex["id"] not in known:
+            specs.append({**ex, "markets": [ex["market"]], "versions": [], "example": True})
     all_runs = [_json(p) for p in sorted((RESULTS / "runs").glob("*/run.json"), reverse=True)]
+    all_jobs = store.list_jobs()
+    jobs_by_run = {j["run_id"]: j for j in all_jobs if j.get("run_id")}
     items = []
     for spec in specs:
         linked = []
         for run in all_runs:
             rid = (run.get("research") or {}).get("id")
             if rid == spec["id"]:
-                how = "记录"
-            elif rid is None and run["market"] == spec["market"] and run["horizon"] == spec.get("horizon", 20):
-                how = "推断"
-            else:
-                continue
-            linked.append({
-                "run_id": run["run_id"], "market": run["market"], "rounds": run["rounds"], "adopted": run["adopted"],
-                "cost_usd": run["cost_usd"], "started_at": run["started_at"], "state": _run_state(run),
-                "context_leak": run.get("context_leak"), "linked": how,
-                "baseline_return": (((run.get("baseline") or {}).get("metrics")) or {}).get("annual_return_with_cost"),
-                "best_return": _best_return(run["run_id"]),
-            })
-        states = [r["state"] for r in linked]
-        status = "运行中" if "运行中" in states else "已完成" if "已完成" in states else "已中止" if linked else "草稿"
-        items.append({"id": spec["id"], "market": spec["market"], "horizon": spec.get("horizon", 20),
-                      "direction": spec.get("direction", ""), "hypothesis": spec.get("hypothesis", ""),
-                      "status": status, "runs": linked})
+                linked.append(_run_summary(run, "记录", jobs_by_run))
+            elif spec["example"] and rid is None and run["market"] == spec["market"] and run["horizon"] == spec.get("horizon", 20):
+                linked.append(_run_summary(run, "推断", jobs_by_run))
+        exported = {r["run_id"] for r in linked}
+        pending = [_job_public(j) for j in reversed(all_jobs)
+                   if j["research_id"] == spec["id"] and j.get("run_id") not in exported and j["state"] in ("queued", "running", "failed")]
+        states = [r["state"] for r in linked] + [j["state_zh"] for j in pending]
+        status = ("运行中" if "运行中" in states else "排队中" if "排队中" in states else "已完成" if "已完成" in states
+                  else "已中止" if states else "已锁定" if spec["versions"] else "示例")
+        items.append({"id": spec["id"], "title": spec.get("title_zh") or spec.get("direction", ""),
+                      "markets": spec.get("markets") or [spec.get("market")], "horizon": spec.get("horizon", 20),
+                      "hypothesis": spec.get("hypothesis_zh") or spec.get("hypothesis", ""),
+                      "versions": spec["versions"], "example": spec["example"], "status": status,
+                      "runs": linked, "jobs": pending})
     return items
 
 
@@ -219,6 +268,167 @@ def _best_return(run_id: str) -> float | None:
     rounds = _json(RESULTS / "runs" / run_id / "rounds.json")
     adopted = [r["metrics"]["annual_return_with_cost"] for r in rounds if r.get("decision") and r.get("metrics")]
     return adopted[-1] if adopted else None
+
+
+# ── 研究规格：起草、预览、锁定、运行（Spec 第 16 章）──────────────────────────────
+
+class DraftIn(BaseModel):
+    hypothesis: str = Field(min_length=10, max_length=4000)
+    direction: str = Field("", max_length=1000)
+    markets: list[str] = Field(min_length=1)
+    horizon: int = 20
+    mandate: str
+    groups: list[str] = []
+    include_past_runs: bool = True
+
+
+def _check_markets(markets: list[str]) -> None:
+    if not markets or any(m not in MARKETS for m in markets):
+        raise HTTPException(422, f"市场必须是 {MARKETS} 中的一个或多个")
+
+
+@app.get("/api/mandates")
+def list_mandates():
+    """模拟客户授权（configs/mandates），已解析为条款、挖掘约束与需要 AI 解释的自由文本条款。"""
+    return [mandates.parse(m) for m in mandates.load_all()]
+
+
+@app.post("/api/research/draft")
+def research_draft(body: DraftIn):
+    """AI 起草研究规格（RS-02）：约 30–60 秒。"""
+    _check_markets(body.markets)
+    if body.horizon not in HORIZONS:
+        raise HTTPException(422, f"预测周期必须是 {HORIZONS} 之一")
+    try:
+        return drafting.make_draft(body.model_dump())
+    except KeyError:
+        raise HTTPException(404, f"授权不存在：{body.mandate}")
+    except drafting.DraftError as e:
+        raise HTTPException(502, str(e))
+
+
+class PreviewIn(BaseModel):
+    spec: dict
+    market: str
+
+
+@app.post("/api/research/preview")
+def research_preview(body: PreviewIn):
+    """提示词预览（RS-07）：调用 RD-Agent 场景子类运行时使用的同一个函数。"""
+    _check_markets([body.market])
+    spec = _prepare_spec(body.spec, lock=False)
+    dates = split_dates(body.market, spec["horizon"])
+    text = build_context(body.market, spec["horizon"], spec, dates["TEST_START"])
+    return {"market": body.market, "test_start": dates["TEST_START"], "dates": dates, "text": text, "chars": len(text)}
+
+
+EDITABLE = ("hypothesis", "rationale", "directions", "exclusions", "falsification")
+LOCKED_BY = "研究员（演示，未登录）"
+
+
+def _prepare_spec(raw: dict, lock: bool) -> dict:
+    """整理研究规格：校验必填字段；以往运行只取假设方向与是否采纳（第 16.6 节）。"""
+    spec = {k: raw.get(k) for k in (
+        "id", "title_zh", "based_on", "mandate", "markets", "horizon", "hypothesis_original", "direction_original",
+        "hypothesis", "hypothesis_zh", "rationale", "directions", "exclusions", "falsification", "data_needs",
+        "constraints", "evidence", "questions", "run", "ai_draft")}
+    spec["horizon"] = int(spec.get("horizon") or 20)
+    spec["markets"] = spec.get("markets") or []
+    _check_markets(spec["markets"])
+    ev = spec.get("evidence") or {}
+    spec["past_runs"] = (evidence.past_runs_lines(evidence.past_runs(spec["markets"], spec["horizon"]))
+                         if ev.get("include_past_runs") else [])
+    if not lock:
+        return spec
+    problems = []
+    if not drafting.ID_PATTERN.match(str(spec.get("id") or "")):
+        problems.append("编号须为 3–40 个小写字母、数字或下划线，以字母开头")
+    for k, name in (("hypothesis", "规范化假设"), ("falsification", "可证伪测试")):
+        if not str(spec.get(k) or "").strip():
+            problems.append(f"{name}为必填")
+    if not str((spec.get("rationale") or {}).get("note") or "").strip():
+        problems.append("经济逻辑为必填")
+    if any(not q.get("confirmed") for q in spec.get("questions") or []):
+        problems.append("还有待确认事项未处理")
+    if problems:
+        raise HTTPException(422, "；".join(problems))
+    original = (spec.get("ai_draft") or {}).get("original") or {}
+    at = store.now()
+    spec["edits"] = [{"field": k, "by": LOCKED_BY, "at": at} for k in EDITABLE if k in original and original[k] != spec.get(k)]
+    spec["locked_by"] = LOCKED_BY
+    return spec
+
+
+@app.post("/api/research/versions")
+def lock_version(body: dict):
+    """锁定研究规格（RS-08）：生成新的版本号，此后不可修改。"""
+    spec = store.save_version(_prepare_spec(body, lock=True))
+    return spec
+
+
+@app.get("/api/research/{research_id}/versions")
+def list_versions(research_id: str):
+    if not drafting.ID_PATTERN.match(research_id):
+        raise HTTPException(404, "研究项目不存在")
+    return [store.load_version(research_id, v) for v in store.versions(research_id)]
+
+
+@app.get("/api/research/{research_id}/versions/{version}")
+def get_version(research_id: str, version: int):
+    if not drafting.ID_PATTERN.match(research_id) or version not in store.versions(research_id):
+        raise HTTPException(404, "版本不存在")
+    return store.load_version(research_id, version)
+
+
+class RunIn(BaseModel):
+    markets: list[str] | None = None
+    loops: int = Field(5, ge=1, le=20)
+    budget_usd: float = Field(2.0, gt=0, le=20)
+
+
+@app.post("/api/research/{research_id}/versions/{version}/runs")
+def start_runs(research_id: str, version: int, body: RunIn):
+    """在所选市场分别运行同一个锁定版本（RS-09）；任务按顺序排队，由后台运行器执行。"""
+    spec = get_version(research_id, version)
+    markets = body.markets or spec["markets"]
+    if any(m not in spec["markets"] for m in markets):
+        raise HTTPException(422, f"版本 v{version} 只包含市场 {spec['markets']}")
+    return store.create_jobs(research_id, version, markets, spec["horizon"], body.loops, body.budget_usd)
+
+
+@app.get("/api/jobs")
+def list_jobs(batch: str | None = None):
+    return [_job_public(j) for j in store.list_jobs() if batch is None or j["batch_id"] == batch]
+
+
+JOB_ID = re.compile(r"^\d{14}_[0-9a-f]{4}_\d+_[a-z]{2}$")
+
+
+def _load_job(job_id: str) -> dict:
+    if not JOB_ID.match(job_id):
+        raise HTTPException(404, "任务不存在")
+    try:
+        return store.load_job(job_id)
+    except FileNotFoundError:
+        raise HTTPException(404, "任务不存在")
+
+
+@app.get("/api/jobs/{job_id}")
+def get_job(job_id: str):
+    """任务状态与 RD-Agent 控制台输出的最后 40 行（准备数据阶段尚无进度事件时显示）。"""
+    job = _load_job(job_id)
+    path = store.log_path(job_id)
+    tail = path.read_text(errors="replace").splitlines()[-40:] if path.exists() else []
+    return {**_job_public(job), "log_tail": tail, "exported": bool(job.get("run_id")) and (RESULTS / "runs" / job["run_id"] / "run.json").exists()}
+
+
+@app.post("/api/jobs/{job_id}/cancel")
+def cancel_job(job_id: str):
+    job = _load_job(job_id)
+    if job["state"] in store.FINAL_STATES:
+        raise HTTPException(409, "任务已结束")
+    store.request_cancel(job_id)
+    return {"ok": True}
 
 
 @app.get("/api/research/examples")

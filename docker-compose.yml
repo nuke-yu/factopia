@@ -82,7 +82,8 @@ services:
     command: ["rdagent", "ui", "--port", "19899", "--log-dir", "/workspace/runtime/rdagent/${RDAGENT_UI_MARKET:-hk}/log"]
 
   # ── Factopia 平台（可独立部署，见 README「部署 Web 界面」）────────────────────────
-  # 后端接口：只读挂载结果目录，不依赖 Qlib / RD-Agent 镜像
+  # 后端接口：读取结果；写入研究规格版本与运行任务（runtime/research、runtime/jobs）；起草时调用大模型（.env）。
+  # 不依赖 Qlib / RD-Agent 镜像，也不启动容器：运行由 runner 服务执行
   api:
     build:
       context: .
@@ -90,8 +91,31 @@ services:
     image: factopia-api:dev
     profiles: ["platform", "dev"]
     restart: unless-stopped
+    env_file: .env
     volumes:
-      - runtime:/workspace/runtime:ro
+      - runtime:/workspace/runtime
+
+  # ── 研究执行（与 dind 同机运行）──────────────────────────────────────────────
+  # 后台运行器：按顺序执行页面发起的研究任务，启动 RD-Agent 并实时导出进度（factopia/runner.py）
+  runner:
+    <<: *rdagent
+    profiles: ["research"]
+    restart: unless-stopped
+    environment:
+      <<: *rdagent_env
+      PYTHONPATH: /workspace/factopia
+      PYTHONUNBUFFERED: "1"
+    command: ["python", "-m", "factopia.runner"]
+
+  # 回测结果导出：运行结束后读取 Qlib 的每日收益与持仓（factopia/export/watch.py；需要 Qlib，使用 app 镜像）
+  exporter:
+    image: factopia-app:dev
+    profiles: ["research"]
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - runtime:/workspace/runtime
+    command: ["python", "-m", "factopia.export.watch"]
 
   # 前端：nginx 提供静态页面，并把 /api 转发到后端（API_UPSTREAM）
   web:

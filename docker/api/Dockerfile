@@ -1,4 +1,5 @@
-# Factopia 后端接口：独立部署的轻量镜像（不含 Qlib / RD-Agent），只读取导出的结果文件。
+# Factopia 后端接口：独立部署的轻量镜像（不含 Qlib / RD-Agent）。读取导出的结果文件；
+# 研究规格的起草（调用大模型）、版本与运行任务写入 runtime 卷，由 runner 服务执行运行。
 # 构建上下文为仓库根目录：docker compose build api
 FROM python:3.12-slim
 
@@ -14,7 +15,10 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 # 代码与配置随镜像发布，云端部署无需挂载源码（本地开发时由 compose.local.yml 挂载覆盖）
 COPY factopia/__init__.py factopia/__init__.py
 COPY factopia/api factopia/api
+COPY factopia/research factopia/research
+COPY factopia/factors/__init__.py factopia/factors/stats.py factopia/factors/families.py factopia/factors/
 COPY configs/research /workspace/configs/research
+COPY configs/mandates /workspace/configs/mandates
 COPY configs/rdagent/context /workspace/configs/rdagent/context
 
 RUN useradd --uid 10001 --no-create-home factopia

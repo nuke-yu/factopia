@@ -9,15 +9,19 @@ server {
 
     location = /healthz { access_log off; return 200 "ok\n"; }
 
-    # 后端接口（含 WebSocket，用于运行进度推送）
+    # 每 10 秒重新解析后端地址：后端容器重建后地址会变（默认使用 Docker 内置 DNS，见 NGINX_RESOLVER）
+    resolver ${NGINX_RESOLVER} valid=10s ipv6=off;
+
+    # 后端接口。proxy_pass 使用变量才会按 resolver 重新解析；不带路径部分，请求路径原样转发
     location /api/ {
-        proxy_pass ${API_UPSTREAM};
+        set $api_upstream ${API_UPSTREAM};
+        proxy_pass $api_upstream;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_read_timeout 300s;
+        proxy_read_timeout 300s;   # AI 起草约 30–60 秒
     }
 
     # 带哈希的静态资源长期缓存

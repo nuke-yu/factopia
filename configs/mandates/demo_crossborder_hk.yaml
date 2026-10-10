@@ -1,0 +1,16 @@
+# 模拟客户授权（Spec 第 16.5 节）。不含真实客户信息。结构化条款由系统直接解析；free_text 中的条款需要 AI 解释并由研究员确认。
+id: demo_crossborder_hk
+name: 模拟跨境授权 · 香港服务
+service_region: 香港（香港、伦敦、巴黎团队共同支持）
+target_markets: [hk, uk, fr]
+base_currency: HKD
+report_currency: HKD
+benchmark: 恒生指数、富时 100、CAC 40 复合基准
+long_only: true
+restricted_securities: []
+risk_budget: 跟踪误差 ≤ 6%
+sustainability: 无特别要求
+data_visibility: 公开市场数据
+report_language: 中文主报告，英文 / 法文附件
+free_text:
+  - 印花税等交易成本较高，避免需要每日调仓的策略

@@ -1,31 +1,49 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, MARKETS, type Market } from "../api";
-import { MANDATES, testPeriodMentions, useDraft, type Draft } from "../draft";
+import { testPeriodMentions, useDraft, type Draft } from "../draft";
 import { cssVar, MARKET_LABEL, useAsync } from "../lib";
-import { Badge, Notice, Panel, Seg } from "../components/ui";
+import { Badge, ErrorBox, Loading, Notice, Panel, Seg } from "../components/ui";
 
 const HORIZONS: { value: Draft["horizon"]; label: string }[] = [
   { value: 1, label: "1 天" }, { value: 5, label: "1 周" }, { value: 20, label: "1 个月" }, { value: 60, label: "1 个季度" },
 ];
 
 export default function ResearchPage() {
-  const { draft, update } = useDraft();
+  const { draft, update, setResult, setLocked } = useDraft();
   const navigate = useNavigate();
   const cube = useAsync(() => api.cube(20), []);
+  const mandates = useAsync(() => api.mandates(), []);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (cube.data && draft.groups.length === 0) update({ groups: cube.data.groups });
   }, [cube.data]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const mandate = MANDATES.find((m) => m.id === draft.mandate)!;
+  const mandate = mandates.data?.find((m) => m.id === draft.mandate);
+  const allowed = mandate?.markets ?? MARKETS;
   const mentions = testPeriodMentions(`${draft.hypothesis} ${draft.direction}`);
   const evidence = useMemo(() => {
     if (!cube.data) return [];
     return cube.data.factors.filter((f) => draft.groups.includes(f.group) && f.periods.train.label !== "无效");
   }, [cube.data, draft.groups]);
   const toggle = <T,>(list: T[], v: T) => (list.includes(v) ? list.filter((x) => x !== v) : [...list, v]);
-  const ready = draft.markets.length > 0 && draft.hypothesis.trim().length > 10;
+  const ready = draft.markets.length > 0 && draft.hypothesis.trim().length > 10 && !!mandate && !busy;
+
+  async function startDraft() {
+    setBusy(true); setError(null);
+    try {
+      const r = await api.draft({ hypothesis: draft.hypothesis, direction: draft.direction, markets: draft.markets, horizon: draft.horizon,
+        mandate: draft.mandate, groups: draft.groups.length === cube.data?.groups.length ? [] : draft.groups, include_past_runs: draft.includePastRuns });
+      setResult(r); setLocked(null);
+      navigate("/audit");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
     <div className="flex flex-col gap-5">
@@ -38,25 +56,40 @@ export default function ResearchPage() {
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
         <div className="flex flex-col gap-5 min-w-0">
           <Panel eyebrow="第 1 步" title="客户授权">
-            <label htmlFor="mandate" className="sr-only">模拟客户授权</label>
-            <select id="mandate" className="field" value={draft.mandate} onChange={(e) => update({ mandate: e.target.value })}>
-              {MANDATES.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-            </select>
-            <dl className="grid sm:grid-cols-2 gap-x-6 gap-y-2 mt-3 text-sm">
-              {mandate.terms.map(([k, v]) => (
-                <div key={k} className="flex gap-3 border-b border-line pb-1.5"><dt className="text-faint w-24 shrink-0">{k}</dt><dd>{v}</dd></div>
-              ))}
-            </dl>
-            <p className="text-xs text-faint mt-2">模拟授权，不含真实客户信息。授权解析将在接入后端后由系统完成（第 16.5 节）。</p>
+            {mandates.error ? <ErrorBox error={mandates.error} /> : !mandates.data ? <Loading what="授权" /> : (
+              <>
+                <label htmlFor="mandate" className="sr-only">模拟客户授权</label>
+                <select id="mandate" className="field" value={draft.mandate} onChange={(e) => {
+                  const m = mandates.data!.find((x) => x.id === e.target.value)!;
+                  update({ mandate: m.id, markets: draft.markets.filter((x) => m.markets.includes(x)).length ? draft.markets.filter((x) => m.markets.includes(x)) : m.markets });
+                }}>
+                  {mandates.data.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                </select>
+                <dl className="grid sm:grid-cols-2 gap-x-6 gap-y-2 mt-3 text-sm">
+                  {mandate?.terms.map((t) => (
+                    <div key={t.key} className="flex gap-3 border-b border-line pb-1.5">
+                      <dt className="text-faint w-24 shrink-0">{t.name}</dt>
+                      <dd className="min-w-0">{t.value}<div className="text-[11px] text-faint">{t.usage}</div></dd>
+                    </div>
+                  ))}
+                </dl>
+                {!!mandate?.free_text.length && (
+                  <p className="text-sm mt-3"><span className="text-faint">需要 AI 解释的条款：</span>{mandate.free_text.join("；")}</p>
+                )}
+                <p className="text-xs text-faint mt-2">模拟授权，不含真实客户信息。结构化条款由系统直接转换为约束；自由文本条款由 AI 解释，在审核页逐条确认（第 16.5 节）。</p>
+              </>
+            )}
           </Panel>
 
           <Panel eyebrow="第 2 步" title="市场与预测周期">
             <div className="flex flex-wrap gap-3">
               {MARKETS.map((m: Market) => {
                 const on = draft.markets.includes(m);
+                const ok = allowed.includes(m);
                 return (
-                  <button key={m} type="button" aria-pressed={on} onClick={() => update({ markets: toggle(draft.markets, m) })}
-                    className="flex items-center gap-2 h-10 px-4 rounded border transition-colors"
+                  <button key={m} type="button" aria-pressed={on} disabled={!ok} title={ok ? undefined : "所选授权不包含该市场"}
+                    onClick={() => update({ markets: toggle(draft.markets, m) })}
+                    className="flex items-center gap-2 h-10 px-4 rounded border transition-colors disabled:opacity-35 disabled:cursor-not-allowed"
                     style={{ borderColor: on ? cssVar(`--${m}`) : cssVar("--line-2"), background: on ? `color-mix(in oklab, ${cssVar(`--${m}`)} 14%, transparent)` : "transparent" }}>
                     <span className="size-2.5 rounded-full" style={{ background: cssVar(`--${m}`) }} />
                     <span>{MARKET_LABEL[m]}</span>
@@ -114,7 +147,7 @@ export default function ResearchPage() {
             <ul className="flex flex-col gap-2 text-sm">
               <li className="flex justify-between gap-3"><span className="text-muted">市场</span><span>{draft.markets.map((m) => MARKET_LABEL[m]).join("、") || "未选择"}</span></li>
               <li className="flex justify-between gap-3"><span className="text-muted">预测周期</span><span className="num">{draft.horizon} 个交易日</span></li>
-              <li className="flex justify-between gap-3"><span className="text-muted">约束</span><span className="text-right">{draft.constraints.length} 条（来自授权与示例）</span></li>
+              <li className="flex justify-between gap-3"><span className="text-muted">授权约束</span><span className="text-right">{mandate ? `${mandate.constraints.length} 条 + ${mandate.free_text.length} 条待解释` : "—"}</span></li>
               <li className="flex justify-between gap-3"><span className="text-muted">证据：显著因子</span><span className="num">{evidence.length} 个</span></li>
               <li className="flex justify-between gap-3"><span className="text-muted">证据：以往运行</span><span>{draft.includePastRuns ? "包含" : "不包含"}</span></li>
             </ul>
@@ -123,10 +156,12 @@ export default function ResearchPage() {
                 {evidence.map((f) => <Badge key={f.name} tone="accent">{f.name}</Badge>)}
               </div>
             )}
-            <button className="btn btn-primary w-full mt-4 h-10 justify-center" disabled={!ready} onClick={() => navigate("/audit")}>
-              AI 起草研究规格 →
+            <button className="btn btn-primary w-full mt-4 h-10 justify-center" disabled={!ready} onClick={startDraft}>
+              {busy ? "AI 起草中…" : "AI 起草研究规格 →"}
             </button>
-            <p className="text-xs text-faint mt-2">当前阶段：起草结果为示例草稿；大模型起草接口将在下一阶段接入（RS-02）。</p>
+            {busy && <p className="text-xs text-muted mt-2">正在计算证据包并请大模型起草，通常需要 10–60 秒。</p>}
+            {error && <div className="mt-3"><ErrorBox error={error} /></div>}
+            {!busy && !error && <p className="text-xs text-faint mt-2">起草结果在下一步由你逐条审核、修改后锁定。</p>}
           </Panel>
         </aside>
       </div>

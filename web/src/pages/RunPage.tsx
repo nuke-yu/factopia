@@ -1,48 +1,123 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { api, MARKETS, type Market, type Round, type Run, type RunEvent } from "../api";
+import { api, MARKETS, type Job, type Market, type Round, type RunEvent } from "../api";
 import { cssVar, fix, MARKET_LABEL, pct, reducedMotion, useAsync } from "../lib";
 import { Badge, ErrorBox, Loading, Notice, Panel, Seg } from "../components/ui";
 import ResearchTrail from "../components/charts/ResearchTrail";
 
 const PIPELINE = ["提出假设", "编写代码", "Qlib 回测", "评审结果"];
+const LIVE_POLL_MS = 5000;
 const SPEEDS = [10, 30, 60, 120];
 const mmss = (s: number) => `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
 
 export default function RunPage() {
   const [params, setParams] = useSearchParams();
-  const runs = useAsync(() => api.runs(), []);
-  const runId = params.get("run") ?? runs.data?.find((r) => r.rounds >= 3)?.run_id ?? runs.data?.[0]?.run_id ?? "";
+  const jobId = params.get("job");
+  const runs = useAsync(() => api.runs(), [params.get("run")]);
+  const runId = params.get("run") ?? (jobId ? "" : runs.data?.find((r) => r.rounds >= 3)?.run_id ?? runs.data?.[0]?.run_id ?? "");
   return (
     <div className="flex flex-col gap-5">
       <div className="flex flex-wrap items-end gap-4">
         <div>
           <div className="label">03 · 运行中</div>
           <h1 className="font-display text-2xl font-semibold tracking-wide mt-1">AI 研究过程</h1>
-          <p className="text-muted text-sm mt-1 max-w-[80ch]">每一轮：AI 提出假设 → 写代码并自检修错 → Qlib 回测 → AI 评审并决定下一步。已完成的运行可按真实时间戳加速回放。</p>
+          <p className="text-muted text-sm mt-1 max-w-[80ch]">每一轮：AI 提出假设 → 写代码并自检修错 → Qlib 回测 → AI 评审并决定下一步。运行中每 5 秒刷新；已完成的运行可按真实时间戳加速回放。</p>
         </div>
         <div className="ml-auto flex items-center gap-2">
           <label htmlFor="run-sel" className="label whitespace-nowrap">运行</label>
           <select id="run-sel" className="field w-auto num text-sm" value={runId} onChange={(e) => setParams({ run: e.target.value })}>
+            {!runId && <option value="">等待运行开始…</option>}
             {runs.data?.map((r) => <option key={r.run_id} value={r.run_id}>{r.run_id} · {MARKET_LABEL[r.market]} · {r.rounds} 轮</option>)}
           </select>
         </div>
       </div>
       {runs.error && <ErrorBox error={runs.error} />}
+      {!runId && jobId && <JobWaiting jobId={jobId} onRun={(rid) => setParams({ run: rid, job: jobId })} />}
       {runId && <Replay key={runId} runId={runId} />}
     </div>
   );
 }
 
+/** 周期刷新：enabled 时每隔 ms 毫秒返回新的计数，用作 useAsync 的依赖。 */
+function useTick(enabled: boolean, ms: number): number {
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    if (!enabled) return;
+    const id = setInterval(() => setTick((x) => x + 1), ms);
+    return () => clearInterval(id);
+  }, [enabled, ms]);
+  return tick;
+}
+
+/** 任务排队或 RD-Agent 正在准备数据（还没有进度事件）时：显示任务状态与控制台输出。 */
+function JobWaiting({ jobId, onRun }: { jobId: string; onRun: (runId: string) => void }) {
+  const [final, setFinal] = useState(false);
+  const tick = useTick(!final, 3000);
+  const job = useAsync(() => api.job(jobId), [jobId, tick]);
+  const queue = useAsync(() => api.jobs(), [tick]);
+  const j = job.data;
+  useEffect(() => {
+    if (!j) return;
+    if (j.exported && j.run_id) onRun(j.run_id);
+    else if (["done", "failed", "cancelled", "budget_stopped"].includes(j.state)) setFinal(true);
+  }, [j]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (job.error) return <ErrorBox error={job.error} />;
+  if (!j) return <Loading what="任务" />;
+  const ahead = (queue.data ?? []).filter((x) => x.job_id < j.job_id && (x.state === "queued" || x.state === "running")).length;
+  return (
+    <div className="flex flex-col gap-4">
+      <section className="panel p-4 flex flex-wrap items-center gap-3">
+        <Badge tone={j.state === "failed" ? "bad" : j.state === "running" ? "accent" : "muted"}>{j.state_zh}</Badge>
+        <span className="font-medium">{j.research_id} v{j.version}</span>
+        <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full" style={{ background: cssVar(`--${j.market}`) }} />{MARKET_LABEL[j.market]}</span>
+        <span className="num text-xs text-muted">{j.loops} 轮 · 上限 ${j.budget_usd}</span>
+        {j.state === "queued" && <span className="text-sm text-muted">前面还有 {ahead} 个任务</span>}
+        {j.state === "running" && <span className="text-sm text-muted">RD-Agent 正在准备数据与基准回测，第一轮开始后自动切换到过程视图…</span>}
+        {(j.state === "queued" || j.state === "running") && <div className="ml-auto"><StopButton jobId={j.job_id} /></div>}
+      </section>
+      {j.error && <ErrorBox error={j.error} />}
+      <Panel eyebrow="RD-Agent 控制台" title="最近输出">
+        <pre className="num text-[11px] whitespace-pre-wrap leading-relaxed text-muted max-h-[420px] overflow-y-auto bg-bg rounded p-3">
+          {j.log_tail.length ? j.log_tail.join("\n").replace(/\x1b\[[0-9;]*m/g, "") : "等待输出…"}
+        </pre>
+      </Panel>
+    </div>
+  );
+}
+
+/** 停止运行：点击后再次确认。 */
+function StopButton({ jobId }: { jobId: string }) {
+  const [step, setStep] = useState<"idle" | "confirm" | "sent">("idle");
+  const [error, setError] = useState<string | null>(null);
+  if (step === "sent") return <span className="text-sm text-warn">已请求停止，当前步骤结束后停止…</span>;
+  return (
+    <span className="inline-flex items-center gap-2">
+      {step === "confirm" && <span className="text-sm text-warn">已完成的轮次会保留。确认停止？</span>}
+      <button className={`btn ${step === "confirm" ? "border-bad text-bad" : ""}`} onClick={async () => {
+        if (step === "idle") return setStep("confirm");
+        try { await api.cancelJob(jobId); setStep("sent"); } catch (e) { setError((e as Error).message); }
+      }}>{step === "confirm" ? "确认停止" : "停止运行"}</button>
+      {step === "confirm" && <button className="btn" onClick={() => setStep("idle")}>取消</button>}
+      {error && <span className="text-xs text-bad">{error}</span>}
+    </span>
+  );
+}
+
 function Replay({ runId }: { runId: string }) {
-  const detail = useAsync(() => api.run(runId), [runId]);
-  const events = useAsync(() => api.events(runId), [runId]);
+  const [live, setLive] = useState(false);
+  const tick = useTick(live, LIVE_POLL_MS);
+  const detail = useAsync(() => api.run(runId), [runId, tick]);
+  const events = useAsync(() => api.events(runId), [runId, tick]);
   const total = events.data?.at(-1)?.t ?? 0;
   const [clock, setClock] = useState(0);
   const [playing, setPlaying] = useState(!reducedMotion());
   const [speed, setSpeed] = useState(30);
+  const [follow, setFollow] = useState(true);   // 运行中：进度条跟随最新事件
   const [prompt, setPrompt] = useState<number | null>(null);
 
+  useEffect(() => { if (detail.data) setLive(detail.data.run.state === "运行中"); }, [detail.data]);
+  useEffect(() => { if (live) setPlaying(false); }, [live]);
+  useEffect(() => { if (live && follow) setClock(total); }, [live, follow, total]);
   useEffect(() => { if (events.data && reducedMotion()) setClock(total); }, [events.data, total]);
   useEffect(() => {
     if (!playing || !events.data) return;
@@ -57,11 +132,13 @@ function Replay({ runId }: { runId: string }) {
   }, [playing, speed, total, events.data]);
   useEffect(() => { if (clock >= total && total > 0) setPlaying(false); }, [clock, total]);
 
-  if (detail.error || events.error) return <ErrorBox error={(detail.error ?? events.error)!} />;
-  if (!detail.data || !events.data) return <Loading what="运行过程" />;
-  const { run, rounds } = detail.data;
+  if (!detail.data || !events.data) {
+    if (detail.error || events.error) return <ErrorBox error={(detail.error ?? events.error)!} />;
+    return <Loading what="运行过程" />;
+  }
+  const { run, rounds, job, batch } = detail.data;
   const visible = events.data.filter((e) => e.t <= clock);
-  const finished = clock >= total;
+  const finished = !live && clock >= total;
 
   return (
     <>
@@ -69,21 +146,40 @@ function Replay({ runId }: { runId: string }) {
         <Notice tone="bad" title="此次运行受数据泄漏影响（MINE-11 修复前），仅用于展示过程">运行时提供给 AI 的已有发现包含测试期的评估结论。</Notice>
       )}
       <section className="panel p-4 flex flex-wrap items-center gap-3">
-        <Badge tone={run.status === "done" ? "muted" : "accent"}>{run.status === "done" ? "回放" : "已导出的进度"}</Badge>
-        <button className="btn w-20 justify-center" onClick={() => { if (finished) setClock(0); setPlaying((p) => !p); }}>
-          {playing ? "暂停" : finished ? "重新播放" : "播放"}
-        </button>
-        <Seg label="回放速度" value={speed} onChange={setSpeed} options={SPEEDS.map((s) => ({ value: s, label: `${s}×` }))} />
+        {live ? (
+          <>
+            <span className="inline-flex items-center gap-2 text-sm text-accent"><span className="size-2 rounded-full bg-accent animate-pulse" />实时 · 每 5 秒刷新</span>
+            {!follow && <button className="btn" onClick={() => setFollow(true)}>回到最新</button>}
+          </>
+        ) : (
+          <>
+            <Badge tone={run.state === "已完成" ? "muted" : "warn"}>{run.state === "已完成" ? "回放" : `${run.state} · 回放`}</Badge>
+            <button className="btn w-20 justify-center" onClick={() => { if (clock >= total) setClock(0); setPlaying((p) => !p); }}>
+              {playing ? "暂停" : clock >= total ? "重新播放" : "播放"}
+            </button>
+            <Seg label="回放速度" value={speed} onChange={setSpeed} options={SPEEDS.map((s) => ({ value: s, label: `${s}×` }))} />
+          </>
+        )}
         <input aria-label="回放进度" type="range" min={0} max={total} step={0.5} value={clock} className="flex-1 min-w-48 accent-[var(--accent)]"
-          onChange={(e) => { setPlaying(false); setClock(Number(e.target.value)); }} />
+          onChange={(e) => { setPlaying(false); setFollow(false); setClock(Number(e.target.value)); }} />
         <span className="num text-sm text-muted w-28 text-right">{mmss(clock)} / {mmss(total)}</span>
-        <button className="btn" onClick={() => { setPlaying(false); setClock(total); }}>跳到结尾</button>
+        {live && job ? <StopButton jobId={job.job_id} /> : <button className="btn" onClick={() => { setPlaying(false); setClock(total); }}>跳到结尾</button>}
       </section>
+      {job && (
+        <div className="text-xs text-muted flex flex-wrap gap-x-4">
+          <span>研究规格 <Link to="/projects" className="text-accent underline">{job.research_id} v{job.version}</Link></span>
+          <span className="num">任务 {job.job_id}</span>
+          <span>{job.loops} 轮 · 费用上限 ${job.budget_usd}</span>
+          {job.state !== "running" && <span>任务状态：{job.state_zh}</span>}
+        </div>
+      )}
 
       <div className="grid gap-4 md:grid-cols-3">
-        {MARKETS.map((m) => m === run.market
-          ? <Lane key={m} market={m} run={run} visible={visible} clock={clock} />
-          : <IdleLane key={m} market={m} />)}
+        {MARKETS.map((m) => {
+          if (m === run.market) return <Lane key={m} market={m} loops={job?.loops ?? run.rounds} visible={visible} clock={clock} />;
+          const other = batch.find((j) => j.market === m);
+          return other ? <BatchLane key={m} job={other} /> : <IdleLane key={m} market={m} />;
+        })}
       </div>
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,6fr)_minmax(0,5fr)]">
@@ -98,8 +194,9 @@ function Replay({ runId }: { runId: string }) {
       </div>
 
       {finished && (
-        <Notice tone="accent" title="运行结束">
+        <Notice tone="accent" title={run.state === "已完成" ? "运行结束" : `运行${run.state}`}>
           共 {run.rounds} 轮，采纳 {run.adopted} 轮，大模型费用 ${run.cost_usd.toFixed(2)}。<Link to={`/results?run=${run.run_id}`} className="text-accent underline">查看结果分析 →</Link>
+          {job && <span className="text-muted">（回测明细在运行结束后约 1 分钟内导出）</span>}
         </Notice>
       )}
       {prompt != null && <PromptModal runId={runId} index={prompt} onClose={() => setPrompt(null)} />}
@@ -115,7 +212,7 @@ function trailRounds(rounds: Round[], visible: RunEvent[]): Round[] {
     : r.loop === current ? [{ ...r, status: "running" as const, metrics: null, decision: null }] : []);
 }
 
-function Lane({ market, run, visible, clock }: { market: Market; run: Run; visible: RunEvent[]; clock: number }) {
+function Lane({ market, loops, visible, clock }: { market: Market; loops: number; visible: RunEvent[]; clock: number }) {
   const lastStep = [...visible].reverse().find((e) => e.kind === "step" && e.name !== "记录") as Extract<RunEvent, { kind: "step" }> | undefined;
   const loop = visible.at(-1)?.loop ?? 0;
   const done = visible.filter((e) => e.kind === "decision").length;
@@ -123,14 +220,16 @@ function Lane({ market, run, visible, clock }: { market: Market; run: Run; visib
   const cost = ([...visible].reverse().find((e) => e.kind === "cost") as Extract<RunEvent, { kind: "cost" }> | undefined)?.total_usd ?? 0;
   const calls = visible.filter((e) => e.kind === "llm").length;
   const fixes = visible.filter((e) => e.kind === "check").flatMap((e) => (e as Extract<RunEvent, { kind: "check" }>).items).filter((i) => !i.ok).length;
-  const active = lastStep?.phase === "start" ? lastStep.name : null;
+  // RD-Agent 在步骤结束时才记录开始时间：上一步已结束、下一步尚无记录时，高亮下一步
+  const active = !lastStep || done >= loops ? null : lastStep.phase === "start" ? lastStep.name
+    : PIPELINE[(PIPELINE.indexOf(lastStep.name) + 1) % PIPELINE.length];
   const color = cssVar(`--${market}`);
   return (
     <section className="panel p-4" style={{ borderColor: `color-mix(in oklab, ${color} 45%, var(--line))` }}>
       <div className="flex items-center gap-2">
         <span className="size-2.5 rounded-full" style={{ background: color, boxShadow: `0 0 10px ${color}` }} />
         <span className="font-medium">{MARKET_LABEL[market]}</span>
-        <span className="num text-xs text-muted ml-auto">第 {loop} 轮 · 已完成 {done} / {run.rounds}</span>
+        <span className="num text-xs text-muted ml-auto">第 {loop} 轮 · 已完成 {done} / {loops}</span>
       </div>
       <ol className="grid grid-cols-4 gap-1.5 mt-3" aria-label="当前步骤">
         {PIPELINE.map((s) => {
@@ -150,6 +249,25 @@ function Lane({ market, run, visible, clock }: { market: Market; run: Run; visib
         <div><dt className="text-faint">费用</dt><dd className="num text-base">${cost.toFixed(3)}</dd></div>
       </dl>
       <div className="num text-[11px] text-faint mt-2">已用时 {mmss(clock)}</div>
+    </section>
+  );
+}
+
+/** 同一批次中其他市场的任务：排队、运行中或已结束。 */
+function BatchLane({ job }: { job: Job }) {
+  const color = cssVar(`--${job.market}`);
+  const to = job.run_id ? `/run?run=${job.run_id}&job=${job.job_id}` : `/run?job=${job.job_id}`;
+  return (
+    <section className={`panel p-4 ${job.state === "queued" ? "opacity-70" : ""}`}>
+      <div className="flex items-center gap-2">
+        <span className="size-2.5 rounded-full" style={{ background: color }} />
+        <span className="font-medium">{MARKET_LABEL[job.market]}</span>
+        <span className="ml-auto"><Badge tone={job.state === "running" ? "accent" : job.state === "done" ? "good" : job.state === "queued" ? "muted" : "warn"}>{job.state_zh}</Badge></span>
+      </div>
+      <p className="text-sm text-muted mt-3">
+        {job.state === "queued" ? "同一版本，排在当前市场之后依次运行。" : `${job.rounds} 轮 · 费用 $${job.cost_usd.toFixed(3)}`}
+      </p>
+      {job.state !== "queued" && <Link to={to} className="text-accent underline text-sm">查看该市场的过程 →</Link>}
     </section>
   );
 }

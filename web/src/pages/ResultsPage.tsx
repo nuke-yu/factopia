@@ -106,7 +106,9 @@ function RunSection({ runId }: { runId: string }) {
             </div>
             <div>
               <div className="label mb-1">回测净值（测试期，扣成本后超额）</div>
-              {backtest.data ? (
+              {backtest.data && Object.keys(backtest.data).length === 0 ? (
+                <div className="text-sm text-muted py-10">逐日回测明细尚未导出：运行结束后由 exporter 服务自动导出（约 1 分钟），起点轮次没有逐日结果。</div>
+              ) : backtest.data ? (
                 <>
                   <NavChart backtest={backtest.data} rounds={rounds} selected={selected} className="h-[290px]" />
                   <div className="label mt-2 mb-1">回撤（选中轮次为红色面积）</div>

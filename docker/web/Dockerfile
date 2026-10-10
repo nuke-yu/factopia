@@ -10,7 +10,10 @@ RUN npm run build
 
 FROM nginx:1.27-alpine
 # nginx 官方镜像启动时用环境变量渲染 templates 目录：API_UPSTREAM 为后端地址
-ENV API_UPSTREAM=http://api:8000
+ENV API_UPSTREAM=http://api:8000 \
+    NGINX_RESOLVER=127.0.0.11
+# nginx 官方镜像只替换已定义的环境变量，模板中的 $api_upstream 等 nginx 变量不受影响
+ENV NGINX_ENVSUBST_FILTER="^(API_UPSTREAM|NGINX_RESOLVER)$"
 COPY docker/web/default.conf.template /etc/nginx/templates/default.conf.template
 COPY --from=build /app/dist /usr/share/nginx/html
 EXPOSE 8080

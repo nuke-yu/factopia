@@ -1,0 +1,16 @@
+# 模拟客户授权（Spec 第 16.5 节）。不含真实客户信息。
+id: demo_europe_esg
+name: 模拟欧洲授权 · 伦敦服务（可持续偏好）
+service_region: 伦敦（伦敦、巴黎团队支持）
+target_markets: [uk, fr]
+base_currency: GBP
+report_currency: GBP
+benchmark: 富时 100、CAC 40 复合基准
+long_only: true
+restricted_securities: []
+risk_budget: 跟踪误差 ≤ 4%
+sustainability: 偏好可持续投资
+data_visibility: 公开市场数据
+report_language: 英文主报告，法文附件
+free_text:
+  - 避免烟草与争议性武器行业

@@ -1,13 +1,22 @@
+import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { api, type Project, type ProjectRun } from "../api";
+import { api, type Job, type Project, type ProjectRun } from "../api";
 import { cssVar, MARKET_LABEL, pct, useAsync } from "../lib";
 import { Badge, ErrorBox, Loading, Panel } from "../components/ui";
 import Globe from "../components/charts/Globe";
 
-const STATUS_TONE = { 草稿: "muted", 运行中: "accent", 已完成: "good", 已中止: "warn" } as const;
+const STATUS_TONE = { 示例: "muted", 已锁定: "muted", 排队中: "muted", 运行中: "accent", 已完成: "good", 已中止: "warn" } as const;
+const JOB_TONE = { queued: "muted", running: "accent", done: "good", failed: "bad", cancelled: "warn", budget_stopped: "warn" } as const;
 
 export default function ProjectsPage() {
-  const projects = useAsync(() => api.projects(), []);
+  const [tick, setTick] = useState(0);
+  const projects = useAsync(() => api.projects(), [tick]);
+  const active = projects.data?.some((p) => p.status === "运行中" || p.status === "排队中");
+  useEffect(() => {  // 有任务在排队或运行时，每 10 秒刷新状态
+    if (!active) return;
+    const id = setInterval(() => setTick((x) => x + 1), 10000);
+    return () => clearInterval(id);
+  }, [active]);
   const overview = useAsync(() => api.overview(), []);
   const navigate = useNavigate();
 
@@ -45,7 +54,7 @@ export default function ProjectsPage() {
       </div>
 
       {projects.error && <ErrorBox error={projects.error} />}
-      {!projects.data ? <Loading what="研究项目" /> : (
+      {!projects.data ? (projects.error ? null : <Loading what="研究项目" />) : (
         <div className="flex flex-col gap-4">
           {projects.data.map((p) => <ProjectCard key={p.id} p={p} />)}
           {projects.data.length === 0 && <div className="text-muted">还没有研究项目。点击"新建研究"开始。</div>}
@@ -57,8 +66,12 @@ export default function ProjectsPage() {
 
 function ProjectCard({ p }: { p: Project }) {
   return (
-    <Panel eyebrow={`${MARKET_LABEL[p.market]} · 预测周期 ${p.horizon} 个交易日`} title={p.direction || p.id}
-      actions={<><Badge tone={STATUS_TONE[p.status]}>{p.status}</Badge><span className="num text-xs text-faint">{p.id}</span></>}>
+    <Panel eyebrow={`${p.markets.map((m) => MARKET_LABEL[m]).join(" · ")} · 预测周期 ${p.horizon} 个交易日`} title={p.title || p.id}
+      actions={<>
+        <Badge tone={STATUS_TONE[p.status]}>{p.status}</Badge>
+        {p.example ? <Badge>手写示例</Badge> : <Badge>v{p.versions.join(" / v")}</Badge>}
+        <span className="num text-xs text-faint">{p.id}</span>
+      </>}>
       <p className="text-sm text-muted leading-relaxed max-w-[110ch]">{p.hypothesis}</p>
       <div className="mt-4 overflow-x-auto">
         <table className="w-full text-sm">
@@ -69,11 +82,32 @@ function ProjectCard({ p }: { p: Project }) {
               <th className="text-right font-normal">费用</th><th className="text-right font-normal">操作</th>
             </tr>
           </thead>
-          <tbody>{p.runs.map((r) => <RunRow key={r.run_id} r={r} />)}</tbody>
+          <tbody>
+            {p.jobs.map((j) => <JobRow key={j.job_id} j={j} />)}
+            {p.runs.map((r) => <RunRow key={r.run_id} r={r} />)}
+          </tbody>
         </table>
-        {p.runs.length === 0 && <div className="text-muted text-sm py-3">尚未运行。<Link className="text-accent underline" to="/audit">去审核并运行</Link></div>}
+        {p.runs.length === 0 && p.jobs.length === 0 && (
+          <div className="text-muted text-sm py-3">尚未运行。{p.example ? "这是早期手写的示例规格，可在研究立项页起草新规格。" : "在审核页锁定后发起运行。"}</div>
+        )}
       </div>
     </Panel>
+  );
+}
+
+/** 已发起但还没有进度的任务（排队中、准备数据中、启动失败）。 */
+function JobRow({ j }: { j: Job }) {
+  return (
+    <tr className="border-t border-line">
+      <td className="py-2 pr-3"><span className="num text-muted">{j.run_id ?? "等待开始"}</span><span className="num text-xs text-faint ml-1.5">v{j.version}</span>
+        {j.error && <div className="text-xs text-bad mt-1 max-w-[60ch] truncate" title={j.error}>{j.error}</div>}</td>
+      <td className="pr-3"><span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full" style={{ background: cssVar(`--${j.market}`) }} />{MARKET_LABEL[j.market]}</span></td>
+      <td className="pr-3"><Badge tone={JOB_TONE[j.state]}>{j.state_zh}</Badge></td>
+      <td className="num text-right pr-3 text-faint">0 / {j.loops}</td>
+      <td className="num text-right pr-3 text-faint">—</td>
+      <td className="num text-right pr-3">${j.cost_usd.toFixed(2)}</td>
+      <td className="text-right whitespace-nowrap"><Link className="btn" to={`/run?job=${j.job_id}`}>查看任务</Link></td>
+    </tr>
   );
 }
 
@@ -81,7 +115,7 @@ function RunRow({ r }: { r: ProjectRun }) {
   return (
     <tr className="border-t border-line">
       <td className="py-2 pr-3">
-        <span className="num">{r.run_id}</span>
+        <span className="num">{r.run_id}</span>{r.version != null && <span className="num text-xs text-faint ml-1.5">v{r.version}</span>}
         <div className="flex gap-1.5 mt-1">
           {r.context_leak && <Badge tone="bad">受泄漏影响</Badge>}
           {r.linked === "推断" && <Badge>按市场与周期关联</Badge>}

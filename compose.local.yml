@@ -22,6 +22,15 @@ services:
       - ./configs:/workspace/configs:ro
       - ./factopia:/workspace/factopia/factopia:ro
 
+  # 后台运行器与回测导出：挂载源码（云端部署时打包进镜像）
+  runner:
+    volumes:
+      - ./configs:/workspace/configs:ro
+      - ./factopia:/workspace/factopia/factopia:ro
+  exporter:
+    volumes:
+      - .:/workspace
+
   # 后端接口：挂载源码并自动重载
   api:
     volumes:

@@ -53,23 +53,37 @@ docker compose run --rm rdagent ls /workspace/runtime
 
 ## Factopia Web 界面
 
-三个页面：研究立项 → 审核 → 结果（3D 图表）。由两个可独立部署的服务组成：`web`（nginx + 静态页面）与 `api`（FastAPI，只读结果文件）。
+五个页面：研究项目 → 研究立项 → 审核 → 运行中 → 结果。页面上完成整个研究闭环：AI 起草研究规格、审核修改、锁定版本、发起运行、实时查看过程、查看结果（Spec 第 16 章）。
+
+| 服务 | 作用 |
+|---|---|
+| `web` | nginx + 静态页面，转发 `/api` |
+| `api` | 后端接口：读结果；AI 起草（调用 `.env` 中的大模型）；版本与任务写入 `runtime/research`、`runtime/jobs` |
+| `runner` | 后台运行器：按顺序执行任务，启动 RD-Agent，每 15 秒导出一次进度，超出费用上限或收到停止请求时中止 |
+| `exporter` | 运行结束后导出逐日回测、持仓、IC 与分组收益（需要 Qlib） |
 
 ```bash
-# 1. 导出结果（每次运行 RD-Agent 或重新评估后执行）
+# 启动全部服务（本机；源码挂载，修改代码后 api 自动重载）→ http://localhost:18080
+docker compose -f docker-compose.yml -f compose.local.yml --profile platform --profile research up -d --build
+
+# 查看后台运行器与导出日志
+docker compose -f docker-compose.yml -f compose.local.yml --profile research logs -f runner exporter
+
+# 前端开发（热更新）→ http://localhost:5173
+docker compose -f docker-compose.yml -f compose.local.yml --profile dev up -d api web-dev
+
+# 手动导出（命令行启动的运行、重新评估 Alpha158 后）
 DC="docker compose -f docker-compose.yml -f compose.local.yml"
 $DC run --rm --entrypoint "" rdagent sh -c 'cd /workspace/factopia && /opt/conda/envs/rdagent/bin/python -m factopia.export.rdagent_run'
 $DC run --rm app python -m factopia.export.backtests
 $DC run --rm app python -m factopia.export.alpha158
-
-# 2a. 部署方式（与云服务器相同的镜像）→ http://localhost:18080
-docker compose --profile platform up -d --build api web
-
-# 2b. 前端开发（热更新）→ http://localhost:5173
-$DC --profile dev up -d api web-dev
 ```
 
-**部署到云服务器：** 在服务器上 `git clone` 后执行同样的命令（`--profile platform`）。`api` 只读挂载 `runtime` 卷，结果由服务器上的数据与挖掘流程生成；`web` 的字体和图表库已打包进镜像，不访问任何外部 CDN。
+- 任务按顺序执行、不并行：RD-Agent 每次运行都会改写共享源码卷中的配置模板，并使用按市场与周期固定的工作目录。
+- 命令行方式（`FACTOPIA_RESEARCH=... rdagent fin_factor`）仍可用，与页面走同一个启动脚本；锁定的版本在 `/workspace/runtime/research/<编号>/v<k>.yaml`。
+- 提示词预览与 RD-Agent 实际收到的内容由同一个函数生成（`factopia/research/context.py`）。
+
+**部署到云服务器：** `web` 与 `api` 镜像可独立部署（`--profile platform`）；`runner`、`exporter` 需要与 `dind` 同机，并使用挂载的源码（`compose.local.yml`），打包进镜像是后续工作。
 默认只监听本机；对外开放前**必须**在前面加 HTTPS 反向代理与登录（目前接口没有身份验证），再在 `.env` 中设置 `FACTOPIA_WEB_BIND=0.0.0.0`、`FACTOPIA_WEB_PORT`。
 
 ## 架构
@@ -81,7 +95,9 @@ $DC --profile dev up -d api web-dev
 | `dind` | 独立 Docker 引擎；RD-Agent 启动的回测容器运行在这里 |
 | `rdagent-ui` | RD-Agent 日志界面（profile `ui`） |
 | `qlib-runner` | 回测镜像，只构建（profile `build-only`），载入 dind 后由 RD-Agent 按需启动 |
-| `api` | Factopia 后端接口（FastAPI，profile `platform`），只读结果文件，镜像不含 Qlib / RD-Agent |
+| `api` | Factopia 后端接口（FastAPI，profile `platform`）：读结果、AI 起草、版本与任务；镜像不含 Qlib / RD-Agent |
+| `runner` | 后台运行器（rdagent 镜像，profile `research`）：按顺序执行页面发起的研究任务 |
+| `exporter` | 回测结果导出（app 镜像，profile `research`） |
 | `web` | Factopia 前端（nginx，profile `platform`），转发 `/api` 到 `api` |
 | `web-dev` | 前端开发服务器（仅 compose.local.yml，profile `dev`） |
 
@@ -97,6 +113,9 @@ $DC --profile dev up -d api web-dev
 |---|---|
 | `docker/` | 各镜像的 Dockerfile（均为多架构） |
 | `factopia/export/` | 结果导出：RD-Agent 日志、回测与持仓、Alpha158 汇总 → `/workspace/runtime/results/` |
+| `factopia/research/` | 研究规格：授权解析、证据包、AI 起草、提示词生成、版本与任务存储 |
+| `factopia/runner.py` | 后台运行器 |
+| `configs/mandates/` | 模拟客户授权（不含真实客户信息） |
 | `factopia/api/` | 后端接口 |
 | `web/` | 前端（React 19、Vite、Tailwind v4、ECharts GL、React Three Fiber） |
 | `spikes/` | 跑通验证脚本 |

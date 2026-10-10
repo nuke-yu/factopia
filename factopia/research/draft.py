@@ -1,0 +1,175 @@
+"""大模型起草研究规格（Spec RS-01 至 RS-06）。
+
+研究员给出假设（中 / 英 / 法文）、授权、市场与周期；系统先计算证据包与授权约束，再请大模型起草规格，
+输出按 JSON 结构校验；数据缺口、自由文本授权条款与测试期年份由系统补充为待确认事项。
+大模型使用与 RD-Agent 相同的 .env 配置（CHAT_MODEL / DEEPSEEK_API_KEY），可用 FACTOPIA_LLM_* 覆盖。
+"""
+import json
+import os
+import re
+import time
+import urllib.error
+import urllib.request
+from datetime import datetime, timezone
+from pathlib import Path
+
+from factopia.research import evidence, mandates
+
+PROMPT_VERSION = "rs-draft-v2"
+PROMPT_FILE = Path(__file__).parent / "prompts" / f"{PROMPT_VERSION}.md"
+ID_PATTERN = re.compile(r"^[a-z][a-z0-9_]{2,39}$")
+TEST_YEAR = re.compile(r"20(?:2[2-9]|[3-9]\d)")
+CJK = re.compile(r"[\u3400-\u9fff]")
+ENGLISH_FIELDS = ("hypothesis", "falsification")
+RATIONALE = ("behavioural", "risk_premium", "friction", "flows", "other")
+PLATFORM_CONSTRAINTS = ["Factors must have a clear economic rationale that a reviewer can explain."]
+
+# 数据需求类别 → (名称, 各市场现状, 能否用于 RD-Agent 挖掘)
+DATA = {
+    "price_volume": ("日线行情与成交量", {"hk": "可用", "uk": "可用", "fr": "可用"}, True),
+    "benchmark": ("基准指数日线", {"hk": "可用", "uk": "可用", "fr": "可用"}, True),
+    "fx": ("汇率", {"hk": "可用（组合层）", "uk": "可用（组合层）", "fr": "可用（组合层）"}, False),
+    "fundamentals": ("财务与基本面数据", {"hk": "未接入", "uk": "未接入", "fr": "未接入"}, False),
+    "text": ("公告与新闻文本", {"hk": "需授权，目前仅模拟数据", "uk": "未接入", "fr": "AMF 公开数据可用，尚未接入挖掘"}, False),
+    "alternative": ("另类数据", {"hk": "未接入", "uk": "未接入", "fr": "未接入"}, False),
+    "other": ("其他数据", {"hk": "待确认", "uk": "待确认", "fr": "待确认"}, False),
+}
+
+
+class DraftError(RuntimeError):
+    pass
+
+
+def llm_config() -> dict:
+    base, model, key = (os.environ.get(f"FACTOPIA_LLM_{k}") for k in ("BASE_URL", "MODEL", "API_KEY"))
+    if base and model and key:
+        return {"base_url": base.rstrip("/"), "model": model, "api_key": key}
+    chat = os.environ.get("CHAT_MODEL", "")
+    if chat.startswith("deepseek/") and os.environ.get("DEEPSEEK_API_KEY"):
+        return {"base_url": "https://api.deepseek.com", "model": chat.split("/", 1)[1], "api_key": os.environ["DEEPSEEK_API_KEY"]}
+    raise DraftError("未配置大模型：在 .env 中设置 CHAT_MODEL=deepseek/... 与 DEEPSEEK_API_KEY，或 FACTOPIA_LLM_BASE_URL / MODEL / API_KEY")
+
+
+def _chat(prompt: str, cfg: dict) -> tuple[str, dict]:
+    body = json.dumps({"model": cfg["model"], "temperature": 0.3, "response_format": {"type": "json_object"},
+                       "messages": [{"role": "user", "content": prompt}]}).encode()
+    req = urllib.request.Request(f"{cfg['base_url']}/chat/completions", data=body, method="POST",
+                                 headers={"Authorization": f"Bearer {cfg['api_key']}", "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=180) as r:
+            data = json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        raise DraftError(f"大模型接口返回 {e.code}：{e.read()[:300].decode(errors='replace')}") from e
+    except (urllib.error.URLError, TimeoutError) as e:
+        raise DraftError(f"无法连接大模型接口：{e}") from e
+    return data["choices"][0]["message"]["content"], data.get("usage") or {}
+
+
+def _evidence_text(items: list[dict]) -> str:
+    if not items:
+        return "No Alpha158 evaluation is available for this horizon."
+    lines = []
+    for e in items:
+        lines.append(f"{e['market'].upper()} (period {e['period']['start']} to {e['period']['end']}; "
+                     f"{e['significant']} factors with |t| > 3):")
+        lines += [f"- {f['name']} ({f['desc']}): rank IC {f['ric']:.3f}, t={f['t']:.2f}, cross-market class: {f['label']}"
+                  for f in e["factors"]] or ["- none significant"]
+    return "\n".join(lines)
+
+
+def _strings(x) -> list[str]:
+    return [str(v).strip() for v in (x or []) if str(v).strip()]
+
+
+def _validate(raw: dict, inputs: dict) -> dict:
+    """检查必填字段，规范类型；缺少必填字段时报错（RS-02）。"""
+    out = {
+        "id": raw.get("id") if ID_PATTERN.match(str(raw.get("id", ""))) else None,
+        "title_zh": str(raw.get("title_zh") or "").strip(),
+        "hypothesis": str(raw.get("hypothesis") or "").strip(),
+        "hypothesis_zh": str(raw.get("hypothesis_zh") or "").strip(),
+        "rationale": {"category": (raw.get("rationale") or {}).get("category") if (raw.get("rationale") or {}).get("category") in RATIONALE else "other",
+                      "note": str((raw.get("rationale") or {}).get("note") or "").strip()},
+        "directions": _strings(raw.get("directions"))[:5],
+        "exclusions": _strings(raw.get("exclusions")),
+        "falsification": str(raw.get("falsification") or "").strip(),
+        "data_needs": [], "mandate_interpretations": [],
+        "open_questions": _strings(raw.get("open_questions")),
+        "leak_flags": _strings(raw.get("leak_flags")),
+    }
+    missing = [k for k in ("hypothesis", "falsification") if not out[k]] + ([] if out["rationale"]["note"] else ["rationale"])
+    if missing or not out["directions"]:
+        raise DraftError(f"大模型返回的规格缺少必填内容：{', '.join(missing + ([] if out['directions'] else ['directions']))}")
+    english = [out[k] for k in ENGLISH_FIELDS] + [out["rationale"]["note"], *out["directions"], *out["exclusions"]]
+    if any(CJK.search(t) for t in english):
+        raise DraftError("发给 RD-Agent 的字段须为英文，大模型返回了中文")
+    for d in raw.get("data_needs") or []:
+        cat = d.get("category") if d.get("category") in DATA else "other"
+        name, status, usable = DATA[cat]
+        out["data_needs"].append({"category": cat, "name": name, "detail": str(d.get("detail") or "").strip(), "usable": usable,
+                                  "status": {m: status[m] for m in inputs["markets"]}})
+    free_text = inputs.get("_free_text") or []
+    for t in raw.get("mandate_interpretations") or []:
+        term = str(t.get("term") or "").strip()
+        if not any(term and (term in f or f in term) for f in free_text):  # 只保留自由文本条款的解释
+            continue
+        out["mandate_interpretations"].append({"term": term,
+                                               "interpretation_zh": str(t.get("interpretation_zh") or "").strip(),
+                                               "constraint_en": (str(t["constraint_en"]).strip() if t.get("constraint_en") else None)})
+    return out
+
+
+def _system_questions(d: dict, inputs: dict) -> list[str]:
+    """系统补充的待确认事项：数据缺口、自由文本授权条款的解释、测试期年份（RS-03、RS-04、RS-06）。"""
+    qs = []
+    for n in d["data_needs"]:
+        if not n["usable"] and n["category"] != "fx":
+            qs.append(f"研究需要「{n['name']}」（{n['detail']}），但 RD-Agent 目前只能使用日线量价与基准指数；这部分方向不会被实现。")
+    for t in d["mandate_interpretations"]:
+        qs.append(f"授权条款「{t['term']}」的解释：{t['interpretation_zh']}"
+                  + (f"（将作为约束发给 AI：{t['constraint_en']}）" if t["constraint_en"] else "（只在组合层使用）"))
+    years = sorted(set(TEST_YEAR.findall(f"{inputs['hypothesis']} {inputs.get('direction', '')}")))
+    if years or d["leak_flags"]:
+        qs.append(f"输入中提到测试期（2022 年起）的内容{('：' + '、'.join(years)) if years else ''}；保留会提前透露考题（MINE-11）。")
+    return qs
+
+
+def make_draft(inputs: dict) -> dict:
+    """inputs：hypothesis、direction、markets、horizon、mandate、groups、include_past_runs。"""
+    mandate = mandates.parse(mandates.load(inputs["mandate"]))
+    alpha = evidence.alpha158_findings(inputs["markets"], inputs["horizon"], inputs.get("groups") or None)
+    past = evidence.past_runs(inputs["markets"], inputs["horizon"]) if inputs.get("include_past_runs", True) else []
+    prompt = PROMPT_FILE.read_text(encoding="utf-8").format(
+        markets=", ".join(inputs["markets"]), horizon=inputs["horizon"],
+        direction=inputs.get("direction") or "(not given)", hypothesis=inputs["hypothesis"],
+        mandate_name=mandate["name"],
+        mandate_constraints="\n".join(f"- {c}" for c in mandate["constraints"]) or "- none",
+        mandate_free_text="\n".join(f"- {t}" for t in mandate["free_text"]) or "- none",
+        evidence=_evidence_text(alpha),
+        past_runs="\n".join(f"- {line}" for line in evidence.past_runs_lines(past)) or "- none (runs affected by data leakage are excluded)",
+    )
+    cfg = llm_config()
+    t0 = time.time()
+    tokens = {"prompt_tokens": 0, "completion_tokens": 0}
+    inputs = {**inputs, "_free_text": mandate["free_text"]}
+    retry_note = ""
+    for attempt in range(2):  # JSON 格式、必填字段或语言不合格时，带上原因重试一次
+        text, usage = _chat(prompt + retry_note, cfg)
+        for k in tokens:
+            tokens[k] += int(usage.get(k) or 0)
+        try:
+            draft = _validate(json.loads(text), inputs)
+            break
+        except (json.JSONDecodeError, DraftError) as e:
+            if attempt == 1:
+                raise DraftError(f"大模型两次输出都不合格：{e}") from e
+            retry_note = f"\n\nYour previous answer was rejected: {e}. Fix it and answer again with the full JSON object."
+    draft["system_questions"] = _system_questions(draft, inputs)
+    draft["constraints"] = mandate["constraints"] + [t["constraint_en"] for t in draft["mandate_interpretations"] if t["constraint_en"]] + PLATFORM_CONSTRAINTS
+    return {
+        "draft": draft,
+        "evidence": {"alpha158": alpha, "past_runs": past, "groups": inputs.get("groups") or []},
+        "mandate": mandate,
+        "meta": {"model": cfg["model"], "prompt_version": PROMPT_VERSION, **tokens,
+                 "seconds": round(time.time() - t0, 1), "at": datetime.now(timezone.utc).isoformat(timespec="seconds")},
+    }

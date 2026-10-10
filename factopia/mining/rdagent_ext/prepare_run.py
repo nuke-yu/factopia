@@ -3,6 +3,7 @@
 两种模式，均向标准输出打印 shell `export` 语句，由启动脚本 eval：
 
 - `env`：读取研究场景文件（环境变量 FACTOPIA_RESEARCH），输出 FACTOPIA_MARKET、FACTOPIA_HORIZON；
+  锁定的版本包含多个市场（markets），由调用方用 FACTOPIA_MARKET 指定本次运行的市场（后台运行器）；
 - `apply`：在已覆盖为该市场的 RD-Agent 模板上，
     1. 把预测目标改为未来 N 个交易日收益；
     2. 设置最短持有天数 hold_thresh = N（按周期调仓）；
@@ -18,13 +19,12 @@ from pathlib import Path
 
 import yaml
 
-HORIZONS = (1, 5, 20, 60)
+from factopia.research.periods import check_horizon, split_dates
+
 SRC = Path(os.environ.get("RDAGENT_SRC", "/opt/rdagent-src"))
 EXP = SRC / "rdagent/scenarios/qlib/experiment"
-RDAGENT_HOME = Path(os.environ.get("FACTOPIA_RDAGENT_HOME", "/workspace/runtime/rdagent_markets"))
 RUNTIME = Path(os.environ.get("FACTOPIA_RUNTIME", "/workspace/runtime"))
 
-TRAIN_START, TRAIN_END, VALID_END = "2015-01-01", "2020-12-31", "2021-12-31"
 SCENARIO_CLASS = "factopia.mining.rdagent_ext.scenario.FactopiaFactorScenario"
 
 
@@ -34,10 +34,10 @@ def _export(**kv: object) -> None:
 
 
 def _horizon(value: object) -> int:
-    n = int(value)
-    if n not in HORIZONS:
-        raise SystemExit(f"预测周期必须是 {HORIZONS} 之一，收到 {value}")
-    return n
+    try:
+        return check_horizon(value)
+    except ValueError as e:
+        raise SystemExit(str(e))
 
 
 def mode_env() -> None:
@@ -45,7 +45,11 @@ def mode_env() -> None:
     if not path:
         return
     research = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
-    _export(FACTOPIA_MARKET=research["market"], FACTOPIA_HORIZON=_horizon(research.get("horizon", 20)))
+    markets = research.get("markets") or [research["market"]]
+    market = os.environ.get("FACTOPIA_MARKET") or markets[0]
+    if market not in markets:
+        raise SystemExit(f"研究规格 {research.get('id')} 不包含市场 {market}（{markets}）")
+    _export(FACTOPIA_MARKET=market, FACTOPIA_HORIZON=_horizon(research.get("horizon", 20)))
 
 
 def _rewrite_templates(n: int) -> int:
@@ -65,32 +69,14 @@ def _rewrite_templates(n: int) -> int:
     return changed
 
 
-def _dates(market: str, n: int) -> dict[str, str]:
-    cal_file = RDAGENT_HOME / market / "qlib_data/cn_data/calendars/day.txt"
-    cal = [d.strip() for d in cal_file.read_text().splitlines() if d.strip()]
-
-    def last_on_or_before(day: str) -> int:
-        return max(i for i, d in enumerate(cal) if d <= day)
-
-    i_train_end = last_on_or_before(TRAIN_END)
-    i_valid_start = i_train_end + n + 1          # 训练集最后一个标签用到的价格之后
-    i_valid_end = last_on_or_before(VALID_END)
-    i_test_start = i_valid_end + n + 1
-    i_test_end = len(cal) - 2                      # 回测最后一步需要读取下一个交易日
-    if not (i_valid_start < i_valid_end < i_test_start < i_test_end):
-        raise SystemExit(f"预测周期 {n} 过长，无法在现有数据上划分出有效的验证期和测试期")
-    return {
-        "TRAIN_START": TRAIN_START, "TRAIN_END": cal[i_train_end],
-        "VALID_START": cal[i_valid_start], "VALID_END": cal[i_valid_end],
-        "TEST_START": cal[i_test_start], "TEST_END": cal[i_test_end],
-    }
-
-
 def mode_apply() -> None:
     market = os.environ["FACTOPIA_MARKET"]
     n = _horizon(os.environ.get("FACTOPIA_HORIZON", 20))
     changed = _rewrite_templates(n)
-    dates = _dates(market, n)
+    try:
+        dates = split_dates(market, n)
+    except ValueError as e:
+        raise SystemExit(str(e))
     workdir = RUNTIME / "rdagent" / market / f"h{n}"
     # 删除上次运行生成的数据目录，由 RD-Agent 按最新的数据生成脚本重新生成（含基准指数文件）
     for name in ("factor_implementation_source_data", "factor_implementation_source_data_debug"):
