@@ -81,10 +81,19 @@ def _strings(x) -> list[str]:
     return [str(v).strip() for v in (x or []) if str(v).strip()]
 
 
+def _clean_id(value) -> str | None:
+    """把 AI 建议的编号整理为合法格式（小写字母、数字、下划线，3–40 个字符，以字母开头）；无法整理时留空由研究员填写。"""
+    s = re.sub(r"[^a-z0-9_]+", "_", str(value or "").lower()).strip("_")
+    s = re.sub(r"_+", "_", s)[:40].rstrip("_")
+    if s and not s[0].isalpha():
+        s = f"r_{s}"[:40]
+    return s if ID_PATTERN.match(s) else None
+
+
 def _validate(raw: dict, inputs: dict) -> dict:
     """检查必填字段，规范类型；缺少必填字段时报错（RS-02）。"""
     out = {
-        "id": raw.get("id") if ID_PATTERN.match(str(raw.get("id", ""))) else None,
+        "id": _clean_id(raw.get("id")),
         "title_zh": str(raw.get("title_zh") or "").strip(),
         "hypothesis": str(raw.get("hypothesis") or "").strip(),
         "hypothesis_zh": str(raw.get("hypothesis_zh") or "").strip(),

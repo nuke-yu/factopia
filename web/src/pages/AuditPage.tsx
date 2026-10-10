@@ -86,12 +86,13 @@ function Review({ result, markets, horizon, inputs, locked, setLocked }: {
   }), [f, d, inputs, markets, horizon, questions, checked, leakQ, leakOk, result]);
 
   const missing = [
-    !/^[a-z][a-z0-9_]{2,39}$/.test(spec.id) && "编号",
+    !/^[a-z][a-z0-9_]{2,39}$/.test(spec.id) && "编号（只能用小写字母、数字和下划线，3–40 个字符，以字母开头）",
     !spec.hypothesis && "规范化假设", !spec.rationale.note && "经济逻辑", !spec.falsification && "可证伪测试",
   ].filter(Boolean) as string[];
   const pending = spec.questions.filter((q) => !q.confirmed).length;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [tried, setTried] = useState(false);   // 点过锁定但条件未满足：标出未勾选的事项
   const ro = !!locked;
 
   async function lock() {
@@ -149,12 +150,12 @@ function Review({ result, markets, horizon, inputs, locked, setLocked }: {
           </div>
         </Panel>
 
-        <aside className="flex flex-col gap-5 xl:sticky xl:top-20 self-start">
+        <aside className="flex flex-col gap-5 self-start">
           <Panel eyebrow="锁定前" title={`待确认事项（${spec.questions.length - pending} / ${spec.questions.length}）`}>
-            <ul className="flex flex-col gap-2.5 max-h-[420px] overflow-y-auto pr-1">
+            <ul className="flex flex-col gap-2.5">
               {questions.map((q, i) => (
                 <li key={q.text}>
-                  <label className="flex gap-2 text-sm leading-snug">
+                  <label className={`flex gap-2 text-sm leading-snug ${!ro && !checked[i] && tried ? "text-warn" : ""}`}>
                     <input type="checkbox" disabled={ro} checked={checked[i]} className="mt-0.5 shrink-0"
                       onChange={(e) => setChecked((c) => c.map((x, j) => (j === i ? e.target.checked : x)))} />
                     <span><Badge tone={q.source === "AI" ? "accent" : "muted"}>{q.source}</Badge> {q.text}</span>
@@ -182,9 +183,21 @@ function Review({ result, markets, horizon, inputs, locked, setLocked }: {
           </Panel>
           {!locked ? (
             <div className="flex flex-col gap-2">
-              {missing.length > 0 && <div className="text-xs text-bad">必填或格式有误：{missing.join("、")}</div>}
-              {pending > 0 && <div className="text-xs text-warn">还有 {pending} 项待确认</div>}
-              <button className="btn btn-primary h-10 justify-center" disabled={busy || missing.length > 0 || pending > 0} onClick={lock}>
+              {!tried && (missing.length > 0 || pending > 0) && (
+                <div className="text-xs text-muted">锁定前需要：必填字段完整，"待确认事项"全部勾选（{spec.questions.length - pending} / {spec.questions.length}）</div>
+              )}
+              {tried && (missing.length > 0 || pending > 0) && (
+                <Notice title="还不能锁定">
+                  <ul className="flex flex-col gap-1">
+                    {missing.length > 0 && <li>请填写或修正：{missing.join("、")}</li>}
+                    {pending > 0 && <li>"待确认事项"中还有 {pending} 项未勾选（已标为黄色）</li>}
+                  </ul>
+                </Notice>
+              )}
+              <button className="btn btn-primary h-10 justify-center" disabled={busy} onClick={() => {
+                if (missing.length > 0 || pending > 0) return setTried(true);
+                lock();
+              }}>
                 {busy ? "锁定中…" : "锁定版本"}
               </button>
               {error && <ErrorBox error={error} />}
