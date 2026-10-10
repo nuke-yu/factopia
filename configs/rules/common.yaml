@@ -1,0 +1,117 @@
+# 通用规则包（RULE-01；BR-19、21）。内容为 POC 设计输入，标注"待本地合规确认"；平台只负责发现、解释与路由，不作法律结论。
+# severity：block 阻断（流程停止，修改后重新预检）/ warn 警告（可继续，须指定审批人确认）/ info 提示（写入报告）
+# stages：setup 立项锁定前 / portfolio 组合生成后 / release 发布前
+pack: common
+market: all
+version: v2026.10.0
+owner: 平台治理负责人（待指定）
+effective_date: 2026-10-01
+last_review: 2026-10-10
+status: 待本地合规确认
+rules:
+  - id: GEN-RESTRICT-001
+    title: 组合持有客户授权中的受限证券
+    severity: block
+    stages: [portfolio, release]
+    check: {type: restricted_holdings}
+    source: 客户授权条款（restricted_securities）
+    approvers: [地区合规]
+    impact: 涉及的证券须移出组合
+  - id: GEN-RESTRICT-002
+    title: 股票池包含受限证券（将在组合中排除）
+    severity: warn
+    stages: [setup]
+    check: {type: restricted_in_universe}
+    source: 客户授权条款（restricted_securities）
+    approvers: [地区合规]
+    impact: 受限证券不得进入组合；研究可保留用于对照
+  - id: GEN-SHORT-001
+    title: 授权只做多，组合出现卖空头寸
+    severity: block
+    stages: [portfolio, release]
+    check: {type: short_positions}
+    source: 客户授权条款（long_only）
+    approvers: [地区合规, 投资组合经理]
+    impact: 组合须改为只做多
+  - id: GEN-DATA-001
+    title: 使用了未经批准或禁止的数据来源
+    severity: block
+    stages: [setup, release]
+    check: {type: source_status, status: [forbidden, unregistered]}
+    source: 数据来源登记（configs/rules/data_sources.yaml）
+    approvers: [数据负责人]
+    impact: 须取得授权或更换来源后重新预检
+  - id: GEN-DATA-002
+    title: 数据来源许可有限制（POC 可用，生产与对客户展示前须授权）
+    severity: warn
+    stages: [setup, release]
+    check: {type: source_status, status: [limited]}
+    source: 数据来源登记（configs/rules/data_sources.yaml）
+    approvers: [数据负责人]
+    impact: 研究结论可用于内部评估；进入生产或对客户报告前须改用授权数据
+  - id: GEN-DATA-003
+    title: 使用了模拟数据（结论不构成研究证据）
+    severity: warn
+    stages: [setup, release]
+    check: {type: source_used, source: simulated_demo}
+    source: 第 11.9 节模拟数据策略
+    approvers: [数据负责人, 模型风险]
+    impact: 涉及市场的结论只用于流程演示；取得授权数据后须重新验证
+  - id: GEN-DATA-004
+    title: 研究需要的数据尚未接入（数据缺口）
+    severity: info
+    stages: [setup]
+    check: {type: data_gap}
+    source: 研究规格的数据需求
+    approvers: [数据负责人]
+    impact: 相关方向无法在本次研究中检验
+  - id: GEN-CONC-001
+    title: 单只股票权重超过上限
+    severity: warn
+    stages: [portfolio, release]
+    check: {type: max_weight, limit: 0.10}
+    source: 平台默认风险限额（POC 示例值）
+    approvers: [模型风险, 投资组合经理]
+    impact: 集中度过高，需说明理由或调整组合构建
+  - id: GEN-COST-001
+    title: 换手高、对交易成本敏感（与授权中"避免频繁调仓"的要求可能冲突）
+    severity: warn
+    stages: [portfolio, release]
+    check: {type: cost_sensitivity, min_holding_days: 10, min_breakeven: 2.0}
+    source: 客户授权自由文本条款；研究结果诊断（第 14.11 节）
+    approvers: [投资组合经理]
+    impact: 成本上升时超额可能消失，需降低换手或提高信号门槛
+  - id: GEN-ECON-001
+    title: 扣除成本、汇率或容量后不再具有经济意义
+    severity: warn
+    stages: [portfolio, release]
+    check: {type: economic_fail}
+    source: 四类迁移标签（第 14.11 节）
+    approvers: [模型风险, 投资组合经理]
+    impact: 不建议在该市场使用，或须说明本地化调整
+  - id: GEN-PIT-001
+    title: 回测数据非时间点一致
+    severity: warn
+    stages: [portfolio, release]
+    check: {type: pit_status}
+    source: 时间点一致性状态（第 14.10 节）
+    approvers: [模型风险]
+    impact: 回测结果可能偏乐观（如幸存者偏差），审批时须考虑
+  - id: GEN-ESG-001
+    title: 持仓涉及授权要求回避的行业
+    severity: warn
+    stages: [portfolio, release]
+    check:
+      type: excluded_industries
+      keywords: {烟草: [Tobacco], 争议性武器: [Aerospace & Defense], 博彩: [Gambling, Resorts & Casinos]}
+    source: 客户授权自由文本条款；行业分类（Morningstar 口径）
+    approvers: [地区合规, 投资组合经理]
+    impact: 行业分类为近似匹配（如"航空航天与国防"不等于"争议性武器"），须人工逐只确认
+  - id: GEN-AI-001
+    title: 研究包含 AI 生成的内容（假设、代码、翻译、解释），须人工复核
+    severity: info
+    stages: [setup, release]
+    check: {type: always}
+    source: 业务 spec 治理边界（BR-47）
+    approvers: [发起研究员]
+    impact: AI 不自行批准规则例外，不改变原始数据或原文资料

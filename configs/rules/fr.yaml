@@ -1,0 +1,60 @@
+# 法国规则包（RULE-01；BR-20）。POC 设计输入，待法国合规确认；不作法律结论。
+pack: fr
+market: fr
+version: v2026.10.0
+owner: 法国合规（待指定）
+effective_date: 2026-10-01
+last_review: 2026-10-10
+status: 待本地合规确认
+costs:
+  buy: {tax: 0.0040, commission: 0.0003, note: 金融交易税 0.4%（市值超过 10 亿欧元的法国公司）+ 佣金与冲击 0.03%}
+  sell: {tax: 0.0, commission: 0.0003, note: 佣金与冲击 0.03%}
+rules:
+  - id: FR-TAX-001
+    title: 买入大市值法股缴 0.4% 金融交易税（TTF），回测已扣除
+    severity: info
+    stages: [setup, portfolio, release]
+    check: {type: always}
+    source: 法国《税法典》第 235 ter ZD 条；适用公司名单每年公布
+    approvers: []
+    impact: 回测对全部股票按 0.4% 计算（偏保守）
+  - id: FR-SFDR-001
+    title: 授权有可持续投资偏好：须评估 SFDR 披露要求
+    severity: warn
+    stages: [setup, release]
+    check: {type: mandate_sustainability}
+    source: 欧盟 SFDR（2019/2088）第 8、9 条
+    approvers: [法国合规]
+    impact: 产品若宣传可持续特征，须按 SFDR 披露
+  - id: FR-SHORT-001
+    title: 授权允许卖空：净空头达到已发行股本 0.1% 须向 AMF 申报
+    severity: info
+    stages: [portfolio]
+    check: {type: short_allowed}
+    source: 欧盟卖空监管规则（236/2012）
+    approvers: [法国合规]
+    impact: 达到门槛须按时申报
+  - id: FR-MAR-001
+    title: 使用 AMF 公告（含"内幕信息"类公告）只能在正式发布后使用（EU MAR）
+    severity: info
+    stages: [setup]
+    check: {type: data_category, category: text}
+    source: 欧盟市场滥用条例（596/2014）第 7、17 条
+    approvers: [法国合规]
+    impact: 按实际可获取时间生效（第 14.9 节），不得使用发布前信息
+  - id: FR-GDPR-001
+    title: 公告文本含高管姓名等个人数据（GDPR）
+    severity: warn
+    stages: [setup]
+    check: {type: data_category, category: text}
+    source: 欧盟 GDPR（2016/679）
+    approvers: [数据负责人, 法国合规]
+    impact: 文本处理只提取风险表述，不建立个人档案；跨境传输须评估
+  - id: FR-MIFID-001
+    title: 研究成果用于对客户服务时须符合 MiFID II 研究与适当性要求
+    severity: info
+    stages: [release]
+    check: {type: always}
+    source: MiFID II（2014/65/EU）
+    approvers: [法国合规]
+    impact: 发布前确认研究的使用方式

@@ -4,6 +4,7 @@ import { api, type DraftResult, type Market, type Question, type Rationale, type
 import { testPeriodMentions, useDraft } from "../draft";
 import { cssVar, MARKET_LABEL, useAsync } from "../lib";
 import { Badge, ErrorBox, Loading, Notice, Panel, Seg } from "../components/ui";
+import PrecheckView from "../components/PrecheckView";
 
 const RATIONALES: { value: Rationale["category"]; label: string }[] = [
   { value: "behavioural", label: "心理偏差" }, { value: "risk_premium", label: "风险补偿" }, { value: "friction", label: "交易摩擦" },
@@ -95,6 +96,9 @@ function Review({ result, markets, horizon, inputs, locked, setLocked }: {
   const [tried, setTried] = useState(false);   // 点过锁定但条件未满足：标出未勾选的事项
   const ro = !!locked;
 
+  const pre = useAsync(() => api.precheck(spec), [spec.mandate, JSON.stringify(spec.markets), JSON.stringify(spec.data_needs)]);
+  const blocked = !!pre.data?.blocked;
+
   async function lock() {
     setBusy(true); setError(null);
     try { setLocked(await api.lock(spec)); } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
@@ -181,21 +185,28 @@ function Review({ result, markets, horizon, inputs, locked, setLocked }: {
               <Check ok={false} warnOnly text="大模型自身可能记得测试期的行情，无法消除（第 8 章 #20）" />
             </ul>
           </Panel>
+          <Panel eyebrow="BR-21 · 锁定前" title="立项预检">
+            {pre.loading && <div className="label">检查中…</div>}
+            {pre.error && <div className="text-xs text-bad">{pre.error}</div>}
+            {(locked?.precheck_setup ?? pre.data) && <PrecheckView pre={(locked?.precheck_setup ?? pre.data)!} compact />}
+            <p className="text-xs text-faint mt-2">授权、市场、数据来源与许可按通用规则包和所选市场的规则包检查；建议审批路径与组合预检见 <Link className="text-accent" to="/rules">风控台</Link>。</p>
+          </Panel>
           {!locked ? (
             <div className="flex flex-col gap-2">
               {!tried && (missing.length > 0 || pending > 0) && (
                 <div className="text-xs text-muted">锁定前需要：必填字段完整，"待确认事项"全部勾选（{spec.questions.length - pending} / {spec.questions.length}）</div>
               )}
-              {tried && (missing.length > 0 || pending > 0) && (
+              {tried && (missing.length > 0 || pending > 0 || blocked) && (
                 <Notice title="还不能锁定">
                   <ul className="flex flex-col gap-1">
                     {missing.length > 0 && <li>请填写或修正：{missing.join("、")}</li>}
                     {pending > 0 && <li>"待确认事项"中还有 {pending} 项未勾选（已标为黄色）</li>}
+                    {blocked && <li>立项预检命中阻断规则，须先修改研究范围或数据来源</li>}
                   </ul>
                 </Notice>
               )}
               <button className="btn btn-primary h-10 justify-center" disabled={busy} onClick={() => {
-                if (missing.length > 0 || pending > 0) return setTried(true);
+                if (missing.length > 0 || pending > 0 || blocked) return setTried(true);
                 lock();
               }}>
                 {busy ? "锁定中…" : "锁定版本"}

@@ -137,7 +137,7 @@ export type Spec = {
   evidence: { groups: string[]; include_past_runs: boolean; items: string[] }; questions: Question[];
   run: { loops: number; budget_usd: number };
   ai_draft: DraftResult["meta"] & { original: Pick<Spec, "hypothesis" | "rationale" | "directions" | "exclusions" | "falsification"> };
-  locked_at?: string; locked_by?: string; edits?: { field: string; by: string; at: string }[]; past_runs?: string[];
+  locked_at?: string; locked_by?: string; precheck_setup?: Precheck; edits?: { field: string; by: string; at: string }[]; past_runs?: string[];
 };
 export type JobState = "queued" | "running" | "done" | "failed" | "cancelled" | "budget_stopped";
 export type Job = {
@@ -348,6 +348,32 @@ export type ReviewItem = {
 export type ReviewIn = { dataset: string; doc_id: string; i: number; action: string; reviewer: string; note?: string;
   concepts?: { concept: string; direction: number; negated?: boolean }[] | null; translation?: Record<string, string> | null };
 
+// 地区规则包与预检（Spec 第 14.12 节；BR-19、20、21、39）
+export type Severity = "block" | "warn" | "info";
+export type RuleHit = {
+  rule_id: string; title: string; severity: Severity; severity_zh: string; stage: string; stage_zh: string; market: string; market_zh: string;
+  reason: string; evidence: Record<string, unknown>; pack: string; pack_version: string; pack_status: string; owner: string;
+  source: string; impact: string; approvers: string[];
+};
+export type Precheck = {
+  checked_at: string; stages: string[]; stages_zh: string[]; blocked: boolean; counts: Record<Severity, number>; hits: RuleHit[];
+  packs: { pack: string; version: string; status: string; owner: string; file: string }[]; sources_version: string;
+  approval_path: { steps: { role: string; reasons: string[] }[]; blocked: boolean; note: string }; disclaimer: string;
+};
+export type Rule = { id: string; title: string; severity: Severity; stages: string[]; check: Record<string, unknown> & { type: string };
+  source: string; approvers: string[]; impact: string };
+export type RulePack = { pack: string; market: string; version: string; owner: string; effective_date: string; last_review: string;
+  status: string; file: string; rules: Rule[]; costs?: Record<"buy" | "sell", { tax: number; commission: number; note?: string }> };
+export type DataSource = { name: string; status: string; licence: string; note?: string; regions?: string[]; cross_border?: boolean };
+export type RulePacks = {
+  packs: RulePack[]; disclaimer: string; severity_zh: Record<string, string>; stage_zh: Record<string, string>;
+  category_zh: Record<string, string>; status_zh: Record<string, string>;
+  sources: { version: string; owner: string; last_review: string; sources: Record<string, DataSource>;
+    category_sources: Record<string, Partial<Record<Market, string>>>; always: string[] };
+};
+export type VersionRules = { research_id: string; version: number; setup: Precheck; portfolio: Precheck | null; portfolio_note: string | null;
+  focus: Record<string, { run_id: string | null; loop: number | string | null }>; overrides: Record<string, unknown> };
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`/api${path}`, init);
   if (!res.ok) {
@@ -363,6 +389,11 @@ const post = <T,>(path: string, body: unknown) =>
 
 export const api = {
   pit: () => get<PitStatus>("/pit"),
+  rulePacks: () => get<RulePacks>("/rules/packs"),
+  precheck: (spec: Partial<Spec>, overrides: Record<string, unknown> = {}) => post<Precheck>("/rules/precheck", { spec, overrides }),
+  versionRules: (id: string, version: number, overrides?: Record<string, unknown>) => overrides
+    ? post<VersionRules>(`/research/${id}/versions/${version}/rules`, { overrides })
+    : get<VersionRules>(`/research/${id}/versions/${version}/rules`),
   refSummary: () => get<RefSummary>("/refdata/summary"),
   securities: (market?: Market) => get<{ securities: Security[]; relations: Relation[] }>(`/refdata/securities${market ? `?market=${market}` : ""}`),
   actions: (symbol?: string, type?: string) => {

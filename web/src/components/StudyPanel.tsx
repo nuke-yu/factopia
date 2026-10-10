@@ -72,6 +72,7 @@ export default function StudyPanel({ researchId, version, current }: { researchI
 
         <TransferBlock s={s} />
         <ExplainBlock s={s} onDone={study.reload} />
+        <RulesLine s={s} />
 
         {anyRounds && (
           <div className="grid gap-5 xl:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]">
@@ -252,6 +253,23 @@ function DiagnosticsBlock({ d }: { d: Diagnostics }) {
         {!sg && <p className="text-faint">逐股打分尚未导出：重新导出后补齐中性化、稳定性与冗余诊断。</p>}
       </div>
     </details>
+  );
+}
+
+/** 组合预检摘要（第 14.12 节）：详情与建议审批路径在风控台 */
+function RulesLine({ s }: { s: Study }) {
+  const r = useAsync(() => api.versionRules(s.research_id, s.version), [s.research_id, s.version]);
+  const pf = r.data?.portfolio;
+  if (!pf) return null;
+  const tone = pf.blocked ? "bad" : pf.counts.warn ? "warn" : "good";
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-sm">
+      <span className="label">组合预检</span>
+      <Badge tone={tone}>{pf.blocked ? "有阻断" : pf.counts.warn ? "需审批确认" : "未命中"}</Badge>
+      <span className="text-muted">阻断 {pf.counts.block} · 警告 {pf.counts.warn} · 提示 {pf.counts.info}</span>
+      <span className="text-xs text-faint">{[...new Set(pf.hits.filter((h) => h.severity !== "info").map((h) => h.title))].slice(0, 3).join("；")}</span>
+      <Link className="text-accent text-xs ml-auto" to={`/rules?id=${s.research_id}&v=${s.version}`}>在风控台查看命中原因与审批路径 →</Link>
+    </div>
   );
 }
 

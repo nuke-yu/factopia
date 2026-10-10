@@ -1,0 +1,53 @@
+# 香港规则包（RULE-01；BR-20）。POC 设计输入，待香港合规确认；不作法律结论。
+pack: hk
+market: hk
+version: v2026.10.0
+owner: 香港合规（待指定）
+effective_date: 2026-10-01
+last_review: 2026-10-10
+status: 待本地合规确认
+# 成本与税费（RULE-04；单边比例）：回测与诊断从这里读取
+costs:
+  buy: {tax: 0.0010, commission: 0.0003, note: 印花税 0.1% + 佣金与冲击 0.03%}
+  sell: {tax: 0.0010, commission: 0.0003, note: 印花税 0.1% + 佣金与冲击 0.03%}
+rules:
+  - id: HK-TAX-001
+    title: 港股买卖双方各缴 0.1% 印花税，回测已扣除
+    severity: info
+    stages: [setup, portfolio, release]
+    check: {type: always}
+    source: 《印花税条例》（第 117 章）；税率见香港税务局
+    approvers: []
+    impact: 已计入交易成本（costs）
+  - id: HK-SHORT-001
+    title: 授权允许卖空：只有港交所指定证券可以卖空，须核对指定名单
+    severity: warn
+    stages: [setup, portfolio]
+    check: {type: short_allowed}
+    source: 港交所交易规则第 5 章及指定证券名单；SFC《证券及期货条例》卖空规定
+    approvers: [香港合规]
+    impact: 不在名单内的股票不得卖空
+  - id: HK-DATA-001
+    title: 披露易（HKEXnews）内容不得自动抓取或用于 AI
+    severity: block
+    stages: [setup, release]
+    check: {type: source_used, source: hkexnews}
+    source: HKEXnews 使用条款
+    approvers: [数据负责人, 香港合规]
+    impact: 须取得港交所书面授权或采购 IIS 数据服务
+  - id: HK-PDPO-001
+    title: 跨境访问：香港团队使用英国 / 欧盟来源的数据，或数据传输至香港以外
+    severity: warn
+    stages: [setup]
+    check: {type: cross_border, home: hk}
+    source: 《个人资料（私隐）条例》；英国 / 欧盟 GDPR 跨境传输规定
+    approvers: [数据负责人, 香港合规]
+    impact: 公开市场数据一般不含个人资料；文本数据可能含董事等个人信息，须确认跨境访问安排
+  - id: HK-SFC-001
+    title: 对客户提供的量化策略须符合 SFC 基金经理操守准则对模型治理的要求
+    severity: info
+    stages: [release]
+    check: {type: always}
+    source: SFC《基金经理操守准则》
+    approvers: [模型风险]
+    impact: 发布前须完成模型验证与文档

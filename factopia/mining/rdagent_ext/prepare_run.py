@@ -8,6 +8,7 @@
     1. 把预测目标改为未来 N 个交易日收益；
     2. 设置最短持有天数 hold_thresh = N（按周期调仓）；
     3. 按该市场交易日历计算训练 / 验证 / 测试时间段，段与段之间间隔 N 个交易日；
+    4. 回测成本 open_cost / close_cost 改为该市场规则包中的单边成本（税费 + 佣金与冲击；RULE-04，模板中的数值不再生效）；
   并输出时间段、工作目录（按市场和周期分开；设置 FACTOPIA_JOB_ID 时每个任务一个子目录）以及场景子类的环境变量。
 """
 import os
@@ -19,6 +20,7 @@ from pathlib import Path
 
 import yaml
 
+from factopia import rules
 from factopia.research.periods import check_horizon, split_dates
 
 SRC = Path(os.environ.get("RDAGENT_SRC", "/opt/rdagent-src"))
@@ -52,8 +54,9 @@ def mode_env() -> None:
     _export(FACTOPIA_MARKET=market, FACTOPIA_HORIZON=_horizon(research.get("horizon", 20)))
 
 
-def _rewrite_templates(n: int) -> int:
+def _rewrite_templates(n: int, market: str) -> int:
     label = f"Ref($close, -{n + 1})/Ref($close, -1) - 1"
+    cost = rules.costs(market)
     changed = 0
     for f in sorted(EXP.glob("*_template/*.yaml")):
         s = f.read_text()
@@ -63,6 +66,8 @@ def _rewrite_templates(n: int) -> int:
             s2 = re.sub(r"(^\s*hold_thresh:\s*)\d+", rf"\g<1>{n}", s2, flags=re.M)
         else:
             s2 = re.sub(r"^(\s*)(n_drop:\s*\d+)$", rf"\1\2\n\1hold_thresh: {n}", s2, flags=re.M)
+        s2 = re.sub(r"(^\s*open_cost:\s*)[\d.eE-]+", rf"\g<1>{round(cost['buy']['total'], 6)}", s2, flags=re.M)
+        s2 = re.sub(r"(^\s*close_cost:\s*)[\d.eE-]+", rf"\g<1>{round(cost['sell']['total'], 6)}", s2, flags=re.M)
         if s2 != s:
             f.write_text(s2)
             changed += 1
@@ -78,7 +83,7 @@ def workdir(market: str, n: int, job_id: str | None = None) -> Path:
 def mode_apply() -> None:
     market = os.environ["FACTOPIA_MARKET"]
     n = _horizon(os.environ.get("FACTOPIA_HORIZON", 20))
-    changed = _rewrite_templates(n)
+    changed = _rewrite_templates(n, market)
     try:
         dates = split_dates(market, n)
     except ValueError as e:
@@ -90,7 +95,9 @@ def mode_apply() -> None:
     exports = {f"{p}_{k}": v for p in ("QLIB_FACTOR", "QLIB_MODEL", "QLIB_QUANT") for k, v in dates.items()}
     _export(**exports, FACTOPIA_HORIZON=n, QLIB_FACTOR_SCEN=SCENARIO_CLASS,
             FACTOPIA_WORKDIR=wd)
+    c = rules.costs(market)
     print(f"echo '[prepare_run] market={market} horizon={n} templates={changed} "
+          f"cost={c['buy']['total']}/{c['sell']['total']} "
           f"train={dates['TRAIN_START']}~{dates['TRAIN_END']} valid={dates['VALID_START']}~{dates['VALID_END']} "
           f"test={dates['TEST_START']}~{dates['TEST_END']}'")
 

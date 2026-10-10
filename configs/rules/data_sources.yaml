@@ -1,0 +1,60 @@
+# 数据来源登记（BR-45、GEN-DATA 规则）：只有 approved 的来源可以用于研究；limited 可用于 POC，生产前需授权；forbidden 不得使用。
+# 内容为 POC 设计输入，许可条款须由数据负责人与法务确认。
+version: sources-v2026.10.0
+owner: 数据负责人（待指定）
+last_review: 2026-10-10
+sources:
+  yahoo_finance:
+    name: Yahoo Finance（经 yfinance）
+    used_for: [price_volume, benchmark, fx, sector]
+    status: limited
+    licence: Yahoo 服务条款（仅个人、非商业用途）
+    note: POC 研究可用；生产与对客户展示前须改用授权数据商（LSEG / Bloomberg / FactSet 等）
+    regions: [hk, uk, fr]
+  amf_open_data:
+    name: AMF info-financière 开放数据
+    used_for: [text]
+    status: approved
+    licence: Licence Ouverte 2.0（Etalab，可商用，需注明来源）
+    regions: [fr]
+  simulated_demo:
+    name: 平台生成的模拟数据（虚构公司）
+    used_for: [text]
+    status: approved
+    licence: 内部生成
+    note: 仅用于流程演示，结论不构成研究证据
+    regions: [hk, uk]
+  gleif:
+    name: GLEIF 法律实体数据
+    used_for: [reference]
+    status: approved
+    licence: CC0
+    regions: [hk, uk, fr]
+  openfigi:
+    name: OpenFIGI
+    used_for: [reference]
+    status: approved
+    licence: OpenFIGI 使用条款（开放标准，免费）
+    regions: [hk, uk, fr]
+  llm_provider:
+    name: 大模型服务（DeepSeek，经 .env 配置）
+    used_for: [llm]
+    status: limited
+    licence: 服务商条款
+    note: 只发送公开数据与研究文本，不发送客户信息；数据会传输到服务商所在地区（跨境传输，需数据负责人与合规确认）
+    regions: [hk, uk, fr]
+  hkexnews:
+    name: 港交所披露易（HKEXnews）
+    used_for: [text]
+    status: forbidden
+    licence: 使用条款禁止自动抓取，禁止用于开发、训练、验证 AI 系统
+    note: 须向港交所申请书面授权或采购 IIS 数据服务（Spec 第 11.3.3 节）
+    regions: [hk]
+# 研究规格的数据需求类别 → 各市场实际使用的来源（未列出 = 尚未接入）
+category_sources:
+  price_volume: {hk: yahoo_finance, uk: yahoo_finance, fr: yahoo_finance}
+  benchmark: {hk: yahoo_finance, uk: yahoo_finance, fr: yahoo_finance}
+  fx: {hk: yahoo_finance, uk: yahoo_finance, fr: yahoo_finance}
+  text: {hk: simulated_demo, uk: simulated_demo, fr: amf_open_data}
+# 每个研究都会用到的来源
+always: [llm_provider, gleif, openfigi]

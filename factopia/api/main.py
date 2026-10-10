@@ -21,7 +21,9 @@ from pydantic import BaseModel, Field
 
 from factopia.research import draft as drafting
 from factopia.research import evidence, mandates, store, verdict
+from factopia import rules as rulebook
 from factopia.research.context import build_context
+from factopia.rules import context as rule_ctx
 from factopia.research.periods import HORIZONS, split_dates
 from factopia.validate import metrics as vmetrics
 
@@ -380,9 +382,70 @@ def _prepare_spec(raw: dict, lock: bool) -> dict:
 
 @app.post("/api/research/versions")
 def lock_version(body: dict):
-    """锁定研究规格（RS-08）：生成新的版本号，此后不可修改。"""
-    spec = store.save_version(_prepare_spec(body, lock=True))
-    return spec
+    """锁定研究规格（RS-08）：生成新的版本号，此后不可修改。锁定前先做立项预检（BR-21）：命中阻断规则不允许锁定。"""
+    spec = _prepare_spec(body, lock=True)
+    pre = rulebook.evaluate(rule_ctx.setup_context(spec), ["setup"])
+    if pre["blocked"]:
+        hits = [f"{h['rule_id']} {h['title']}（{h['reason']}）" for h in pre["hits"] if h["severity"] == "block"]
+        raise HTTPException(422, "立项预检命中阻断规则，不能锁定：" + "；".join(hits))
+    spec["precheck_setup"] = pre
+    return store.save_version(spec)
+
+
+# ---------------------------------------------------------------- 地区规则包与预检（第 14.12 节）
+
+@app.get("/api/rules/packs")
+def rule_packs():
+    """规则包（通用 + 各市场）与数据来源登记表。"""
+    try:
+        packs = rulebook.load_packs()
+    except rulebook.RuleError as e:
+        raise HTTPException(500, f"规则包格式错误：{e}")
+    return {"packs": list(packs.values()), "sources": rulebook.load_sources(), "disclaimer": rulebook.DISCLAIMER,
+            "severity_zh": rulebook.SEVERITY_ZH, "stage_zh": rulebook.STAGE_ZH,
+            "category_zh": rulebook.CATEGORY_ZH, "status_zh": rulebook.STATUS_ZH}
+
+
+class PrecheckIn(BaseModel):
+    spec: dict
+    overrides: dict = {}
+
+
+@app.post("/api/rules/precheck")
+def rules_precheck(body: PrecheckIn):
+    """立项预检（锁定前，草稿页调用）：授权、市场、数据来源与许可。overrides 用于演示违规场景。"""
+    spec = body.spec
+    _check_markets(spec.get("markets") or [])
+    return rulebook.evaluate(rule_ctx.setup_context(spec, body.overrides), ["setup"])
+
+
+class RulesCheckIn(BaseModel):
+    overrides: dict = {}
+
+
+def _version_rules(research_id: str, version: int, overrides: dict) -> dict:
+    spec = get_version(research_id, version)
+    setup = spec.get("precheck_setup") if not overrides else None
+    setup = setup or rulebook.evaluate(rule_ctx.setup_context(spec, overrides), ["setup"])
+    st = study(research_id, version)
+    has_pf = any((e.get("focus") or {}) for e in st["markets"].values())
+    pf = rulebook.evaluate(rule_ctx.portfolio_context(spec, st, overrides), ["portfolio"]) if has_pf else None
+    return {"research_id": research_id, "version": version, "setup": setup, "portfolio": pf,
+            "portfolio_note": None if has_pf else "还没有完成的运行：组合生成后才能做组合预检",
+            "focus": {m: {"run_id": e.get("run_id"), "loop": (e.get("focus") or {}).get("loop")} for m, e in st["markets"].items()},
+            "overrides": overrides}
+
+
+@app.get("/api/research/{research_id}/versions/{version}/rules")
+def version_rules(research_id: str, version: int):
+    """一个锁定版本的两次预检：立项预检（锁定时存档）与组合预检（采纳轮次的持仓与诊断）。"""
+    return _version_rules(research_id, version, {})
+
+
+@app.post("/api/research/{research_id}/versions/{version}/rules")
+def version_rules_check(research_id: str, version: int, body: RulesCheckIn):
+    """带演示覆盖的预检：如把授权改为允许卖空、加入受限证券、追加卖空持仓，验证规则能否拦截（不写入任何文件）。"""
+    return _version_rules(research_id, version, body.overrides)
 
 
 @app.get("/api/research/{research_id}/versions")

@@ -16,6 +16,7 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 COPY factopia/__init__.py factopia/__init__.py
 COPY factopia/api factopia/api
 COPY factopia/research factopia/research
+COPY factopia/rules factopia/rules
 COPY factopia/factors/__init__.py factopia/factors/stats.py factopia/factors/families.py factopia/factors/
 COPY factopia/validate/__init__.py factopia/validate/metrics.py factopia/validate/
 COPY factopia/text/__init__.py factopia/text/common.py factopia/text/review.py factopia/text/understand.py factopia/text/search.py factopia/text/
@@ -24,6 +25,7 @@ COPY configs/refdata /workspace/configs/refdata
 COPY configs/universe /workspace/configs/universe
 COPY configs/research /workspace/configs/research
 COPY configs/mandates /workspace/configs/mandates
+COPY configs/rules /workspace/configs/rules
 COPY configs/rdagent/context /workspace/configs/rdagent/context
 
 RUN useradd --uid 10001 --no-create-home factopia

@@ -1,0 +1,52 @@
+# 英国规则包（RULE-01；BR-20）。POC 设计输入，待英国合规确认；不作法律结论。
+pack: uk
+market: uk
+version: v2026.10.0
+owner: 英国合规（待指定）
+effective_date: 2026-10-01
+last_review: 2026-10-10
+status: 待本地合规确认
+costs:
+  buy: {tax: 0.0050, commission: 0.0003, note: 印花税 / SDRT 0.5% + 佣金与冲击 0.03%}
+  sell: {tax: 0.0, commission: 0.0003, note: 佣金与冲击 0.03%}
+rules:
+  - id: UK-TAX-001
+    title: 买入英股缴 0.5% 印花税（SDRT），回测已扣除
+    severity: info
+    stages: [setup, portfolio, release]
+    check: {type: always}
+    source: Finance Act 1986（Stamp Duty Reserve Tax）；HMRC 指引
+    approvers: []
+    impact: 买入成本高，换手越高拖累越大
+  - id: UK-SHORT-001
+    title: 授权允许卖空：净空头达到已发行股本 0.1% 须向 FCA 申报
+    severity: info
+    stages: [portfolio]
+    check: {type: short_allowed}
+    source: UK Short Selling Regulation；FCA 指引
+    approvers: [英国合规]
+    impact: 达到门槛须按时申报
+  - id: UK-MAR-001
+    title: 文本信号只能使用已公开信息（UK MAR）
+    severity: info
+    stages: [setup]
+    check: {type: data_category, category: text}
+    source: UK Market Abuse Regulation 第 7、14 条
+    approvers: [英国合规]
+    impact: 只使用正式发布后的公告，按实际可获取时间生效（第 14.9 节）
+  - id: UK-GDPR-001
+    title: 文本或另类数据可能含个人数据（UK GDPR）
+    severity: warn
+    stages: [setup]
+    check: {type: data_category, category: [text, alternative]}
+    source: UK GDPR；Data Protection Act 2018
+    approvers: [数据负责人, 英国合规]
+    impact: 须确认处理依据与保存期限
+  - id: UK-DATA-001
+    title: 在对客户报告中展示伦敦交易所行情须有数据许可
+    severity: warn
+    stages: [release]
+    check: {type: always}
+    source: LSEG 市场数据政策
+    approvers: [数据负责人]
+    impact: 报告中的价格图表须使用已授权数据

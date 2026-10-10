@@ -26,6 +26,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from factopia import rules
 from factopia.factors.stats import newey_west_t
 
 RUNTIME = Path(os.environ.get("FACTOPIA_RUNTIME", "/workspace/runtime"))
@@ -37,9 +38,10 @@ MIN_TRADE = 0.005             # 权重变化小于此值视为未交易
 CAPACITY_FLOOR = 50e6         # 基础币种容量低于 5000 万视为"容量不足"
 BASE_CURRENCY = os.environ.get("FACTOPIA_BASE_CURRENCY", "HKD")   # 第 0.4 节第 6 步改为按授权配置
 LOCAL = {"hk": "HKD", "uk": "GBP", "fr": "EUR"}
-# 税费占单边成本：(开仓税, 平仓税)，与 RD-Agent 回测配置一致（open_cost / close_cost）
-TAX = {"hk": (0.0010, 0.0010), "uk": (0.0050, 0.0), "fr": (0.0040, 0.0)}
-COST = {"hk": (0.0013, 0.0013), "uk": (0.0053, 0.0003), "fr": (0.0043, 0.0003)}
+# 单边成本与其中的税费：(开仓, 平仓)，来自市场规则包的 costs（RULE-04），与 RD-Agent 回测配置一致（open_cost / close_cost）
+_COSTS = {m: rules.costs(m) for m in LOCAL}
+TAX = {m: (c["buy"]["tax"], c["sell"]["tax"]) for m, c in _COSTS.items()}
+COST = {m: (round(c["buy"]["total"], 6), round(c["sell"]["total"], 6)) for m, c in _COSTS.items()}
 HORIZONS = (1, 5, 10, 20, 40)
 # 回测并列顺序修正（第 14.8 节）生效时间；之前的运行，原始回测收益受随机选股影响
 TIE_FIX_AT = "2026-10-10T10:22:48+00:00"
