@@ -1,0 +1,151 @@
+import { Link } from "react-router-dom";
+import { api, type Check, type Market, type StudyMarket } from "../api";
+import { cssVar, fix, MARKET_LABEL, pct, signed, useAsync } from "../lib";
+import { Badge, ErrorBox, Loading, Panel } from "./ui";
+import StudyScatter from "./charts/StudyScatter";
+
+const OVERALL_TONE = { rejected: "bad", passed: "good", pending: "accent" } as const;
+const FINDING_COLOR = { bad: "--bad", warn: "--warn", good: "--good" } as const;
+const STATE_ZH: Record<string, string> = {
+  queued: "排队中", running: "运行中", done: "已完成", failed: "失败", cancelled: "已停止", budget_stopped: "超出预算停止",
+  incomplete: "未完成", none: "尚未运行",
+};
+
+/**
+ * 研究结论（Spec 第 14.5 节）：同一锁定版本在各市场的结果，按运行前写好的可证伪测试判定。
+ * 判定与观察由平台按导出的数据计算（factopia/research/verdict.py），不是 AI 撰写。
+ */
+export default function StudyPanel({ researchId, version, current }: { researchId: string; version: number; current?: string }) {
+  const study = useAsync(() => api.study(researchId, version), [researchId, version]);
+  if (study.error) return <ErrorBox error={study.error} />;
+  if (!study.data) return <Loading what="研究结论" />;
+  const s = study.data;
+  const markets = s.rule.markets.map((m) => s.markets[m]).filter(Boolean) as StudyMarket[];
+  const anyRounds = markets.some((e) => e.rounds.length > 0);
+
+  return (
+    <Panel eyebrow={`研究结论 · ${s.research_id} v${s.version} · ${s.rule.markets.map((m) => MARKET_LABEL[m]).join(" / ")}`}
+      title="按事先写好的标准判定"
+      actions={<Badge tone={OVERALL_TONE[s.overall.state]}>{s.overall.state === "passed" ? s.overall.label : `假设${s.overall.label}`}</Badge>}>
+      <div className="flex flex-col gap-5">
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
+          <div className="flex flex-col gap-2">
+            <div className="flex items-baseline gap-3">
+              <span className="font-display text-3xl font-semibold whitespace-nowrap shrink-0" style={{ color: cssVar(`--${OVERALL_TONE[s.overall.state]}`) }}>
+                {s.overall.label}
+              </span>
+              <span className="text-sm text-muted">{s.overall.reason}</span>
+            </div>
+            <p className="text-sm leading-relaxed">{s.title && <span className="font-medium">{s.title}：</span>}{s.hypothesis}</p>
+          </div>
+          <div className="text-xs text-muted leading-relaxed flex flex-col gap-1.5">
+            <div>
+              <span className="text-text">判定方法：</span>主市场（{MARKET_LABEL[s.rule.primary]}）看 RD-Agent 最终采纳的轮次，需同时满足
+              rank IC {s.rule.ric_sign > 0 ? "为正" : "为负"}、扣成本年化超额高于起点、最大回撤不比起点差；其他市场看采纳轮次的 rank IC 方向是否与假设一致。
+              不在各轮中挑最好的一轮，避免多次尝试挑结果。原文中的其他条件（如 t 值门槛、回撤容忍幅度）平台尚未检验，需人工确认。
+              {!s.rule.sign_from_text && " 原文没有写明 rank IC 方向，按为正判定。"}
+            </div>
+            <details>
+              <summary className="cursor-pointer text-text">可证伪测试原文（运行前锁定，不可修改）</summary>
+              <p className="mt-1 num whitespace-pre-wrap">{s.rule.text}</p>
+            </details>
+          </div>
+        </div>
+
+        <div className={`grid gap-3 ${markets.length >= 3 ? "md:grid-cols-3" : markets.length === 2 ? "md:grid-cols-2" : ""}`}>
+          {markets.map((e) => <MarketCard key={e.market} e={e} current={current === e.run_id} />)}
+        </div>
+
+        {anyRounds && (
+          <div className="grid gap-5 xl:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]">
+            <div>
+              <div className="label mb-1">各轮的 rank IC（横轴）与扣成本年化超额（纵轴）</div>
+              <StudyScatter study={s} />
+              <p className="text-[11px] text-faint mt-1">
+                每个点是一轮，大点为 RD-Agent 采纳的轮次，空心菱形为起点（20 个基础因子）。打分真正有效时，点应落在白色一侧的上方；
+                落在红色区域上方的点，是"收益变好、排序能力却与假设相反"。
+              </p>
+            </div>
+            <div>
+              <div className="label mb-2">平台观察</div>
+              <ul className="flex flex-col gap-2">
+                {s.findings.map((f, i) => (
+                  <li key={i} className="flex gap-2 text-sm leading-relaxed">
+                    <span className="size-1.5 rounded-full mt-2 shrink-0" style={{ background: cssVar(FINDING_COLOR[f.tone]) }} />
+                    <span className={f.tone === "bad" ? "text-text" : "text-muted"}>{f.text}</span>
+                  </li>
+                ))}
+                {s.findings.length === 0 && <li className="text-sm text-faint">运行完成后显示。</li>}
+              </ul>
+              <p className="text-[11px] text-faint mt-3">以上判定与观察由平台按回测数据计算，不是 AI 撰写。测试期只有两年、每个市场只运行一次，结论需在 2024 年以后的数据上复核。</p>
+            </div>
+          </div>
+        )}
+      </div>
+    </Panel>
+  );
+}
+
+function CheckRow({ c }: { c: Check }) {
+  const mark = c.ok === true ? "✓" : c.ok === false ? "✗" : "—";
+  const color = c.ok === true ? "--good" : c.ok === false ? "--bad" : "--muted";
+  const val = c.key === "rank_ic" ? fix(c.value, 4) : `${pct(c.value)}（起点 ${pct(c.ref)}）`;
+  return (
+    <li className="flex items-baseline gap-2 text-xs">
+      <span className="num w-3 text-center" style={{ color: cssVar(color) }}>{mark}</span>
+      <span className="text-muted">{c.label}</span>
+      <span className="num ml-auto">{val}</span>
+    </li>
+  );
+}
+
+function MarketCard({ e, current }: { e: StudyMarket; current: boolean }) {
+  const color = cssVar(`--${e.market}`);
+  const f = e.focus, q = f?.quantile, b = e.baseline;
+  const done = e.state === "done";
+  return (
+    <div className="rounded border p-3 flex flex-col gap-3"
+      style={{ borderColor: current ? color : `color-mix(in oklab, ${color} 35%, var(--line))`, background: `color-mix(in oklab, ${color} 5%, transparent)` }}>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="size-2.5 rounded-full" style={{ background: color }} />
+        <span className="font-medium">{MARKET_LABEL[e.market as Market]}</span>
+        {e.primary && <Badge tone="accent">主市场</Badge>}
+        {current && <Badge>当前运行</Badge>}
+        <span className="ml-auto">
+          {!done ? <Badge tone={e.state === "running" ? "accent" : "muted"}>{STATE_ZH[e.state] ?? e.state}</Badge>
+            : !f ? <Badge tone={e.primary ? "bad" : "muted"}>没有采纳的轮次</Badge>
+            : f.passed ? <Badge tone="good">{e.primary ? "通过" : "方向一致"}</Badge>
+            : <Badge tone="bad">{e.primary ? "未通过" : "方向相反"}</Badge>}
+        </span>
+      </div>
+
+      {done && f ? (
+        <>
+          <div className="text-xs text-faint">第 {f.loop} 轮（RD-Agent 采纳）· {f.factors.slice(0, 3).join("、")}{f.factors.length > 3 ? ` 等 ${f.factors.length} 个` : ""}</div>
+          <dl className="grid grid-cols-2 gap-x-3 gap-y-2 text-xs">
+            <div><dt className="text-faint">扣成本年化</dt><dd className="num text-base">{pct(b?.annual_return_with_cost)} → <span className="text-text">{pct(f.metrics.annual_return_with_cost)}</span></dd></div>
+            <div><dt className="text-faint">最大回撤</dt><dd className="num text-base">{pct(b?.max_drawdown_with_cost)} → <span className="text-text">{pct(f.metrics.max_drawdown_with_cost)}</span></dd></div>
+            <div><dt className="text-faint">rank IC</dt><dd className="num text-base">{fix(f.metrics.rank_ic, 4)}</dd></div>
+            <div><dt className="text-faint">第 {q?.groups ?? 5} 组 − 第 1 组</dt>
+              <dd className="num text-base" style={{ color: q?.spread_mean == null ? undefined : cssVar(q.spread_mean > 0 ? "--good" : "--bad") }}>{signed(q?.spread_mean, 2)}</dd></div>
+            <div><dt className="text-faint">同分股票</dt><dd className="num">{pct(q?.tie_share, 0)}</dd></div>
+            <div><dt className="text-faint">费用 / 耗时</dt><dd className="num">${(e.cost_usd ?? 0).toFixed(2)} / {Math.round((e.duration_s ?? 0) / 60)} 分钟</dd></div>
+          </dl>
+          <ul className="flex flex-col gap-1 border-t border-line pt-2">{f.checks.map((c) => <CheckRow key={c.key} c={c} />)}</ul>
+        </>
+      ) : done ? (
+        <p className="text-xs text-muted">RD-Agent 没有采纳任何一轮：新因子都没有超过起点（扣成本年化 {pct(b?.annual_return_with_cost)}）。</p>
+      ) : (
+        <p className="text-xs text-muted">{e.job ? `任务${e.job.state_zh}，完成后自动判定。` : "这个版本还没有在该市场运行。"}</p>
+      )}
+
+      <div className="flex flex-wrap gap-2 mt-auto">
+        {e.run_id && !current && <Link className="btn" to={`/results?run=${e.run_id}`}>查看结果</Link>}
+        {e.run_id && <Link className="btn" to={`/run?run=${e.run_id}`}>{e.state === "running" ? "查看过程" : "回放过程"}</Link>}
+        {!e.run_id && e.job && <Link className="btn" to={`/run?job=${e.job.job_id}`}>查看任务</Link>}
+        {e.attempts > 1 && <span className="text-[11px] text-faint self-center">共运行 {e.attempts} 次，取最近一次完成的</span>}
+      </div>
+    </div>
+  );
+}
+

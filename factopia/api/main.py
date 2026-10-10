@@ -20,7 +20,7 @@ from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from factopia.research import draft as drafting
-from factopia.research import evidence, mandates, store
+from factopia.research import evidence, mandates, store, verdict
 from factopia.research.context import build_context
 from factopia.research.periods import HORIZONS, split_dates
 
@@ -29,6 +29,7 @@ CONFIGS = Path(os.environ.get("FACTOPIA_CONFIGS_DIR", "/workspace/configs"))
 RUN_ID = re.compile(r"^[a-z]{2}_h\d{1,2}_\d{14}$")
 ROUND_KEY = re.compile(r"^(baseline|\d{1,3})$")
 MARKETS = ("hk", "uk", "fr")
+MARKET_ZH = {"hk": "香港", "uk": "英国", "fr": "法国"}
 
 app = FastAPI(title="Factopia API", version="0.1.0", docs_url="/api/docs", openapi_url="/api/openapi.json")
 
@@ -106,8 +107,22 @@ def run_detail(run_id: str):
     run = _json(d / "run.json")
     job = _job_of_run(run_id)
     batch = [_job_public(j) for j in store.list_jobs() if job and j["batch_id"] == job["batch_id"]]
-    return {"run": {**run, "state": _run_state(run, job)}, "rounds": _json(d / "rounds.json"),
-            "job": _job_public(job) if job else None, "batch": batch}
+    rounds = _json(d / "rounds.json")
+    spec = _run_spec(run)
+    rule = verdict.rules(spec) if spec else None
+    return {"run": {**run, "state": _run_state(run, job)}, "rounds": rounds,
+            "job": _job_public(job) if job else None, "batch": batch,
+            "verdicts": verdict.judge_rounds(run, rounds, rule) if rule else None,
+            "rule": ({k: rule[k] for k in ("primary", "ric_sign", "sign_from_text")} | {"primary_market": run["market"] == rule["primary"]}) if rule else None}
+
+
+def _run_spec(run: dict) -> dict | None:
+    """运行所用的锁定版本（页面发起的运行才有）。"""
+    r = run.get("research") or {}
+    rid, v = r.get("id"), r.get("version")
+    if not rid or v is None or not drafting.ID_PATTERN.match(rid) or v not in store.versions(rid):
+        return None
+    return store.load_version(rid, v)
 
 
 @app.get("/api/runs/{run_id}/backtest")
@@ -380,6 +395,91 @@ def get_version(research_id: str, version: int):
     if not drafting.ID_PATTERN.match(research_id) or version not in store.versions(research_id):
         raise HTTPException(404, "版本不存在")
     return store.load_version(research_id, version)
+
+
+def _study_market(m: str, runs: list[dict], jobs: list[dict], rule: dict) -> dict:
+    """一个市场的结论：取最近一次完成的运行（没有则取最近一次运行），按可证伪测试判定各轮。"""
+    jobs_by_run = {j["run_id"]: j for j in jobs if j.get("run_id")}
+    active = next((j for j in reversed(jobs) if j["market"] == m and j["state"] in ("queued", "running")), None)
+    mine = [r for r in runs if r["market"] == m]
+    done = [r for r in mine if (jobs_by_run.get(r["run_id"]) or {}).get("state", "done" if r.get("status") == "done" else "") == "done"]
+    run = (done or mine or [None])[0]
+    entry = {"market": m, "primary": m == rule["primary"], "job": _job_public(active) if active else None,
+             "attempts": len(mine)}
+    if run is None:
+        return entry | {"state": active["state"] if active else "none", "run_id": None, "focus": None, "rounds": []}
+    job = jobs_by_run.get(run["run_id"])
+    state = job["state"] if job else ("done" if run.get("status") == "done" else "incomplete")
+    rounds = _json(RESULTS / "runs" / run["run_id"] / "rounds.json")
+    judged = {v["loop"]: v for v in verdict.judge_rounds(run, rounds, rule)}
+    qdir = RESULTS / "runs" / run["run_id"] / "quantile"
+    rows = []
+    for r in rounds:
+        mt = r.get("metrics") or {}
+        rows.append({"loop": r["loop"], "decision": r.get("decision"), "rank_ic": mt.get("rank_ic"),
+                     "return": mt.get("annual_return_with_cost"), "drawdown": mt.get("max_drawdown_with_cost"),
+                     "passed": judged[r["loop"]]["passed"], "hypothesis": r.get("hypothesis")})
+    focus = verdict.focus_round(rounds)
+    fo = None
+    if focus:
+        q = qdir / f"{focus['loop']}.json"
+        qd = _json(q) if q.exists() else None
+        fo = {"loop": focus["loop"], "metrics": focus["metrics"], "checks": judged[focus["loop"]]["checks"],
+              "passed": judged[focus["loop"]]["passed"], "hypothesis": focus.get("hypothesis"),
+              "factors": [f["name"] for f in focus.get("factors") or []],
+              "quantile": {k: qd[k] for k in ("spread_mean", "spread_positive_share", "tie_share", "groups")} if qd else None}
+    return entry | {"state": state, "run_id": run["run_id"], "cost_usd": run["cost_usd"], "duration_s": run.get("duration_s"),
+                    "baseline": (run.get("baseline") or {}).get("metrics"), "rounds": rows, "focus": fo}
+
+
+def _study_findings(markets: dict, rule: dict) -> list[dict]:
+    """平台按数据生成的观察（不是 AI 撰写）：tone 为 bad / warn / good。"""
+    out = []
+    sign = rule["ric_sign"]
+    for m, e in markets.items():
+        f, name = e.get("focus"), MARKET_ZH[m]
+        if e["state"] != "done" or not f:
+            continue
+        mt, base = f["metrics"], e.get("baseline") or {}
+        ric, r, br = mt.get("rank_ic"), mt.get("annual_return_with_cost"), base.get("annual_return_with_cost")
+        ric_ok = ric is not None and ric * sign > 0
+        if r is not None and br is not None and r > br and not ric_ok:
+            out.append({"tone": "bad", "text": f"{name}：采纳轮次的收益高于起点（{br:.1%} → {r:.1%}），但 rank IC 为 {ric:.3f}，"
+                                                f"方向与假设相反——收益提高不是因为模型会给股票排序（第 8 章 #21）。"})
+        elif ric_ok:
+            out.append({"tone": "good", "text": f"{name}：采纳轮次的 rank IC 为 {ric:.3f}，方向与假设一致"
+                                                 + ("，但幅度很小。" if abs(ric) < 0.02 else "。")})
+        q = f.get("quantile")
+        if q and q.get("spread_mean") is not None and q["spread_mean"] * sign < 0:
+            out.append({"tone": "warn", "text": f"{name}：打分最高的一组比最低的一组平均少赚 {abs(q['spread_mean']):.2%}（每 20 个交易日）。"})
+        if q and (q.get("tie_share") or 0) > 0.2:
+            out.append({"tone": "warn", "text": f"{name}：约 {q['tie_share']:.0%} 的股票每天得到完全相同的打分，排名先后取决于并列处理。"})
+    rows = [(m, x) for m, e in markets.items() for x in e.get("rounds", []) if x.get("rank_ic") is not None]
+    if rows:
+        ok = sum(1 for _, x in rows if x["rank_ic"] * sign > 0)
+        out.append({"tone": "good" if ok > len(rows) / 2 else "warn",
+                    "text": f"全部 {len(rows)} 轮中，{ok} 轮的 rank IC 方向与假设一致（假设预期{'为正' if sign > 0 else '为负'}）。"})
+    adopted = [x for _, x in rows if x.get("decision")]
+    bad = [x for x in adopted if x.get("passed") is False]
+    if bad:
+        out.append({"tone": "warn", "text": f"RD-Agent 采纳的 {len(adopted)} 轮中，{len(bad)} 轮没有通过可证伪测试："
+                                             "RD-Agent 的 AI 评审主要看收益，与事先写好的标准不一致。"})
+    return out
+
+
+@app.get("/api/research/{research_id}/versions/{version}/study")
+def study(research_id: str, version: int):
+    """研究结论（Spec 第 14.5 节）：同一锁定版本在各市场的结果，按可证伪测试判定。"""
+    spec = get_version(research_id, version)
+    rule = verdict.rules(spec)
+    runs = [r for r in (_json(p) for p in sorted((RESULTS / "runs").glob("*/run.json"), reverse=True))
+            if (r.get("research") or {}).get("id") == research_id and (r.get("research") or {}).get("version") == version]
+    jobs = [j for j in store.list_jobs() if j["research_id"] == research_id and j["version"] == version]
+    markets = {m: _study_market(m, runs, jobs, rule) for m in rule["markets"]}
+    return {"research_id": research_id, "version": version, "hypothesis": spec.get("hypothesis"),
+            "title": spec.get("title_zh") or spec.get("title"),
+            "rule": {k: rule[k] for k in ("primary", "markets", "ric_sign", "sign_from_text", "text")},
+            "overall": verdict.overall(markets, rule), "markets": markets, "findings": _study_findings(markets, rule)}
 
 
 class RunIn(BaseModel):

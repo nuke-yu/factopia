@@ -73,6 +73,7 @@ function ProjectCard({ p }: { p: Project }) {
         <span className="num text-xs text-faint">{p.id}</span>
       </>}>
       <p className="text-sm text-muted leading-relaxed max-w-[110ch]">{p.hypothesis}</p>
+      {!p.example && <StudyLinks p={p} />}
       <div className="mt-4 overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="text-xs text-muted">
@@ -92,6 +93,31 @@ function ProjectCard({ p }: { p: Project }) {
         )}
       </div>
     </Panel>
+  );
+}
+
+const OVERALL_TONE = { rejected: "bad", passed: "good", pending: "accent" } as const;
+
+/** 每个已运行的版本：按可证伪测试的研究结论，点击进入结果页查看三市场对比。 */
+function StudyLinks({ p }: { p: Project }) {
+  const versions = [...new Set(p.runs.map((r) => r.version).filter((v): v is number => v != null))].sort((a, b) => b - a);
+  if (versions.length === 0) return null;
+  return (
+    <div className="flex flex-wrap gap-2 mt-3">
+      {versions.map((v) => <StudyLink key={v} p={p} version={v} />)}
+    </div>
+  );
+}
+
+function StudyLink({ p, version }: { p: Project; version: number }) {
+  const study = useAsync(() => api.study(p.id, version), [p.id, version, p.runs.length]);
+  const s = study.data;
+  const run = s ? (s.markets[s.rule.primary]?.run_id ?? Object.values(s.markets).find((e) => e?.run_id)?.run_id) : null;
+  return (
+    <Link to={run ? `/results?run=${run}` : "#"} className="btn gap-2" aria-disabled={!run}>
+      <span>v{version} 研究结论</span>
+      {s ? <Badge tone={OVERALL_TONE[s.overall.state]}>{s.overall.state === "passed" ? s.overall.label : `假设${s.overall.label}`}</Badge> : <span className="text-faint text-xs">…</span>}
+    </Link>
   );
 }
 

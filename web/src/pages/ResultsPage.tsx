@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { api, type Metrics, type Quantiles, type Round, type Run } from "../api";
+import { api, type Metrics, type Quantiles, type Round, type RoundVerdict, type Run } from "../api";
 import { cssVar, fix, MARKET_LABEL, pct, signed, useAsync } from "../lib";
 import { Badge, ErrorBox, Loading, Notice, Panel, Stat, ViewToggle } from "../components/ui";
 import ResearchTrail from "../components/charts/ResearchTrail";
@@ -11,11 +11,13 @@ import PositionsBars from "../components/charts/PositionsBars";
 import DrawdownChart from "../components/charts/DrawdownChart";
 import MonthlyReturns from "../components/charts/MonthlyReturns";
 import { QuantileBars, QuantileNav } from "../components/charts/QuantileChart";
+import StudyPanel from "../components/StudyPanel";
 
 export default function ResultsPage() {
   const runs = useAsync(() => api.runs(), []);
   const [params, setParams] = useSearchParams();
   const runId = params.get("run") ?? runs.data?.find((r) => r.rounds >= 3)?.run_id ?? runs.data?.[0]?.run_id ?? "";
+  const research = runs.data?.find((r) => r.run_id === runId)?.research;
 
   return (
     <div className="flex flex-col gap-5">
@@ -36,6 +38,9 @@ export default function ResultsPage() {
       {runs.error && <ErrorBox error={runs.error} />}
       {runs.data && runs.data.length === 0 && (
         <Notice tone="accent" title="还没有导出的运行结果">先运行 factopia.export.rdagent_run 与 factopia.export.backtests（见 README）。</Notice>
+      )}
+      {research?.id && research.version != null && (
+        <StudyPanel key={`${research.id}-${research.version}`} researchId={research.id} version={research.version} current={runId} />
       )}
       {runId && <RunSection key={runId} runId={runId} />}
       <Panel eyebrow="Alpha158 · 三市场" title="迁移性立方体" className="min-w-0">
@@ -68,7 +73,7 @@ function RunSection({ runId }: { runId: string }) {
 
   if (detail.error) return <ErrorBox error={detail.error} />;
   if (!detail.data) return <Loading what="运行结果" />;
-  const { run, rounds } = detail.data;
+  const { run, rounds, verdicts } = detail.data;
   const best = rounds.filter((r) => r.decision).at(-1);
   const posKey = selected === "baseline" ? (best ? String(best.loop) : "0") : selected;
 
@@ -81,7 +86,7 @@ function RunSection({ runId }: { runId: string }) {
           </Notice>
         )}
         <Notice title="回测结果可信度待排查（Spec 第 8 章 #21）">
-          各轮 IC 均为负而收益为正，原因未明；比较基准为 RD-Agent 默认的 20 个基础因子，而非完整 Alpha158。
+          多次运行中出现 rank IC 为负、收益却高于起点，原因未明（三市场研究中香港、法国都出现）；比较基准为 RD-Agent 默认的 20 个基础因子，而非完整 Alpha158。
         </Notice>
       </div>
 
@@ -122,7 +127,7 @@ function RunSection({ runId }: { runId: string }) {
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]">
         <Panel eyebrow="RD-Agent · 逐轮" title="AI 研究轨迹" actions={<ViewToggle precise={precise} onChange={setPrecise} />}>
-          {precise ? <RoundTable run={run} rounds={rounds} selected={selected} onSelect={setSelected} /> : (
+          {precise ? <RoundTable run={run} rounds={rounds} verdicts={verdicts} selected={selected} onSelect={setSelected} /> : (
             <div className="h-[520px] -mx-1">
               <ResearchTrail run={run} rounds={rounds} selected={selected} onSelect={setSelected} />
             </div>
@@ -132,7 +137,7 @@ function RunSection({ runId }: { runId: string }) {
           </p>
         </Panel>
         <Panel eyebrow="详情" title={selected === "baseline" ? "起点（基础因子）" : `第 ${selected} 轮`}>
-          <RoundDetail run={run} round={rounds.find((r) => String(r.loop) === selected)} />
+          <RoundDetail run={run} round={rounds.find((r) => String(r.loop) === selected)} verdict={verdicts?.find((v) => String(v.loop) === selected)} />
         </Panel>
       </div>
 
@@ -189,7 +194,15 @@ function QuantileSection({ q }: { q: Quantiles }) {
   );
 }
 
-function RoundTable({ run, rounds, selected, onSelect }: { run: Run; rounds: Round[]; selected: string; onSelect: (k: string) => void }) {
+function VerdictBadge({ v }: { v?: RoundVerdict }) {
+  if (!v || v.passed == null) return <span className="text-faint">—</span>;
+  const failed = v.checks.filter((c) => c.ok === false).map((c) => c.label).join("、");
+  return <span title={failed ? `未满足：${failed}` : "满足全部条件"}><Badge tone={v.passed ? "good" : "bad"}>{v.passed ? "通过" : "未通过"}</Badge></span>;
+}
+
+function RoundTable({ run, rounds, verdicts, selected, onSelect }: {
+  run: Run; rounds: Round[]; verdicts: RoundVerdict[] | null; selected: string; onSelect: (k: string) => void;
+}) {
   const rows: { key: string; name: string; m: Metrics | null | undefined; r?: Round }[] = [
     { key: "baseline", name: "起点", m: run.baseline?.metrics }, ...rounds.map((r) => ({ key: String(r.loop), name: `第 ${r.loop} 轮`, m: r.metrics, r })),
   ];
@@ -198,17 +211,19 @@ function RoundTable({ run, rounds, selected, onSelect }: { run: Run; rounds: Rou
       <table className="w-full text-sm">
         <thead className="text-xs text-muted"><tr>
           <th className="text-left py-1.5">轮次</th><th className="text-left">假设（AI 原文）</th>
-          <th className="text-right">IC</th><th className="text-right">扣成本年化</th><th className="text-right">最大回撤</th><th className="text-right">结论</th>
+          <th className="text-right">rank IC</th><th className="text-right">扣成本年化</th><th className="text-right">最大回撤</th><th className="text-right">RD-Agent</th>
+          {verdicts && <th className="text-right pl-2" title="按研究规格中运行前锁定的可证伪测试判定">可证伪测试</th>}
         </tr></thead>
         <tbody>
           {rows.map(({ key, name, m, r }) => (
             <tr key={key} onClick={() => onSelect(key)} className={`border-t border-line cursor-pointer ${selected === key ? "bg-accent/8" : "hover:bg-bg-3"}`}>
               <td className="py-2 pr-3 whitespace-nowrap">{name}</td>
               <td className="pr-3 text-muted max-w-[420px] truncate" title={r?.hypothesis ?? ""}>{r?.hypothesis ?? "20 个基础因子"}</td>
-              <td className="num text-right pr-3">{fix(m?.ic)}</td>
+              <td className="num text-right pr-3">{fix(m?.rank_ic)}</td>
               <td className="num text-right pr-3">{pct(m?.annual_return_with_cost)}</td>
               <td className="num text-right pr-3">{pct(m?.max_drawdown_with_cost)}</td>
               <td className="text-right">{r ? (r.decision ? <Badge tone="good">采纳</Badge> : <Badge tone="bad">未采纳</Badge>) : <Badge>起点</Badge>}</td>
+              {verdicts && <td className="text-right pl-2">{r ? <VerdictBadge v={verdicts.find((v) => v.loop === r.loop)} /> : null}</td>}
             </tr>
           ))}
         </tbody>
@@ -237,7 +252,7 @@ function Compare({ cur, ref_ }: { cur: Metrics | null | undefined; ref_: Metrics
   );
 }
 
-function RoundDetail({ run, round }: { run: Run; round?: Round }) {
+function RoundDetail({ run, round, verdict }: { run: Run; round?: Round; verdict?: RoundVerdict }) {
   const totalTime = useMemo(() => round ? Object.values(round.steps).reduce((a, b) => a + b, 0) : 0, [round]);
   if (!round) {
     return (
@@ -251,7 +266,8 @@ function RoundDetail({ run, round }: { run: Run; round?: Round }) {
   return (
     <div className="flex flex-col gap-4 text-sm max-h-[560px] overflow-y-auto pr-1">
       <div className="flex flex-wrap gap-2">
-        {round.decision ? <Badge tone="good">被采纳</Badge> : <Badge tone="bad">未采纳</Badge>}
+        {round.decision ? <Badge tone="good">RD-Agent 采纳</Badge> : <Badge tone="bad">RD-Agent 未采纳</Badge>}
+        {verdict?.passed != null && <Badge tone={verdict.passed ? "good" : "bad"}>可证伪测试{verdict.passed ? "通过" : "未通过"}</Badge>}
         <Badge>编码尝试 {round.coding_attempts} 次</Badge>
         <Badge>费用 ${round.cost_usd.toFixed(3)}</Badge>
         <Badge>耗时 {Math.round(totalTime)} 秒</Badge>
@@ -279,6 +295,20 @@ function RoundDetail({ run, round }: { run: Run; round?: Round }) {
           ))}
         </ul>
       </section>
+      {verdict && verdict.checks.length > 0 && (
+        <section>
+          <div className="label mb-1">按可证伪测试判定</div>
+          <ul className="flex flex-col gap-1">
+            {verdict.checks.map((c) => (
+              <li key={c.key} className="flex items-baseline gap-2 text-xs">
+                <span className="num w-3 text-center" style={{ color: cssVar(c.ok ? "--good" : c.ok === false ? "--bad" : "--muted") }}>{c.ok ? "✓" : c.ok === false ? "✗" : "—"}</span>
+                <span className="text-muted">{c.label}</span>
+                <span className="num ml-auto">{c.key === "rank_ic" ? fix(c.value, 4) : `${pct(c.value)}（起点 ${pct(c.ref)}）`}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
       <section>
         <div className="label mb-1">Qlib 回测成绩</div>
         <Compare cur={round.metrics} ref_={round.sota_before} />

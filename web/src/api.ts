@@ -47,6 +47,7 @@ export type Run = {
   started_at: string | null;
   ended_at: string | null;
   status: "done" | "incomplete";
+  research?: { id: string; version: number; market: Market; horizon: number; job_id?: string } | null;
 };
 
 export type PeriodKey = "train" | "valid" | "test";
@@ -154,6 +155,26 @@ export type LiveState = {
   backtests: { loop: number | null; t: string | null; with_cost?: LiveMetrics; without_cost?: LiveMetrics }[];
   fatal: string | null; last_log_at: string | null; updated_at?: string;
 };
+// ── 研究结论：按锁定的可证伪测试判定（Spec 第 14.5 节、RS-10）──
+export type Check = { key: "rank_ic" | "return" | "drawdown"; label: string; value: number | null; ref: number | null; ok: boolean | null };
+export type RoundVerdict = { loop: number; checks: Check[]; passed: boolean | null };
+export type VerdictRule = { primary: Market; ric_sign: 1 | -1; sign_from_text: boolean; primary_market: boolean };
+export type StudyMarket = {
+  market: Market; primary: boolean; state: JobState | "none" | "incomplete"; run_id: string | null; attempts: number; job: Job | null;
+  cost_usd?: number; duration_s?: number | null; baseline?: Metrics | null;
+  rounds: { loop: number; decision: boolean | null; rank_ic: number | null; return: number | null; drawdown: number | null; passed: boolean | null; hypothesis: string | null }[];
+  focus: {
+    loop: number; metrics: Metrics; checks: Check[]; passed: boolean | null; hypothesis: string | null; factors: string[];
+    quantile: { spread_mean: number | null; spread_positive_share: number | null; tie_share: number | null; groups: number } | null;
+  } | null;
+};
+export type Study = {
+  research_id: string; version: number; hypothesis: string; title: string | null;
+  rule: { primary: Market; markets: Market[]; ric_sign: 1 | -1; sign_from_text: boolean; text: string };
+  overall: { state: "pending" | "rejected" | "passed"; label: string; reason: string };
+  markets: Partial<Record<Market, StudyMarket>>;
+  findings: { tone: "bad" | "warn" | "good"; text: string }[];
+};
 export type RunnerStatus = { paused: { reason: string; at: string } | null; queued: number; running: number };
 export type Preview = { market: Market; test_start: string; dates: Record<string, string>; text: string; chars: number };
 
@@ -188,7 +209,11 @@ export const api = {
   cube: (h: number) => get<Cube>(`/alpha158/${h}/cube`),
   surface: (h: number, m: Market) => get<Surface>(`/alpha158/${h}/surface?market=${m}`),
   runs: () => get<Run[]>("/runs"),
-  run: (id: string) => get<{ run: Run & { state: ProjectRun["state"] }; rounds: Round[]; job: Job | null; batch: Job[] }>(`/runs/${id}`),
+  run: (id: string) => get<{
+    run: Run & { state: ProjectRun["state"] }; rounds: Round[]; job: Job | null; batch: Job[];
+    verdicts: RoundVerdict[] | null; rule: VerdictRule | null;
+  }>(`/runs/${id}`),
+  study: (id: string, version: number) => get<Study>(`/research/${id}/versions/${version}/study`),
   backtest: (id: string) => get<Record<string, Columns>>(`/runs/${id}/backtest`),
   monthly: (id: string) => get<Record<string, Monthly>>(`/runs/${id}/monthly`),
   quantiles: (id: string) => get<Record<string, Quantiles>>(`/runs/${id}/quantiles`),
