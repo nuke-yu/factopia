@@ -1,6 +1,7 @@
 #!/bin/sh
 # RD-Agent 容器启动脚本。
 # 1) /opt/rdagent-src 是与 dind 共享的命名卷：卷为空或版本与镜像不一致时，用镜像内源码同步。
+#    设置 FACTOPIA_SRC_DIR 时（后台运行器的每个任务）改用该目录下的独立副本，任务之间互不影响。
 # 2) 每次启动先恢复 RD-Agent 原版配置模板；若设置了 FACTOPIA_MARKET（hk / uk / fr），
 #    再用 /workspace/configs/rdagent/<市场>/ 下的模板覆盖，并切换数据、时间段和工作目录。
 set -e
@@ -8,7 +9,14 @@ SRC=/opt/rdagent-src
 IMG=/opt/rdagent-src-image
 EXP=rdagent/scenarios/qlib/experiment
 
-if ! cmp -s "$IMG/.factopia_version" "$SRC/.factopia_version" 2>/dev/null; then
+if [ -n "$FACTOPIA_SRC_DIR" ]; then
+  # 每个任务独立的源码副本（后台运行器并行运行时设置，Spec BR-37）：位于共享卷 runtime 中，dind 以相同路径可见；
+  # 之后的模板改写只影响本任务。RD-Agent 是命名空间包，PYTHONPATH 中的副本优先于可编辑安装的 /opt/rdagent-src
+  SRC=$FACTOPIA_SRC_DIR
+  rm -rf "$SRC" && mkdir -p "$SRC" && cp -a "$IMG/." "$SRC/"
+  export PYTHONPATH="$SRC${PYTHONPATH:+:$PYTHONPATH}"
+  export RDAGENT_SRC="$SRC"
+elif ! cmp -s "$IMG/.factopia_version" "$SRC/.factopia_version" 2>/dev/null; then
   echo "[entrypoint] syncing RD-Agent source into shared volume"
   rm -rf "$SRC"/* "$SRC"/.[!.]* 2>/dev/null || true
   cp -a "$IMG/." "$SRC/"

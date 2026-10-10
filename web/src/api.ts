@@ -165,6 +165,7 @@ export type Significance = { mean: number | null; t: number | null; n: number; l
 export type ValPeriod = {
   start: string | null; end: string | null; days: number;
   annual_return_with_cost: number | null; annual_return_with_cost_range?: [number, number] | null; annual_return_with_cost_all?: number[];
+  annual_return_with_cost_default?: number | null;
   max_drawdown_with_cost: number | null; max_drawdown_with_cost_range?: [number, number] | null;
   information_ratio_with_cost: number | null; annual_return_without_cost: number | null;
   rank_ic: number | null; rank_ic_t: number | null; rank_ic_low: number | null; rank_ic_high: number | null;

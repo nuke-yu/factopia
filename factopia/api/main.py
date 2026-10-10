@@ -536,8 +536,8 @@ def _study_findings(markets: dict, rule: dict) -> list[dict]:
         if noise.get("range"):
             lo, hi = noise["range"]
             rep_ = f"（RD-Agent 当时报告 {noise['reported']:.1%}）" if noise.get("reported") is not None else ""
-            out.append({"tone": "warn", "text": f"{name}：同一个模型，只改变打分相同的股票的处理顺序，测试期扣成本年化在 "
-                                                 f"{lo:.1%} 至 {hi:.1%} 之间{rep_}——单次回测的收益很大程度上是运气。"})
+            out.append({"tone": "warn", "text": f"{name}：同一个模型，只改变打分相同的股票的先后顺序，测试期扣成本年化在 "
+                                                 f"{lo:.1%} 至 {hi:.1%} 之间{rep_}——收益对并列顺序很敏感，单次回测的收益不能作为证据。"})
         for c in cred.get("checks", []):
             if c["key"] == "holdout" and c["ok"] is not None:
                 v = c["value"]

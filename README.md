@@ -59,7 +59,7 @@ docker compose run --rm rdagent ls /workspace/runtime
 |---|---|
 | `web` | nginx + 静态页面，转发 `/api` |
 | `api` | 后端接口：读结果；AI 起草（调用 `.env` 中的大模型）；版本与任务写入 `runtime/research`、`runtime/jobs` |
-| `runner` | 后台运行器：按顺序执行任务，启动 RD-Agent，每 15 秒导出一次进度，超出费用上限或收到停止请求时中止；研究完成后自动排入可信度检查（在 dind 的回测镜像中运行，无网络，约 14 分钟，不调用大模型） |
+| `runner` | 后台运行器：并行执行任务（最多 `FACTOPIA_MAX_PARALLEL` 个，默认 3；每个任务使用独立的 RD-Agent 源码副本 `runtime/rdagent_src/<任务>` 与工作目录 `runtime/rdagent/<市场>/h<N>/jobs/<任务>`），启动 RD-Agent，每 15 秒导出一次进度，超出费用上限或收到停止请求时只中止该任务；研究完成后自动排入可信度检查（在 dind 的回测镜像中运行，无网络，约 15 分钟，不调用大模型） |
 | `exporter` | 运行结束后导出逐日回测、持仓、IC 与分组收益（需要 Qlib） |
 
 ```bash
@@ -94,7 +94,7 @@ $DC run --rm app python -m factopia.export.alpha158
 | `rdagent` | RD-Agent 主程序（conda / Python 3.11，源码固定 v1.0.0，位于 `/opt/rdagent-src`） |
 | `dind` | 独立 Docker 引擎；RD-Agent 启动的回测容器运行在这里 |
 | `rdagent-ui` | RD-Agent 日志界面（profile `ui`） |
-| `qlib-runner` | 回测镜像，只构建（profile `build-only`），载入 dind 后由 RD-Agent 按需启动 |
+| `qlib-runner` | 回测镜像，只构建（profile `build-only`），载入 dind 后由 RD-Agent 按需启动；启动钩子 `docker/qlib/sitecustomize.py` 让打分相同的股票按股票代码确定排序，回测可复现（修改后需重新构建并载入 dind） |
 | `api` | Factopia 后端接口（FastAPI，profile `platform`）：读结果、AI 起草、版本与任务；镜像不含 Qlib / RD-Agent |
 | `runner` | 后台运行器（rdagent 镜像，profile `research`）：按顺序执行页面发起的研究任务 |
 | `exporter` | 回测结果导出（app 镜像，profile `research`） |

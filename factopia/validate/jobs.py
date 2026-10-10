@@ -50,13 +50,12 @@ def build_spec(job: dict) -> dict:
             "original": {"ai": focus.get("metrics"), "baseline": (run.get("baseline") or {}).get("metrics")}}
 
 
-def sync_source() -> Path:
-    """把 factopia 包复制到共享卷，供回测容器导入（dind 只能挂载命名卷中的路径）。"""
-    dst = VALIDATE / "pkg"
-    tmp = VALIDATE / f"pkg.tmp{int(time.time())}"
-    shutil.copytree(SRC, tmp / "factopia", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+def sync_source(job_id: str) -> Path:
+    """把 factopia 包复制到共享卷，供回测容器导入（dind 只能挂载命名卷中的路径）。
+    每个任务一份，任务结束后删除：并行的检查不会在运行中途替换彼此的代码。"""
+    dst = VALIDATE / "pkg" / job_id
     shutil.rmtree(dst, ignore_errors=True)
-    tmp.rename(dst)
+    shutil.copytree(SRC, dst / "factopia", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     return dst
 
 
@@ -67,7 +66,7 @@ def run(job: dict, image: str, log_file: Path, should_stop) -> None:
     missing = [n for n in _factor_names(spec) if n not in spec["codes"]]
     if missing:
         raise RuntimeError(f"找不到因子代码：{', '.join(missing)}")
-    pkg = sync_source()
+    pkg = sync_source(job["job_id"])
     spec_path = VALIDATE / "jobs" / f"{job['job_id']}.json"
     spec_path.parent.mkdir(parents=True, exist_ok=True)
     spec_path.write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
@@ -104,6 +103,7 @@ def run(job: dict, image: str, log_file: Path, should_stop) -> None:
         except Exception:
             pass
         shutil.rmtree(spec["work_dir"], ignore_errors=True)
+        shutil.rmtree(pkg, ignore_errors=True)
 
 
 def _factor_names(spec: dict) -> list[str]:

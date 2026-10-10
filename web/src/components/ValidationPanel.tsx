@@ -60,7 +60,7 @@ function Empty({ job }: { job?: Job }) {
       <ol className="list-decimal pl-5 flex flex-col gap-1">
         <li><span className="text-text">AI 没见过的数据：</span>AI 只能用到 2023 年底的数据，用 2024 年以后的数据重新计算这一轮的因子并回测，看规律是否延续。</li>
         <li><span className="text-text">随机因子对照（安慰剂）：</span>用同样数量的随机数代替 AI 的因子跑 20 次，看随机因子有多大比例也能达到同样的收益。</li>
-        <li><span className="text-text">回测随机性：</span>打分相同的股票谁先买由程序内部顺序决定，同一个模型多跑几次，看收益的范围有多大。</li>
+        <li><span className="text-text">并列顺序敏感性：</span>回测中打分相同的股票按股票代码排序（结果可复现）；另换 10 种排序各跑一次，看收益对这个排序有多敏感。</li>
       </ol>
     </div>
   );
@@ -83,8 +83,8 @@ function Result({ v, job }: { v: Validation; job?: Job }) {
         <Stat label="随机因子不低于 AI" value={pl?.share_ge_ai == null ? "…" : pct(pl.share_ge_ai, 0)}
           tone={pl?.share_ge_ai == null ? undefined : cssVar(pl.share_ge_ai <= 0.1 ? "--good" : "--bad")}
           sub={pl ? `${pl.n} 组随机因子（测试期）` : "运行中"} />
-        <Stat label="同一模型多次回测" value={range(ai.test.annual_return_with_cost_range)}
-          sub={`测试期扣成本年化，${v.seeds} 次；RD-Agent 报告 ${pct(v.original?.ai?.annual_return_with_cost)}`} />
+        <Stat label="并列顺序敏感性" value={range(ai.test.annual_return_with_cost_range)}
+          sub={`测试期扣成本年化：默认排序 ${pct(ai.test.annual_return_with_cost_default ?? null)}，另 ${v.seeds} 种并列顺序；RD-Agent 报告 ${pct(v.original?.ai?.annual_return_with_cost)}`} />
       </div>
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]">
@@ -92,7 +92,7 @@ function Result({ v, job }: { v: Validation; job?: Job }) {
           <div className="label mb-1">累计超额收益（扣成本）· 每条线是一次回测</div>
           <CurveChart v={v} />
           <p className="text-[11px] text-faint mt-1">
-            彩色为 AI 因子 + 20 个基础因子，灰色为起点（只有 20 个基础因子），各 {v.seeds} 次：模型与打分完全相同，只是打分相同的股票的处理顺序不同。
+            彩色为 AI 因子 + 20 个基础因子，灰色为起点（只有 20 个基础因子），各 {v.seeds + 1} 次：模型与打分完全相同，只是打分相同的股票的先后顺序不同（第一次为默认的按股票代码排序）。
             阴影部分是 AI 从未见过的数据。
           </p>
         </div>

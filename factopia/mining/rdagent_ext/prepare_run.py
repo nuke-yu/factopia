@@ -8,7 +8,7 @@
     1. 把预测目标改为未来 N 个交易日收益；
     2. 设置最短持有天数 hold_thresh = N（按周期调仓）；
     3. 按该市场交易日历计算训练 / 验证 / 测试时间段，段与段之间间隔 N 个交易日；
-  并输出时间段、工作目录（按市场和周期分开）以及场景子类的环境变量。
+  并输出时间段、工作目录（按市场和周期分开；设置 FACTOPIA_JOB_ID 时每个任务一个子目录）以及场景子类的环境变量。
 """
 import os
 import re
@@ -69,6 +69,12 @@ def _rewrite_templates(n: int) -> int:
     return changed
 
 
+def workdir(market: str, n: int, job_id: str | None = None) -> Path:
+    """RD-Agent 工作目录（工作区、数据文件、缓存）。后台运行器的任务各用一个子目录，以便并行运行（BR-37）。"""
+    base = RUNTIME / "rdagent" / market / f"h{n}"
+    return base / "jobs" / job_id if job_id else base
+
+
 def mode_apply() -> None:
     market = os.environ["FACTOPIA_MARKET"]
     n = _horizon(os.environ.get("FACTOPIA_HORIZON", 20))
@@ -77,13 +83,13 @@ def mode_apply() -> None:
         dates = split_dates(market, n)
     except ValueError as e:
         raise SystemExit(str(e))
-    workdir = RUNTIME / "rdagent" / market / f"h{n}"
+    wd = workdir(market, n, os.environ.get("FACTOPIA_JOB_ID"))
     # 删除上次运行生成的数据目录，由 RD-Agent 按最新的数据生成脚本重新生成（含基准指数文件）
     for name in ("factor_implementation_source_data", "factor_implementation_source_data_debug"):
-        shutil.rmtree(workdir / "git_ignore_folder" / name, ignore_errors=True)
+        shutil.rmtree(wd / "git_ignore_folder" / name, ignore_errors=True)
     exports = {f"{p}_{k}": v for p in ("QLIB_FACTOR", "QLIB_MODEL", "QLIB_QUANT") for k, v in dates.items()}
     _export(**exports, FACTOPIA_HORIZON=n, QLIB_FACTOR_SCEN=SCENARIO_CLASS,
-            FACTOPIA_WORKDIR=workdir)
+            FACTOPIA_WORKDIR=wd)
     print(f"echo '[prepare_run] market={market} horizon={n} templates={changed} "
           f"train={dates['TRAIN_START']}~{dates['TRAIN_END']} valid={dates['VALID_START']}~{dates['VALID_END']} "
           f"test={dates['TEST_START']}~{dates['TEST_END']}'")

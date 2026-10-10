@@ -11,18 +11,23 @@
 研究任务完成且有被采纳的轮次时，自动排入一个可信度检查任务（factopia/validate：未见数据、安慰剂、显著性），
 同样在这个队列中执行，不调用大模型。
 
-任务按顺序执行，不并行：RD-Agent 每次运行都会改写共享源码卷中的配置模板，并使用按市场与周期固定的工作目录。
+任务并行执行（最多 FACTOPIA_MAX_PARALLEL 个，默认 3；Spec BR-37）：RD-Agent 每次运行都会改写源码目录中的配置模板，
+因此每个任务使用独立的源码副本（runtime/rdagent_src/<任务>，启动脚本复制）与独立的工作目录
+（runtime/rdagent/<市场>/h<N>/jobs/<任务>）；停止任务时只停止该任务的回测容器。
 """
 import json
 import os
+import shutil
 import signal
 import subprocess
+import threading
 import time
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 
 from factopia.export import rdagent_run
+from factopia.mining.rdagent_ext.prepare_run import workdir as rdagent_workdir
 from factopia.research import store
 from factopia.research.live import ANSI, LiveParser
 from factopia.validate import jobs as validate_jobs
@@ -31,6 +36,8 @@ ENTRYPOINT = os.environ.get("FACTOPIA_ENTRYPOINT", "/usr/local/bin/entrypoint.sh
 POLL_S, EXPORT_EVERY_S, STOP_GRACE_S = 3, 15, 90
 QLIB_IMAGE = os.environ.get("QLIB_DOCKER_IMAGE", "factopia-qlib:dev")
 API_UID = int(os.environ.get("FACTOPIA_API_UID", "10001"))  # api 镜像以非 root 用户运行（docker/api/Dockerfile）
+MAX_PARALLEL = int(os.environ.get("FACTOPIA_MAX_PARALLEL", "3"))
+SRC_ROOT = store.RUNTIME / "rdagent_src"
 
 
 def log(msg: str) -> None:
@@ -46,11 +53,11 @@ def recover() -> None:
             log(f"{job['job_id']}: 标记为中断")
 
 
-def next_job() -> dict | None:
+def next_job(active: set[str] | None = None) -> dict | None:
     if store.paused():
         return None
     for job in store.list_jobs():
-        if job["state"] != "queued":
+        if job["state"] != "queued" or job["job_id"] in (active or set()):
             continue
         if store.cancel_requested(job["job_id"]):
             job.update(state="cancelled", ended_at=store.now())
@@ -98,8 +105,8 @@ def last_error(log_file: Path) -> str:
     return (found[-1] if found else " | ".join(x.strip() for x in lines[-6:] if x.strip()))[:600]
 
 
-def stop(proc: subprocess.Popen) -> None:
-    """依次发送中断、终止、强制结束；并停止 RD-Agent 留在 dind 中的回测容器。"""
+def stop(proc: subprocess.Popen, prefixes: list[Path]) -> None:
+    """依次发送中断、终止、强制结束；并停止该任务留在 dind 中的回测容器（按挂载路径识别，不影响其他任务）。"""
     for sig, wait in ((signal.SIGINT, STOP_GRACE_S), (signal.SIGTERM, 20), (signal.SIGKILL, 10)):
         if proc.poll() is not None:
             break
@@ -114,7 +121,9 @@ def stop(proc: subprocess.Popen) -> None:
     try:
         import docker
         for c in docker.from_env().containers.list(filters={"ancestor": QLIB_IMAGE}):
-            c.stop(timeout=10)
+            mounts = [m.get("Source", "") for m in c.attrs.get("Mounts", [])]
+            if any(s.startswith(str(p)) for s in mounts for p in prefixes):
+                c.stop(timeout=10)
     except Exception as e:  # 清理失败不影响任务状态
         log(f"清理回测容器失败：{e}")
 
@@ -127,9 +136,12 @@ def run_job(job: dict) -> None:
     store.write_job(job)
     log(f"{job['job_id']}: 开始 {job['research_id']} v{job['version']} {job['market']} → {run_id}")
 
+    src = SRC_ROOT / job["job_id"]
+    wd = rdagent_workdir(job["market"], job["horizon"], job["job_id"])
     env = {**os.environ,
            "FACTOPIA_RESEARCH": str(store.version_path(job["research_id"], job["version"])),
-           "FACTOPIA_MARKET": job["market"], "FACTOPIA_JOB_ID": job["job_id"], "LOG_TRACE_PATH": str(log_dir)}
+           "FACTOPIA_MARKET": job["market"], "FACTOPIA_JOB_ID": job["job_id"], "LOG_TRACE_PATH": str(log_dir),
+           "FACTOPIA_SRC_DIR": str(src)}
     live = LiveParser()
     log_file = store.log_path(job["job_id"])
     with log_file.open("ab") as out, log_file.open("r", errors="replace") as tail:
@@ -152,10 +164,11 @@ def run_job(job: dict) -> None:
                     reason = "budget_stopped"
             if reason:
                 log(f"{job['job_id']}: 停止（{live.fatal or reason}）")
-                stop(proc)
+                stop(proc, [wd, src])
                 break
         follow(tail, live, job)
 
+    shutil.rmtree(src, ignore_errors=True)      # 源码副本只在运行期间需要；工作目录保留（回测文件供导出与可信度检查）
     run = export_progress(job, log_dir)
     if live.fatal:
         job.update(state="failed", error=live.fatal)
@@ -216,21 +229,33 @@ def init_dirs() -> None:
         d.chmod(0o775)
 
 
+def execute(job: dict) -> None:
+    try:
+        (run_validation if job.get("kind") == "validate" else run_job)(job)
+    except Exception:
+        job.update(state="failed", ended_at=store.now(), error=traceback.format_exc()[-1200:])
+        store.write_job(job)
+        log(f"{job['job_id']}: 运行器异常\n{job['error']}")
+
+
 def main() -> None:
     init_dirs()
     recover()
-    log("等待任务")
+    log(f"等待任务（最多同时运行 {MAX_PARALLEL} 个）")
+    active: dict[str, threading.Thread] = {}
     while True:
-        job = next_job()
+        for jid in [j for j, th in active.items() if not th.is_alive()]:
+            del active[jid]
+        job = next_job(set(active)) if len(active) < MAX_PARALLEL else None
         if job is None:
             time.sleep(POLL_S)
             continue
-        try:
-            (run_validation if job.get("kind") == "validate" else run_job)(job)
-        except Exception:
-            job.update(state="failed", ended_at=store.now(), error=traceback.format_exc()[-1200:])
-            store.write_job(job)
-            log(f"{job['job_id']}: 运行器异常\n{job['error']}")
+        job.update(state="running", started_at=store.now())   # 先标记，避免下一轮再次取到
+        store.write_job(job)
+        th = threading.Thread(target=execute, args=(job,), name=job["job_id"], daemon=True)
+        th.start()
+        active[job["job_id"]] = th
+        time.sleep(1.2)   # 运行编号精确到秒：同一市场的两个任务不能在同一秒开始
 
 
 if __name__ == "__main__":

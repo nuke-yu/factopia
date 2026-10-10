@@ -11,9 +11,10 @@
    只有 20 个基础因子（起点）各若干次；指标按测试期（2022–2023）与未见数据期（2024 年以后）分别计算；
 4. 安慰剂：用同样数量的随机数代替 AI 的因子，在原测试期重复训练回测若干次。
 
-回测随机性（第 8 章 #21 的原因）：模型打分有大量并列时，Qlib 的 TopkDropoutStrategy 在并列股票中选哪几只
-取决于 Python 的字符串哈希顺序（每个进程随机）。同一个模型、同样的打分，只换哈希种子，扣成本年化可以相差十几个百分点。
-因此每个回测用多个固定的哈希种子（PYTHONHASHSEED = 1…K）各跑一次，报告中位数与范围；rank IC 与分组收益只取决于打分，不受影响。
+并列敏感性（第 8 章 #21）：模型打分大量并列时，在并列股票中买哪几只会明显影响收益。回测镜像已让并列股票按股票代码
+确定排序（docker/qlib/sitecustomize.py），结果可复现；这里另用 K 个"并列排序种子"（FACTOPIA_TIE_SEED = 1…K）
+对并列顺序做固定的随机排列，衡量收益对并列顺序有多敏感。收益类指标报告默认排序的结果、全部结果的中位数与范围；
+rank IC 与分组收益只取决于打分，不受影响。
 结果写入 results/runs/<运行编号>/validation/<轮次>.json。
 """
 import copy
@@ -21,6 +22,7 @@ import datetime as dt
 import json
 import os
 import pickle
+import shutil
 import subprocess
 import sys
 import time
@@ -59,7 +61,7 @@ def ensure_data(cache: Path) -> tuple[Path, list[str]]:
     import qlib
     qlib.init(provider_uri=QLIB_DATA, region="us")
     from qlib.data import D
-    tmp = cache.with_name(cache.name + ".tmp")
+    tmp = cache.with_name(f"{cache.name}.tmp{os.urandom(4).hex()}")   # 并行的检查各用自己的临时目录
     tmp.mkdir(parents=True, exist_ok=True)
     data = D.features(D.instruments(), FIELDS, freq="day").swaplevel().sort_index().loc["2008-12-29":].sort_index()
     data.to_hdf(tmp / "daily_pv.h5", key="data")
@@ -68,11 +70,14 @@ def ensure_data(cache: Path) -> tuple[Path, list[str]]:
         code = bench_list.read_text().split()[0]
         D.features([code], FIELDS, freq="day").droplevel(0).sort_index().loc["2008-12-29":].to_hdf(tmp / "daily_benchmark.h5", key="data")
     (tmp / "STAMP").write_text(cal[-1])
+    if stamp.exists() and stamp.read_text() == cal[-1]:     # 另一个检查已经生成
+        shutil.rmtree(tmp, ignore_errors=True)
+        return cache, cal
+    old = cache.with_name(f"{cache.name}.old{os.urandom(4).hex()}")
     if cache.exists():
-        for p in cache.iterdir():
-            p.unlink()
-        cache.rmdir()
+        cache.rename(old)
     tmp.rename(cache)
+    shutil.rmtree(old, ignore_errors=True)
     return cache, cal
 
 
@@ -149,10 +154,12 @@ def make_config(base: dict, static: Path | None, test: tuple[str, str]) -> dict:
             "port_analysis_config": pa, "task": task}
 
 
-def qrun(conf: dict, d: Path, hash_seed: int) -> Path:
+def qrun(conf: dict, d: Path, tie_seed: int | None = None) -> Path:
     d.mkdir(parents=True, exist_ok=True)
     (d / "conf.yaml").write_text(yaml.safe_dump(conf, allow_unicode=True, sort_keys=False), encoding="utf-8")
-    env = {**os.environ, "PYTHONHASHSEED": str(hash_seed)}
+    env = {k: v for k, v in os.environ.items() if k != "FACTOPIA_TIE_SEED"}
+    if tie_seed:
+        env["FACTOPIA_TIE_SEED"] = str(tie_seed)
     p = subprocess.run(["qrun", "conf.yaml"], cwd=d, capture_output=True, text=True, timeout=QRUN_TIMEOUT_S, env=env)
     found = sorted(d.glob("mlruns/*/*/artifacts/portfolio_analysis/report_normal_1day.pkl"))
     if p.returncode != 0 or not found:
@@ -181,17 +188,19 @@ SEED_DEPENDENT = ("annual_return_with_cost", "information_ratio_with_cost", "max
 
 
 def repeated(conf: dict, name: str, work: Path, periods: dict, horizon: int, seeds: int) -> tuple[dict, list]:
-    """同一配置用不同哈希种子各跑一次：收益类指标给中位数、范围与全部取值；rank IC 等只取决于打分，取第一次。"""
+    """默认排序跑一次，再用 seeds 个并列排序种子各跑一次：收益类指标给默认值、中位数、范围与全部取值；
+    rank IC 等只取决于打分，取默认那次。"""
     runs = []
-    for k in range(1, seeds + 1):
-        m, report = evaluate(qrun(conf, work / f"qrun_{name}_{k}", k), periods, horizon)
+    for k in range(0, seeds + 1):            # 0 = 默认（按股票代码）
+        m, report = evaluate(qrun(conf, work / f"qrun_{name}_{k}", k or None), periods, horizon)
         runs.append((m, report))
-        log(f"{name} 种子 {k}：" + "，".join(f"{p} {m[p]['annual_return_with_cost']:.1%}" for p in periods))
+        log(f"{name} {'默认排序' if k == 0 else f'并列种子 {k}'}：" + "，".join(f"{p} {m[p]['annual_return_with_cost']:.1%}" for p in periods))
     out = {}
     for p in periods:
         first = dict(runs[0][0][p])
         for key in SEED_DEPENDENT:
             vals = [r[0][p][key] for r in runs if r[0][p][key] is not None]
+            first[f"{key}_default"] = first[key]
             first[key] = round(float(np.median(vals)), 6) if vals else None
             first[f"{key}_range"] = [min(vals), max(vals)] if vals else None
             first[f"{key}_all"] = vals
@@ -260,7 +269,7 @@ def main(spec_path: str) -> None:
         p = work / "placebo.parquet"
         rnd.to_parquet(p)
         try:
-            m, _ = evaluate(qrun(make_config(base, p, (test_start, test_end)), work / f"qrun_placebo_{seed}", seed),
+            m, _ = evaluate(qrun(make_config(base, p, (test_start, test_end)), work / f"qrun_placebo_{seed}"),
                             {"test": periods["test"]}, horizon)
             runs.append({"seed": seed, **{k: m["test"][k] for k in ("annual_return_with_cost", "max_drawdown_with_cost", "rank_ic")}})
             log(f"安慰剂 {seed}：扣成本年化 {m['test']['annual_return_with_cost']:.1%}")
