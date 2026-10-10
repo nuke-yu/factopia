@@ -1,13 +1,68 @@
-import { lazy, Suspense, useState } from "react";
-import { NavLink, Navigate, Route, Routes } from "react-router-dom";
+import { Component, lazy, Suspense, useState, type ComponentType, type ReactNode } from "react";
+import { NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { ResearchDraftProvider } from "./draft";
 import ResearchPage from "./pages/ResearchPage";
 import AuditPage from "./pages/AuditPage";
 
+/** 按需加载页面。重新部署后旧页面引用的文件名已不存在：加载失败时自动刷新一次，取得新版本。 */
+function lazyPage(load: () => Promise<{ default: ComponentType }>) {
+  return lazy(() => load().then((m) => {
+    try { sessionStorage.removeItem("factopia-reloaded"); } catch { /* 忽略 */ }
+    return m;
+  }, (e) => {
+    let reloaded = false;
+    try { reloaded = sessionStorage.getItem("factopia-reloaded") === "1"; sessionStorage.setItem("factopia-reloaded", "1"); } catch { /* 忽略 */ }
+    if (!reloaded) {
+      window.location.reload();
+      return new Promise<never>(() => undefined);  // 等待刷新
+    }
+    throw e;
+  }));
+}
+
 // 含 3D 库的页面按需加载
-const ProjectsPage = lazy(() => import("./pages/ProjectsPage"));
-const RunPage = lazy(() => import("./pages/RunPage"));
-const ResultsPage = lazy(() => import("./pages/ResultsPage"));
+const ProjectsPage = lazyPage(() => import("./pages/ProjectsPage"));
+const RunPage = lazyPage(() => import("./pages/RunPage"));
+const ResultsPage = lazyPage(() => import("./pages/ResultsPage"));
+
+/** 页面出错时显示原因与刷新按钮，而不是空白页。切换页面后自动恢复。 */
+class PageBoundary extends Component<{ children: ReactNode; resetKey: string }, { error: Error | null }> {
+  state = { error: null as Error | null };
+  static getDerivedStateFromError(error: Error) { return { error }; }
+  componentDidUpdate(prev: { resetKey: string }) {
+    if (prev.resetKey !== this.props.resetKey && this.state.error) this.setState({ error: null });
+  }
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <div className="panel p-5 flex flex-col gap-3 max-w-[70ch]">
+        <div className="font-display font-semibold">页面加载失败</div>
+        <p className="text-sm text-muted">可能是平台刚更新过版本。刷新页面即可加载最新版本；已发起的运行不受影响。</p>
+        <pre className="num text-xs text-faint whitespace-pre-wrap">{this.state.error.message}</pre>
+        <button className="btn btn-primary self-start" onClick={() => window.location.reload()}>刷新页面</button>
+      </div>
+    );
+  }
+}
+
+function Pages() {
+  const location = useLocation();
+  return (
+    <PageBoundary resetKey={location.pathname}>
+      <Suspense fallback={<div className="label">加载中…</div>}>
+        <Routes>
+          <Route path="/" element={<Navigate to="/projects" replace />} />
+          <Route path="/projects" element={<ProjectsPage />} />
+          <Route path="/run" element={<RunPage />} />
+          <Route path="/research" element={<ResearchPage />} />
+          <Route path="/audit" element={<AuditPage />} />
+          <Route path="/results" element={<ResultsPage />} />
+          <Route path="*" element={<Navigate to="/projects" replace />} />
+        </Routes>
+      </Suspense>
+    </PageBoundary>
+  );
+}
 
 const STEPS = [
   { to: "/projects", no: "00", name: "研究项目", hint: "选择或新建" },
@@ -67,17 +122,7 @@ export default function App() {
           </div>
         </header>
         <main className="flex-1 mx-auto w-full max-w-[1680px] px-4 md:px-6 py-6">
-          <Suspense fallback={<div className="label">加载中…</div>}>
-            <Routes>
-              <Route path="/" element={<Navigate to="/projects" replace />} />
-              <Route path="/projects" element={<ProjectsPage />} />
-              <Route path="/run" element={<RunPage />} />
-              <Route path="/research" element={<ResearchPage />} />
-              <Route path="/audit" element={<AuditPage />} />
-              <Route path="/results" element={<ResultsPage />} />
-              <Route path="*" element={<Navigate to="/projects" replace />} />
-            </Routes>
-          </Suspense>
+          <Pages />
         </main>
       </div>
     </ResearchDraftProvider>
