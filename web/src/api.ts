@@ -401,6 +401,29 @@ export type PortfolioResp = { summary: PortfolioSummary | null; feedback: Feedba
 export type PortfolioSeries = { dates: string[]; port: number[]; bench: number[]; weights: Record<string, number[]> };
 export type ReportRef = { name: string; url: string; bytes: number; has_portfolio?: boolean };
 
+// 跨地区审批与审计（Spec 第 14.14 节；BR-22、23、29、47）
+export type ApprovalStep = { role: string; market?: Market; duty: string; hits: string[]; model_exceptions: string[]; state: string };
+export type ApprovalSummary = { id: string; research_id: string; version: number; status: string; status_zh: string; markets: Market[];
+  created_at: string; fingerprint: string; current_role: string | null; waiting_hours: number; step: number; steps: number;
+  approved_markets: Market[] | null; title: string };
+export type ApprovalEvent = { action: string; role: string; by: string; note: string; at: string; prev: string; hash: string; rule?: string;
+  markets?: Market[]; thresholds?: Record<string, number>; step?: number };
+export type Submission = {
+  id: string; research_id: string; version: number; markets: Market[]; status: string; current: number; steps: ApprovalStep[];
+  created_at: string; created_by: string; fingerprint: string; approved_markets: Market[] | null; conditions: { role: string; note: string }[];
+  rule_decisions: Record<string, { rule: string; action: string; by: string; role: string; note: string; at: string }>;
+  materials: { title: string; hypothesis: string; report: { name: string; sha256: string }; code_fingerprint: string;
+    data_snapshot: Record<string, string | null>; rule_packs: Record<string, string>;
+    results: Record<string, { run_id: string | null; loop: number | string | null; rank_ic: number | null; rank_ic_t: number | null; credibility: string | null }>;
+    prechecks: { setup: Precheck; portfolio: Precheck }; transfer: { label: string } | null };
+  lock: null | { locked_at: string; deployment: Market[]; thresholds: Record<string, number>; applicability: Record<string, string>; by: string;
+    conditions: { role: string; note: string }[] };
+};
+export type ApprovalDetail = { submission: Submission; summary: ApprovalSummary; events: ApprovalEvent[];
+  chain: { ok: boolean; events?: number; head?: string; broken_at?: number }; materials_current: boolean; materials_note: string | null;
+  action_zh: Record<string, string> };
+export type ApprovalAct = { role: string; action: string; note?: string; rule?: string; markets?: Market[]; thresholds?: Record<string, number> };
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`/api${path}`, init);
   if (!res.ok) {
@@ -417,6 +440,12 @@ const post = <T,>(path: string, body: unknown) =>
 export const api = {
   pit: () => get<PitStatus>("/pit"),
   rulePacks: () => get<RulePacks>("/rules/packs"),
+  approvals: (researchId?: string) => get<{ items: ApprovalSummary[]; roles: string[] }>(`/approvals${researchId ? `?research_id=${researchId}` : ""}`),
+  approval: (sid: string) => get<ApprovalDetail>(`/approvals/${sid}`),
+  submitApproval: (research_id: string, version: number, note: string) => post<Submission>("/approvals", { research_id, version, note }),
+  approvalAct: (sid: string, body: ApprovalAct) => post<ApprovalDetail>(`/approvals/${sid}/actions`, body),
+  submissionCheck: (id: string, v: number) => get<{ ready: boolean; missing: string[]; report: string | null; open: ApprovalSummary[] }>(
+    `/research/${id}/versions/${v}/submission-check`),
   portfolio: (id: string, v: number) => get<PortfolioResp>(`/research/${id}/versions/${v}/portfolio`),
   buildPortfolio: (id: string, v: number) => post<PortfolioResp>(`/research/${id}/versions/${v}/portfolio`, {}),
   portfolioSeries: (id: string, v: number) => get<PortfolioSeries>(`/research/${id}/versions/${v}/portfolio/series`),

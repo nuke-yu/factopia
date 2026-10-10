@@ -820,6 +820,117 @@ def get_report(name: str):
     return HTMLResponse((REPORTS / name).read_text(encoding="utf-8"))
 
 
+# ---------------------------------------------------------------- 跨地区审批与审计（第 14.14 节）
+
+def _approval_mod():
+    from factopia import approval
+    return approval
+
+
+SUBMITTER = "发起研究员（演示，未登录）"
+
+
+def _materials(research_id: str, version: int) -> dict:
+    """提交材料：研究规格、结论、两次预检、授权组合、最新报告、数据质量、AI 解释、待复核翻译数。"""
+    P = _portfolio_mod()
+    spec = get_version(research_id, version)
+    reps = sorted(REPORTS.glob(f"{research_id}_v{version}_*.html"), reverse=True) if REPORTS.exists() else []
+    exp = store.RESEARCH_DIR / research_id / f"explain_v{version}.json"
+    qp = Path(os.environ.get("FACTOPIA_RUNTIME", "/workspace/runtime")) / "data" / "standardized" / "quality_report.json"
+    uses_text = any(d.get("category") == "text" for d in spec.get("data_needs") or [])
+    pending = treview.queue(None, "pending", 1)["counts"]["pending"] if uses_text else 0
+    return {"spec": spec, "study": study(research_id, version), "rules": _version_rules(research_id, version, {}),
+            "portfolio": P.load(research_id, version), "report": {"name": reps[0].name, "path": reps[0]} if reps else None,
+            "quality": _json(qp) if qp.exists() else None, "text_pending": pending,
+            "explanation": json.loads(exp.read_text(encoding="utf-8")) if exp.exists() else None,
+            "translations": {"uses_text": uses_text, "pending_reviews": pending}}
+
+
+@app.get("/api/research/{research_id}/versions/{version}/submission-check")
+def submission_check(research_id: str, version: int):
+    """WB-05：提交审批前的固定顺序检查。"""
+    A = _approval_mod()
+    m = _materials(research_id, version)
+    return {"ready": not A.preconditions(m), "missing": A.preconditions(m),
+            "report": m["report"]["name"] if m["report"] else None,
+            "open": [s for s in A.list_all(research_id) if s["version"] == version and s["status"] == "in_review"]}
+
+
+class SubmitIn(BaseModel):
+    research_id: str
+    version: int
+    note: str = ""
+
+
+@app.get("/api/approvals")
+def list_approvals(research_id: str | None = None):
+    return {"items": _approval_mod().list_all(research_id), "roles": _approval_mod().roles()}
+
+
+@app.post("/api/approvals")
+def submit_approval(body: SubmitIn):
+    A = _approval_mod()
+    open_ = [s for s in A.list_all(body.research_id) if s["version"] == body.version and s["status"] == "in_review"]
+    if open_:
+        raise HTTPException(422, f"该版本已有审批中的提交：{open_[0]['id']}")
+    try:
+        return A.submit(_materials(body.research_id, body.version), SUBMITTER, body.note)
+    except A.ApprovalError as e:
+        raise HTTPException(422, str(e))
+
+
+def _approval_detail(sid: str) -> dict:
+    A = _approval_mod()
+    try:
+        s = A.load(sid)
+    except A.ApprovalError as e:
+        raise HTTPException(404, str(e))
+    cur = A.current_fingerprint(sid, {"portfolio": _portfolio_mod().load(s["research_id"], s["version"])})
+    return {"submission": s, "summary": A.summary(s), "events": A.events(sid), "chain": A.verify_chain(sid),
+            "materials_current": cur == s["fingerprint"], "materials_note": None if cur == s["fingerprint"] else cur.split(":", 1)[-1] + "在提交后发生变化",
+            "action_zh": A.ACTION_ZH}
+
+
+@app.get("/api/approvals/{sid}")
+def get_approval(sid: str):
+    return _approval_detail(sid)
+
+
+class ActIn(BaseModel):
+    role: str
+    action: str
+    note: str = ""
+    rule: str | None = None
+    markets: list[str] | None = None
+    thresholds: dict | None = None
+
+
+@app.post("/api/approvals/{sid}/actions")
+def approval_action(sid: str, body: ActIn):
+    """审批操作：当前角色才能处理当前步骤；例外须写理由；运营完成部署核对时校验材料指纹与部署范围。"""
+    A = _approval_mod()
+    by = f"模拟用户（{body.role}）"
+    try:
+        s = A.load(sid)
+        cur = A.current_fingerprint(sid, {"portfolio": _portfolio_mod().load(s["research_id"], s["version"])})
+        A.act(sid, body.role, by, body.action, body.note, body.rule, body.markets, body.thresholds, cur)
+    except A.ApprovalError as e:
+        raise HTTPException(422, str(e))
+    return _approval_detail(sid)
+
+
+@app.get("/api/approvals/{sid}/evidence")
+def approval_evidence(sid: str):
+    """审计证据包（zip）：提交材料、全部事件（哈希链）、报告、规则包、因子代码、文件清单与说明。"""
+    from fastapi.responses import Response
+    A = _approval_mod()
+    try:
+        name, data = A.evidence_zip(sid)
+    except A.ApprovalError as e:
+        raise HTTPException(404, str(e))
+    return Response(data, media_type="application/zip", headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
 class RunIn(BaseModel):
     markets: list[str] | None = None
     loops: int = Field(5, ge=1, le=20)

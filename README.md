@@ -122,6 +122,7 @@ $DC run --rm app python -m factopia.export.alpha158
 | `factopia/diagnostics/` | 研究结果诊断：成本与换手、流动性与容量、汇率影响、风险暴露、中性化与定义稳定性、经济意义（Spec 第 14.11 节）；导出后自动运行，`python -m factopia.diagnostics` |
 | `factopia/rules/` | 地区规则包与预检：通用 / 香港 / 英国 / 法国规则包与数据来源登记表（`configs/rules/`），立项锁定前与组合生成后两次预检、建议审批路径；成本与税费从规则包读取（Spec 第 14.12 节）；`python -m factopia.rules`，页面「风控台」 |
 | `factopia/portfolio/` | 授权组合与研究报告：月度只做多组合（约束逐条注明来源）、多币种回测与汇率拆分、Brinson 归因、反馈闭环；中文主报告 + 英文 / 法文证据附件（Spec 第 14.13 节）；页面「组合台」 |
+| `factopia/approval/` | 跨地区审批与审计：提交前置检查、冻结提交材料与指纹、六类角色按序审批、例外处理、获批锁定、哈希链留痕、审计证据包（Spec 第 14.14 节）；页面「审批台」 |
 | `configs/refdata/`、`configs/universe/membership/` | 市场规则、数据字典、人工确认；成分股起止日期（目前为当前名单） |
 | `configs/mandates/` | 模拟客户授权（不含真实客户信息） |
 | `factopia/api/` | 后端接口 |
