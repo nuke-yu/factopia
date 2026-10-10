@@ -57,5 +57,6 @@ def past_runs(markets: list[str], horizon: int) -> list[dict]:
 
 
 def past_runs_lines(items: list[dict]) -> list[str]:
-    """写入研究规格（past_runs），由 context.research_section 发给 AI。"""
-    return [f"[{'adopted' if x['adopted'] else 'rejected'}] ({x['market']}) {x['hypothesis']}" for x in items]
+    """写入研究规格（past_runs），由 context.research_section 发给 AI；相同的假设只保留一条。"""
+    lines = [f"[{'adopted' if x['adopted'] else 'rejected'}] ({x['market']}) {x['hypothesis']}" for x in items]
+    return list(dict.fromkeys(lines))
