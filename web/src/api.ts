@@ -83,6 +83,8 @@ export type Quantiles = {
   spread_mean: number | null; spread_positive_share: number | null; tie_share: number | null;
   dates: string[]; nav: (number | null)[][]; nav_universe: (number | null)[];
 };
+export type PeriodReturn = { days: number; excess: number; bench: number };
+export type Monthly = { months: (PeriodReturn & { year: number; month: number })[]; years: (PeriodReturn & { year: number })[] };
 export type Positions = { dates: string[]; instruments: string[]; weights: number[][] };
 
 export type ResearchSpec = {
@@ -128,6 +130,7 @@ export const api = {
   runs: () => get<Run[]>("/runs"),
   run: (id: string) => get<{ run: Run; rounds: Round[] }>(`/runs/${id}`),
   backtest: (id: string) => get<Record<string, Columns>>(`/runs/${id}/backtest`),
+  monthly: (id: string) => get<Record<string, Monthly>>(`/runs/${id}/monthly`),
   quantiles: (id: string) => get<Record<string, Quantiles>>(`/runs/${id}/quantiles`),
   positions: (id: string, key: string, step = 5) => get<Positions>(`/runs/${id}/positions/${key}?step=${step}`),
   projects: () => get<Project[]>("/projects"),

@@ -9,6 +9,7 @@ import IcSurface from "../components/charts/IcSurface";
 import NavChart from "../components/charts/NavChart";
 import PositionsBars from "../components/charts/PositionsBars";
 import DrawdownChart from "../components/charts/DrawdownChart";
+import MonthlyReturns from "../components/charts/MonthlyReturns";
 import { QuantileBars, QuantileNav } from "../components/charts/QuantileChart";
 
 export default function ResultsPage() {
@@ -138,6 +139,10 @@ function RunSection({ runId }: { runId: string }) {
           : !quantiles.data ? <Loading what="分组收益" />
           : quantiles.data[posKey] ? <QuantileSection q={quantiles.data[posKey]} />
           : <div className="text-muted text-sm">该轮没有分组收益数据（先运行 factopia.export.backtests）。</div>}
+      </Panel>
+
+      <Panel eyebrow={`第 ${posKey} 轮 · 测试期`} title="月度收益">
+        <MonthlyReturns runId={run.run_id} roundKey={posKey} />
       </Panel>
 
       <Panel eyebrow={`第 ${posKey} 轮 · 测试期`} title="持仓轮动">

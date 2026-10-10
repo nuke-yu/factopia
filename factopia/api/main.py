@@ -104,6 +104,27 @@ def signal(run_id: str):
     return {p.stem: _columns(pd.read_parquet(p)) for p in sorted(d.glob("*.parquet"))}
 
 
+def _compound(s: pd.Series) -> float:
+    return float((1 + s).prod() - 1)
+
+
+@app.get("/api/runs/{run_id}/monthly")
+def monthly(run_id: str):
+    """各轮的月度与年度收益（扣成本后超额收益、基准指数，按日复利，与净值图一致）。"""
+    out = {}
+    for p in sorted((_run_dir(run_id) / "backtest").glob("*.parquet")):
+        df = pd.read_parquet(p, columns=["date", "excess_with_cost", "bench"])
+        idx = pd.to_datetime(df["date"])
+        rows = []
+        for keys, g in df.groupby([idx.dt.year, idx.dt.month]):
+            rows.append({"year": int(keys[0]), "month": int(keys[1]), "days": len(g),
+                         "excess": round(_compound(g["excess_with_cost"]), 6), "bench": round(_compound(g["bench"]), 6)})
+        years = [{"year": int(y), "days": len(g), "excess": round(_compound(g["excess_with_cost"]), 6),
+                  "bench": round(_compound(g["bench"]), 6)} for y, g in df.groupby(idx.dt.year)]
+        out[p.stem] = {"months": rows, "years": years}
+    return out
+
+
 @app.get("/api/runs/{run_id}/quantiles")
 def quantiles(run_id: str):
     """各轮的分组收益（按模型打分分 5 组）。"""
