@@ -507,10 +507,22 @@ export type KnowledgeHit = { kind: "factor" | "research" | "field" | "filing"; k
   meta: Record<string, unknown>; score: number; matched: string[]; snippet: string };
 export type KnowledgeSearch = { query: string; method: string; corpus: Record<string, number>; results: KnowledgeHit[];
   expansion: { method: string; terms: Partial<Record<"en" | "zh" | "fr", string[]>>; intent: string } };
+export type ICStats = { rank_ic: number | null; ir: number | null; t: number | null; days: number };
+export type Complement = {
+  market: Market; ok: boolean; reason?: string; horizon?: number; verdict?: string; note?: string; best_single?: string;
+  price_source?: { simulated: boolean; label: string };
+  period?: { start: string; end: string; fit: [string, string]; eval: [string, string] };
+  signals?: { key: string; title: string; run_id: string; loop: number; factors: string[]; kind: string; credibility: string | null;
+    weight: number; full: ICStats; first: ICStats; second: ICStats }[];
+  ic_corr?: Record<string, Record<string, number | null>>; score_corr?: Record<string, number | null>;
+  combined?: { optimal: { second: ICStats; full: ICStats }; equal: { second: ICStats; full: ICStats } };
+  candidates: { key: string; title: string; kind: string; dataset: string | null; credibility: string | null; excluded?: string | null }[];
+};
 export type InternalEvidence = { kind: string; kind_zh: string; id: string; title: string; score: number; prompt: string; ref: string };
 
 export const api = {
   library: () => get<Library>("/library"),
+  complement: (m: Market, keys?: string[]) => get<Complement>(`/complement/${m}${keys && keys.length ? `?keys=${keys.join(",")}` : ""}`),
   knowledge: (q: string, llm = true) => get<KnowledgeSearch>(`/knowledge/search?q=${encodeURIComponent(q)}&llm=${llm}`),
   regions: (markets: Market[], mandate?: string) => get<RegionDiff>(`/research/regions?markets=${markets.join(",")}${mandate ? `&mandate=${mandate}` : ""}`),
   pit: () => get<PitStatus>("/pit"),

@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { Badge, ErrorBox, Loading, Notice, Panel, Stat } from "../components/ui";
+import { Badge, ErrorBox, Loading, Notice, Panel, Seg, Stat } from "../components/ui";
 import EChart from "../components/EChart";
 import VersionPicker, { useVersionPick } from "../components/VersionPicker";
-import { api, type FeedbackDecision, type Market, type PerfStats, type PortfolioSeries, type PortfolioSummary, type ReportRef } from "../api";
+import { api, MARKETS, type FeedbackDecision, type Market, type PerfStats, type PortfolioSeries, type PortfolioSummary, type ReportRef } from "../api";
 import { cssVar, fix, MARKET_LABEL, marketColor, pct, signed, useAsync, useThemeVersion } from "../lib";
 
 // 组合台（Spec 第 14.13 节；BR-03、14、32、40）：授权组合、多币种回测、汇率拆分、Brinson 归因、反馈闭环、研究报告
@@ -213,6 +213,70 @@ function Detail({ id, version }: { id: string; version: number }) {
   );
 }
 
+// 互补组合（第 14.19 节；BR-28）：同一市场多个采纳信号的冗余与合成，前半段定权重、后半段（样本外）评估
+function ComplementPanel() {
+  const [m, setM] = useState<Market>("hk");
+  const [keys, setKeys] = useState<string[] | null>(null);
+  const { data, error, loading } = useAsync(() => api.complement(m, keys ?? undefined), [m, (keys ?? []).join(",")]);
+  const st = (x?: { rank_ic: number | null; ir: number | null; t: number | null }) =>
+    x ? <span className="num">{fix(x.rank_ic, 4)} · IR {fix(x.ir, 2)} · t {fix(x.t, 2)}</span> : "—";
+  const toggle = (k: string, all: string[]) => {
+    const cur = keys ?? all;
+    const next = cur.includes(k) ? cur.filter((x) => x !== k) : [...cur, k];
+    setKeys(next.length >= 2 ? next : cur);
+  };
+  return (
+    <Panel eyebrow="同一市场多个采纳信号 · 前半段定权重、后半段评估" title="互补组合">
+      <div className="flex flex-wrap items-center gap-3 mb-3">
+        <Seg label="市场" value={m} options={MARKETS.map((x) => ({ value: x, label: MARKET_LABEL[x] }))} onChange={(x) => { setM(x); setKeys(null); }} />
+        {data?.price_source?.simulated && <Badge tone="warn">模拟数据，仅用于流程演示</Badge>}
+      </div>
+      {loading ? <Loading what="互补组合" /> : error || !data ? <ErrorBox error={error ?? "无数据"} /> : (
+        <div className="flex flex-col gap-3 text-sm">
+          <div className="flex flex-wrap gap-2 text-xs">
+            {data.candidates.map((c) => {
+              const all = data.candidates.map((x) => x.key);
+              const on = (keys ?? all).includes(c.key);
+              return <label key={c.key} className="flex items-center gap-1"><input id={`cmp-${c.key}`} type="checkbox" checked={on} onChange={() => toggle(c.key, all)} />
+                <span className={on && !c.excluded ? "" : "text-faint"}>{c.title ?? c.key}（{c.key}{c.kind === "text" ? "，文本" : ""}）{c.excluded && ` · 未参与：${c.excluded}`}</span></label>;
+            })}
+          </div>
+          {!data.ok ? <p className="text-muted">{data.reason}</p> : (
+            <>
+              <p><Badge tone={data.verdict?.startsWith("互补") ? "good" : "muted"}>{data.verdict}</Badge></p>
+              <div className="text-xs text-faint">定权重 {data.period!.fit.join(" 至 ")}；评估（样本外）{data.period!.eval.join(" 至 ")}；预测周期 {data.horizon} 日</div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead className="text-muted"><tr>
+                    <th className="text-left font-normal py-1 pr-2">信号</th><th className="text-right font-normal pr-2">权重</th>
+                    <th className="text-left font-normal pr-2">前半段 rank IC</th><th className="text-left font-normal pr-2">后半段 rank IC（样本外）</th>
+                  </tr></thead>
+                  <tbody>
+                    {data.signals!.map((x) => (
+                      <tr key={x.key} className="border-t border-line align-top">
+                        <td className="py-1 pr-2">{x.title}<div className="text-faint">{x.key} · {x.factors.slice(0, 2).join("、")}{x.factors.length > 2 ? " 等" : ""}{x.key === data.best_single ? " · 最好的单个信号" : ""}</div></td>
+                        <td className="pr-2 text-right num">{pct(x.weight, 0)}</td>
+                        <td className="pr-2">{st(x.first)}</td><td className="pr-2">{st(x.second)}</td>
+                      </tr>
+                    ))}
+                    <tr className="border-t border-line-2 font-medium"><td className="py-1 pr-2">合成（按权重）</td><td /><td /><td className="pr-2">{st(data.combined!.optimal.second)}</td></tr>
+                    <tr className="border-t border-line"><td className="py-1 pr-2">合成（等权对照）</td><td /><td /><td className="pr-2">{st(data.combined!.equal.second)}</td></tr>
+                  </tbody>
+                </table>
+              </div>
+              <div className="text-xs">
+                <div className="label mb-1">冗余：打分的平均截面相关</div>
+                {Object.entries(data.score_corr ?? {}).map(([k, c]) => <div key={k} className="num">{k.replace("|", " × ")}：{fix(c, 2)}</div>)}
+              </div>
+              <p className="text-xs text-faint">{data.note}；IR 为逐日 rank IC 的年化信息比率（相邻日期的未来收益有重叠，只作相对比较）</p>
+            </>
+          )}
+        </div>
+      )}
+    </Panel>
+  );
+}
+
 export default function PortfolioPage() {
   const pick = useVersionPick();
   if (pick.loading) return <Loading what="研究项目" />;
@@ -230,6 +294,7 @@ export default function PortfolioPage() {
         <>
           <VersionPicker pick={pick} />
           {pick.id && pick.version > 0 && <Detail key={`${pick.id}-${pick.version}`} id={pick.id} version={pick.version} />}
+          <ComplementPanel />
         </>
       )}
     </div>

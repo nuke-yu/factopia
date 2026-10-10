@@ -49,6 +49,14 @@ rules:
     source: 数据来源登记（configs/rules/data_sources.yaml）
     approvers: [数据负责人]
     impact: 研究结论可用于内部评估；进入生产或对客户报告前须改用授权数据
+  - id: GEN-VIS-001
+    title: 数据来源超出授权的数据可见范围
+    severity: warn
+    stages: [setup, portfolio, release]
+    check: {type: data_visibility}
+    source: 授权条款"数据可见范围"；数据来源登记（visibility）
+    approvers: [数据负责人]
+    impact: 超出范围的数据不得用于该授权的研究结论；如为模拟数据，结论只用于流程演示
   - id: GEN-DATA-003
     title: 使用了模拟数据（结论不构成研究证据）
     severity: warn

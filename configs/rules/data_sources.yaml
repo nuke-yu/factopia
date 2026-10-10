@@ -1,12 +1,13 @@
 # 数据来源登记（BR-45、GEN-DATA 规则）：只有 approved 的来源可以用于研究；limited 可用于 POC，生产前需授权；forbidden 不得使用。
 # 内容为 POC 设计输入，许可条款须由数据负责人与法务确认。
-version: sources-v2026.10.0
+version: sources-v2026.10.1   # 10.1：增加数据可见级别（visibility）与授权条款映射
 owner: 数据负责人（待指定）
 last_review: 2026-10-10
 sources:
   yahoo_finance:
     name: Yahoo Finance（经 yfinance）
     used_for: [price_volume, benchmark, fx, sector]
+    visibility: public
     status: limited
     licence: Yahoo 服务条款（仅个人、非商业用途）
     note: POC 研究可用；生产与对客户展示前须改用授权数据商（LSEG / Bloomberg / FactSet 等）
@@ -14,12 +15,14 @@ sources:
   amf_open_data:
     name: AMF info-financière 开放数据
     used_for: [text]
+    visibility: public
     status: approved
     licence: Licence Ouverte 2.0（Etalab，可商用，需注明来源）
     regions: [fr]
   simulated_demo:
     name: 平台生成的模拟数据（虚构公司）
     used_for: [text]
+    visibility: internal
     status: approved
     licence: 内部生成
     note: 仅用于流程演示，结论不构成研究证据
@@ -27,12 +30,14 @@ sources:
   gleif:
     name: GLEIF 法律实体数据
     used_for: [reference]
+    visibility: public
     status: approved
     licence: CC0
     regions: [hk, uk, fr]
   openfigi:
     name: OpenFIGI
     used_for: [reference]
+    visibility: public
     status: approved
     licence: OpenFIGI 使用条款（开放标准，免费）
     regions: [hk, uk, fr]
@@ -46,10 +51,18 @@ sources:
   hkexnews:
     name: 港交所披露易（HKEXnews）
     used_for: [text]
+    visibility: public
     status: forbidden
     licence: 使用条款禁止自动抓取，禁止用于开发、训练、验证 AI 系统
     note: 须向港交所申请书面授权或采购 IIS 数据服务（Spec 第 11.3.3 节）
     regions: [hk]
+# 数据可见范围（BR-01、02）：每个来源的可见级别；授权"数据可见范围"条款 → 允许的级别（GEN-VIS-001）
+visibility:
+  levels: {public: 公开数据, licensed: 授权商业数据, internal: 内部数据, client: 客户数据}
+  mandate_terms:
+    公开市场数据: [public]
+    公开及授权数据: [public, licensed]
+    内部全部数据: [public, licensed, internal]
 # 研究规格的数据需求类别 → 各市场实际使用的来源（未列出 = 尚未接入）
 category_sources:
   price_volume: {hk: yahoo_finance, uk: yahoo_finance, fr: yahoo_finance}

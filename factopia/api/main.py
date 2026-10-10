@@ -823,6 +823,15 @@ def portfolio_feedback(research_id: str, version: int, body: FeedbackIn):
     return P.record_feedback(research_id, version, body.model_dump() | {"action_zh": P.ACTIONS[body.action]})
 
 
+@app.get("/api/complement/{market}")
+def complement(market: str, keys: str | None = None):
+    """互补组合（BR-28）：同一市场多个采纳信号的冗余与合成（前半段定权重、后半段评估）。"""
+    from factopia.portfolio import combine
+    _check_markets([market])
+    cands = combine.candidates(market, study)
+    return combine.analyse(market, cands, [k for k in (keys or "").split(",") if k] or None)
+
+
 REPORTS = Path(os.environ.get("FACTOPIA_RUNTIME", "/workspace/runtime")) / "reports"
 REPORT_NAME = re.compile(r"^[a-z][a-z0-9_]{2,39}_v\d+_\d{14}\.html$")
 
@@ -843,7 +852,7 @@ def make_report(research_id: str, version: int):
             "daily": pd.read_parquet(dp).set_index("date") if dp.exists() and pf else None,
             "pit": _json(pit) if pit.exists() else None, "quality": _json(qp) if qp.exists() else None,
             "explanation": json.loads(exp.read_text(encoding="utf-8")) if exp.exists() else None,
-            "feedback": P.feedback(research_id, version)}
+            "feedback": P.feedback(research_id, version), "mandate": rule_ctx.mandate(spec.get("mandate"))}
     page = report.render(data)
     REPORTS.mkdir(parents=True, exist_ok=True)
     name = f"{research_id}_v{version}_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}.html"

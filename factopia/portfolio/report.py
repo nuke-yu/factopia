@@ -18,7 +18,8 @@ MARKET = {"zh": {"hk": "香港", "uk": "英国", "fr": "法国", "all": "通用"
           "fr": {"hk": "Hong Kong", "uk": "Royaume-Uni", "fr": "France", "all": "Tous marchés"}}
 SEV = {"en": {"block": "Block", "warn": "Warning", "info": "Info"}, "fr": {"block": "Blocage", "warn": "Alerte", "info": "Information"}}
 L = {
-    "en": {"title": "Appendix A — Evidence (English)", "spec": "Research specification (original text)", "hyp_orig": "Hypothesis as entered",
+    "en": {"title": "Appendix — Evidence (English)", "main_title": "Main report (English, as required by the mandate)",
+           "main_note": "Main report in the mandated language. Figures are identical to the internal Chinese version appended at the end; original-language text is kept verbatim.", "spec": "Research specification (original text)", "hyp_orig": "Hypothesis as entered",
            "hyp": "Normalised hypothesis", "fals": "Falsification test", "signals": "Signal sources by market",
            "run": "Run", "round": "Adopted round", "factors": "Factors (code names)", "round_hyp": "Round hypothesis (AI, original)",
            "eval": "Factor evaluation", "ric": "Rank IC", "t": "t-stat", "ret": "Excess return after costs (ann.)", "verdict": "Verdict",
@@ -32,7 +33,8 @@ L = {
                            "Yahoo Finance data are not point-in-time: adjusted prices are restated after later dividends and splits.",
                            "Taxes and costs come from rule packs that are pending confirmation by local compliance.",
                            "This is a proof of concept with simulated mandates; nothing here is investment advice or a legal conclusion."]},
-    "fr": {"title": "Annexe B — Éléments de preuve (Français)", "spec": "Spécification de recherche (texte original)",
+    "fr": {"title": "Annexe — Éléments de preuve (Français)", "main_title": "Rapport principal (français, selon le mandat)",
+           "main_note": "Rapport principal dans la langue du mandat. Les chiffres sont identiques à la version interne en chinois jointe en fin de document ; les textes en langue originale sont reproduits tels quels.", "spec": "Spécification de recherche (texte original)",
            "hyp_orig": "Hypothèse saisie", "hyp": "Hypothèse normalisée", "fals": "Test de réfutation", "signals": "Sources des signaux par marché",
            "run": "Exécution", "round": "Itération retenue", "factors": "Facteurs (noms dans le code)", "round_hyp": "Hypothèse de l'itération (IA, original)",
            "eval": "Évaluation des facteurs", "ric": "Rank IC", "t": "Statistique t", "ret": "Rendement excédentaire net de coûts (annualisé)",
@@ -126,13 +128,33 @@ def _simulated(st: dict, ms: list[str]) -> list[str]:
     return [m for m in ms if ((st["markets"].get(m) or {}).get("price_source") or {}).get("simulated")]
 
 
+LANG_WORD = {"zh": "中文", "en": "英文", "fr": "法文"}
+
+
+def languages(mandate: dict | None) -> dict:
+    """授权的报告语言（BR-01、02）：如"英文主报告，法文附件" → 主报告 en，附件 [fr]；没有写明时为中文主报告 + 英 / 法附件。
+    平台研究团队使用中文，主报告不是中文时，中文完整版作为内部附录保留。"""
+    term = ((mandate or {}).get("report_language") or "").strip()
+    found = [(term.find(w), k) for k, w in LANG_WORD.items() if w in term]
+    main = next((k for k, w in LANG_WORD.items() if f"{w}主报告" in term), None) or "zh"
+    apps = [k for _, k in sorted(found) if k != main] or [k for k in ("en", "fr") if k != main]
+    return {"main": main, "appendices": apps, "term": term or None, "internal_zh": main != "zh"}
+
+
 def render(d: dict) -> str:
     """d：spec、study、rules（两次预检）、portfolio（summary）、daily、pit、quality、explanation、feedback。"""
     spec, st, pf, rl = d["spec"], d["study"], d.get("portfolio"), d["rules"]
     ms = spec["markets"]
     Z = MARKET["zh"]
+    lg = languages(d.get("mandate"))
+    app_names = "与".join({"en": "English", "fr": "Français"}.get(x, x) for x in lg["appendices"])
+    lang_note = (f"本报告为中文主报告；{app_names}版为证据附件，数字与主报告一致，原文保留。" if lg["main"] == "zh" else
+                 f"授权报告语言为\"{lg['term']}\"：主报告为{LANG_WORD[lg['main']]}，{app_names}为附件，中文完整版为内部附录（供研究团队）。")
     gen = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     base = (pf or {}).get("base_currency") or "—"
+    head_alt = ({"en": f'<div class="meta" lang="en">Research <span class="mono">{e(spec["id"])}</span> · version {spec["version"]} · mandate {e(spec.get("mandate"))} · base currency {e(base)} · main report language: English</div>',
+                 "fr": f'<div class="meta" lang="fr">Recherche <span class="mono">{e(spec["id"])}</span> · version {spec["version"]} · mandat {e(spec.get("mandate"))} · devise de référence {e(base)} · langue du rapport principal : français</div>'}
+                .get(lg["main"], ""))
     out = [f"""<title>{e(spec.get('title_zh') or spec['id'])} · 研究报告 v{spec['version']}</title>
 <style>
 :root{{--ink:#1b2430;--mute:#5b6470;--line:#d9dde3;--bg:#fbfbfc;--acc:#1f5fa8;--bad:#b3261e;--warn:#9a6700}}
@@ -150,8 +172,9 @@ blockquote{{margin:6px 0;padding:6px 12px;border-left:3px solid var(--line);colo
 <div class="meta">Factopia 跨境量化研究平台 · 最小 POC · 生成于 {gen}</div>
 <h1>{e(spec.get('title_zh') or spec['id'])}</h1>
 <div class="meta">研究编号 <span class="mono">{e(spec['id'])}</span> · 版本 v{spec['version']} · 授权 {e((pf or {}).get('mandate_name') or spec.get('mandate'))} · 基础币种 {e(base)} · 报告币种 {e((pf or {}).get('report_currency') or base)}</div>
+{head_alt}
 {"".join(f'<p class="note bad">{e(SIM_NOTE["zh"].format(m=MARKET["zh"][m]))}</p>' for m in _simulated(d["study"], spec["markets"]))}
-<p class="note">本报告为中文主报告；附录 A（English）与附录 B（Français）为证据附件，数字与主报告一致，原文保留。平台只发现、解释和路由，不作投资建议或法律结论；规则内容待各地区合规确认。</p>
+<p class="note">{e(lang_note)}平台只发现、解释和路由，不作投资建议或法律结论；规则内容待各地区合规确认。</p>
 """]
     # ① 运行信息
     runs = [[e(Z[m]), f'<span class="mono">{e((st["markets"].get(m) or {}).get("run_id") or "—")}</span>',
@@ -256,18 +279,22 @@ blockquote{{margin:6px 0;padding:6px 12px;border-left:3px solid var(--line);colo
     lim += [SIM_NOTE["zh"].format(m=Z[m]) for m in _simulated(st, ms)]
     lim += [f"{Z[m]}：{(st['markets'].get(m) or {})['insufficient']}；组合中该市场等权持有股票池。" for m in ms if (st["markets"].get(m) or {}).get("insufficient")]
     out.append("<h2>⑦ 已知局限</h2><ul>" + "".join(f"<li>{e(x)}</li>" for x in lim) + "</ul>")
-    # 附录
-    for lang in ("en", "fr"):
-        out.append(_appendix(lang, d))
+    # 附录：按授权的报告语言排列（主报告不是中文时，中文完整版放在最后作为内部附录）
+    if lg["main"] == "zh":
+        out += [_appendix(x, d) for x in lg["appendices"]]
+    else:
+        out = [out[0], _appendix(lg["main"], d, main=True)] + [_appendix(x, d) for x in lg["appendices"]] + [
+            '<section class="appendix" lang="zh"><h2>内部附录 · 中文完整版（供研究团队）</h2>'] + out[1:] + ["</section>"]
     out.append("</main>")
     return "\n".join(out)
 
 
-def _appendix(lang: str, d: dict) -> str:
+def _appendix(lang: str, d: dict, main: bool = False) -> str:
     T, M = L[lang], MARKET[lang]
     spec, st, pf, rl = d["spec"], d["study"], d.get("portfolio"), d["rules"]
     ms = spec["markets"]
-    s = [f'<section class="appendix" lang="{lang}"><h2>{T["title"]}</h2><p class="note">{T["note"]}</p>'
+    s = [f'<section class="{"main-lang" if main else "appendix"}" lang="{lang}"><h2>{T["main_title"] if main else T["title"]}</h2>'
+         f'<p class="note">{T["main_note"] if main else T["note"]}</p>'
          + "".join(f'<p class="note bad">{e(SIM_NOTE[lang].format(m=M[m]))}</p>' for m in _simulated(st, ms)),
          f'<h3>{T["spec"]}</h3><p><b>{T["hyp_orig"]}</b></p><blockquote>{e(spec.get("hypothesis_original"))}</blockquote>'
          f'<p><b>{T["hyp"]}</b></p><blockquote>{e(spec.get("hypothesis"))}</blockquote><p><b>{T["fals"]}</b></p><blockquote>{e(spec.get("falsification"))}</blockquote>']

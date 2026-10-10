@@ -136,6 +136,27 @@ def check_source_used(rule, ctx, market):
                  {"source": sid, "markets": ms})] if ms else []
 
 
+def check_data_visibility(rule, ctx, market):
+    """授权的数据可见范围（BR-01、02）：用到的来源的可见级别须在授权允许的级别内；条款无法对应时提示人工确认。"""
+    vis = ctx["sources"].get("visibility") or {}
+    term = (ctx["mandate"].get("data_visibility") or "").strip()
+    if not term:
+        return []
+    allowed = (vis.get("mandate_terms") or {}).get(term)
+    if allowed is None:
+        return [_hit("all", f"授权条款\"{term}\"没有对应的可见级别，须数据负责人确认", {"term": term})]
+    levels = vis.get("levels") or {}
+    reg = ctx["sources"]["sources"]
+    bad: dict[str, set] = {}
+    for m, sid, _ in _sources_used(ctx):
+        lv = (reg.get(sid) or {}).get("visibility")
+        if lv and lv not in allowed and (market == "all" or m in (market, "all")):
+            bad.setdefault(sid, set()).add(m)
+    return [_hit(",".join(sorted(ms)), f"{reg[sid]['name']}属于{levels.get(reg[sid]['visibility'], reg[sid]['visibility'])}，"
+                 f"授权只允许{'、'.join(levels.get(x, x) for x in allowed)}（条款：{term}）",
+                 {"source": sid, "visibility": reg[sid]["visibility"], "allowed": allowed, "term": term}) for sid, ms in bad.items()]
+
+
 def check_data_gap(rule, ctx, market):
     reg = ctx["sources"]["category_sources"]
     gaps = [c for c in sorted(ctx["data_categories"]) if c not in reg]
