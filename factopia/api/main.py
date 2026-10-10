@@ -23,6 +23,7 @@ from factopia.research import draft as drafting
 from factopia.research import evidence, mandates, store, verdict
 from factopia.research.context import build_context
 from factopia.research.periods import HORIZONS, split_dates
+from factopia.validate import metrics as vmetrics
 
 RESULTS = Path(os.environ.get("FACTOPIA_RESULTS_DIR", "/workspace/runtime/results"))
 CONFIGS = Path(os.environ.get("FACTOPIA_CONFIGS_DIR", "/workspace/configs"))
@@ -269,7 +270,8 @@ def projects():
                 linked.append(_run_summary(run, "推断", jobs_by_run))
         exported = {r["run_id"] for r in linked}
         pending = [_job_public(j) for j in reversed(all_jobs)
-                   if j["research_id"] == spec["id"] and j.get("run_id") not in exported and j["state"] in ("queued", "running", "failed")]
+                   if j["research_id"] == spec["id"] and j.get("kind") != "validate" and j.get("run_id") not in exported
+                   and j["state"] in ("queued", "running", "failed")]
         states = [r["state"] for r in linked] + [j["state_zh"] for j in pending]
         status = ("运行中" if "运行中" in states else "排队中" if "排队中" in states else "已完成" if "已完成" in states
                   else "已中止" if states else "已锁定" if spec["versions"] else "示例")
@@ -416,7 +418,9 @@ def _study_market(m: str, runs: list[dict], jobs: list[dict], rule: dict) -> dic
     rows = []
     for r in rounds:
         mt = r.get("metrics") or {}
+        sig = _signal_sig(run["run_id"], r["loop"], run["horizon"])
         rows.append({"loop": r["loop"], "decision": r.get("decision"), "rank_ic": mt.get("rank_ic"),
+                     "rank_ic_t": sig.get("t") if sig else None,
                      "return": mt.get("annual_return_with_cost"), "drawdown": mt.get("max_drawdown_with_cost"),
                      "passed": judged[r["loop"]]["passed"], "hypothesis": r.get("hypothesis")})
     focus = verdict.focus_round(rounds)
@@ -428,8 +432,79 @@ def _study_market(m: str, runs: list[dict], jobs: list[dict], rule: dict) -> dic
               "passed": judged[focus["loop"]]["passed"], "hypothesis": focus.get("hypothesis"),
               "factors": [f["name"] for f in focus.get("factors") or []],
               "quantile": {k: qd[k] for k in ("spread_mean", "spread_positive_share", "tie_share", "groups")} if qd else None}
+        sig = _signal_sig(run["run_id"], focus["loop"], run["horizon"])
+        val = _validation(run["run_id"], focus["loop"])
+        vjob = _validate_job(run["run_id"], focus["loop"])
+        fo |= {"significance": sig, "credibility": verdict.credibility(val, sig, rule),
+               "validation": _validation_summary(val), "validation_job": _job_public(vjob) if vjob else None}
     return entry | {"state": state, "run_id": run["run_id"], "cost_usd": run["cost_usd"], "duration_s": run.get("duration_s"),
                     "baseline": (run.get("baseline") or {}).get("metrics"), "rounds": rows, "focus": fo}
+
+
+def _signal_sig(run_id: str, loop, horizon: int) -> dict | None:
+    """测试期逐日 rank IC 的显著性（导出的 signal 文件；Newey-West t 值）。"""
+    p = RESULTS / "runs" / run_id / "signal" / f"{loop}.parquet"
+    if not p.exists():
+        return None
+    return _cached_sig(p, p.stat().st_mtime, horizon)
+
+
+@lru_cache(maxsize=256)
+def _cached_sig(p: Path, mtime: float, horizon: int) -> dict:
+    df = pd.read_parquet(p)
+    return vmetrics.significance(df.set_index("date")["rank_ic"], horizon)
+
+
+def _validation(run_id: str, loop) -> dict | None:
+    p = RESULTS / "runs" / run_id / "validation" / f"{loop}.json"
+    return _json(p) if p.exists() else None
+
+
+def _validation_summary(v: dict | None) -> dict | None:
+    """研究结论页用的摘要：去掉逐日曲线与每次安慰剂的明细。"""
+    if not v:
+        return None
+    return {k: v.get(k) for k in ("status", "periods", "seeds", "started_at", "ended_at", "errors")} | {
+        "ai": v.get("ai"), "baseline": v.get("baseline"),
+        "placebo": {k: (v.get("placebo") or {}).get(k) for k in ("n", "share_ge_ai", "share_ge_baseline", "median")} if v.get("placebo") else None}
+
+
+def _validate_job(run_id: str, loop) -> dict | None:
+    jobs = [j for j in store.list_jobs() if j.get("kind") == "validate" and j.get("target_run") == run_id and j.get("loop") == loop]
+    return jobs[-1] if jobs else None
+
+
+@app.get("/api/runs/{run_id}/validation")
+def run_validation(run_id: str):
+    """可信度检查结果（factopia/validate）：各轮的完整结果（含逐日曲线与安慰剂明细）及相关任务。"""
+    d = _run_dir(run_id) / "validation"
+    items = {p.stem: _json(p) for p in sorted(d.glob("*.json"))} if d.exists() else {}
+    jobs = [_job_public(j) for j in store.list_jobs() if j.get("kind") == "validate" and j.get("target_run") == run_id]
+    return {"items": items, "jobs": jobs}
+
+
+class ValidateIn(BaseModel):
+    loop: int | None = None
+    placebo_n: int = Field(20, ge=0, le=50)
+
+
+@app.post("/api/runs/{run_id}/validate")
+def start_validation(run_id: str, body: ValidateIn):
+    """对某一轮（默认 RD-Agent 最终采纳的轮次）排入可信度检查；已有排队或运行中的同一检查时直接返回该任务。"""
+    d = _run_dir(run_id)
+    run, rounds = _json(d / "run.json"), _json(d / "rounds.json")
+    loop = body.loop
+    if loop is None:
+        focus = verdict.focus_round(rounds)
+        if focus is None:
+            raise HTTPException(422, "这次运行没有被采纳的轮次，可在逐轮表中指定轮次")
+        loop = focus["loop"]
+    if not any(r["loop"] == loop and r.get("metrics") for r in rounds):
+        raise HTTPException(422, f"第 {loop} 轮没有回测结果")
+    existing = _validate_job(run_id, loop)
+    if existing and existing["state"] in ("queued", "running"):
+        return _job_public(existing)
+    return _job_public(store.create_validate_job(run, loop, body.placebo_n))
 
 
 def _study_findings(markets: dict, rule: dict) -> list[dict]:
@@ -454,6 +529,29 @@ def _study_findings(markets: dict, rule: dict) -> list[dict]:
             out.append({"tone": "warn", "text": f"{name}：打分最高的一组比最低的一组平均少赚 {abs(q['spread_mean']):.2%}（每 20 个交易日）。"})
         if q and (q.get("tie_share") or 0) > 0.2:
             out.append({"tone": "warn", "text": f"{name}：约 {q['tie_share']:.0%} 的股票每天得到完全相同的打分，排名先后取决于并列处理。"})
+    for m, e in markets.items():
+        f, name = e.get("focus"), MARKET_ZH[m]
+        cred = (f or {}).get("credibility") or {}
+        noise = cred.get("noise") or {}
+        if noise.get("range"):
+            lo, hi = noise["range"]
+            rep_ = f"（RD-Agent 当时报告 {noise['reported']:.1%}）" if noise.get("reported") is not None else ""
+            out.append({"tone": "warn", "text": f"{name}：同一个模型，只改变打分相同的股票的处理顺序，测试期扣成本年化在 "
+                                                 f"{lo:.1%} 至 {hi:.1%} 之间{rep_}——单次回测的收益很大程度上是运气。"})
+        for c in cred.get("checks", []):
+            if c["key"] == "holdout" and c["ok"] is not None:
+                v = c["value"]
+                t = f"，t = {v['rank_ic_t']:.1f}" if v.get("rank_ic_t") is not None else ""
+                out.append({"tone": "good" if c["ok"] else "bad",
+                            "text": f"{name}：2024 年以后（AI 从未见过的数据）rank IC 为 {v['rank_ic']:.3f}{t}，扣成本年化中位数 "
+                                    f"{v['ai']:.1%}，起点 {v['baseline']:.1%}——{'规律在新数据上仍然成立' if c['ok'] else '规律没有在新数据上延续'}。"})
+            if c["key"] == "placebo" and c["ok"] is not None:
+                v = c["value"]
+                out.append({"tone": "good" if c["ok"] else "bad",
+                            "text": f"{name}：{v['n']} 组随机因子中有 {v['share']:.0%} 的收益不低于 AI 因子"
+                                    f"{'，AI 因子明显好于随机' if c['ok'] else '，AI 因子与随机因子没有明显区别'}。"})
+            if c["key"] == "reproduce" and c["ok"] is False:
+                out.append({"tone": "bad", "text": f"{name}：重新计算的因子值与 RD-Agent 当时的只有 {c['value']:.0%} 一致，代码可能用到了未来数据。"})
     rows = [(m, x) for m, e in markets.items() for x in e.get("rounds", []) if x.get("rank_ic") is not None]
     if rows:
         ok = sum(1 for _, x in rows if x["rank_ic"] * sign > 0)

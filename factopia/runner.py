@@ -8,6 +8,9 @@
 每隔 15 秒导出一次结构化进度（results/runs/<运行编号>/）；每完成一轮回测即标记回测明细待导出（exporter 服务），
 累计费用超过预算或收到停止请求时中止。大模型余额不足、密钥无效时，中止并暂停排队，避免后面的任务连续失败。
 
+研究任务完成且有被采纳的轮次时，自动排入一个可信度检查任务（factopia/validate：未见数据、安慰剂、显著性），
+同样在这个队列中执行，不调用大模型。
+
 任务按顺序执行，不并行：RD-Agent 每次运行都会改写共享源码卷中的配置模板，并使用按市场与周期固定的工作目录。
 """
 import json
@@ -22,6 +25,7 @@ from pathlib import Path
 from factopia.export import rdagent_run
 from factopia.research import store
 from factopia.research.live import ANSI, LiveParser
+from factopia.validate import jobs as validate_jobs
 
 ENTRYPOINT = os.environ.get("FACTOPIA_ENTRYPOINT", "/usr/local/bin/entrypoint.sh")
 POLL_S, EXPORT_EVERY_S, STOP_GRACE_S = 3, 15, 90
@@ -171,6 +175,37 @@ def run_job(job: dict) -> None:
     if run is not None:  # 回测与持仓需要 Qlib 读取，由 exporter 服务（app 镜像）导出
         (rdagent_run.RUNS_DIR / run_id / ".backtest_pending").write_text(store.now())
     log(f"{job['job_id']}: {job['state']}，{job['rounds']} 轮，${job['cost_usd']:.3f}")
+    if job["state"] == "done":
+        enqueue_validation(run_id)
+
+
+def enqueue_validation(run_id: str) -> None:
+    """对 RD-Agent 最终采纳的轮次排入可信度检查。"""
+    try:
+        run = json.loads((rdagent_run.RUNS_DIR / run_id / "run.json").read_text())
+        rounds = json.loads((rdagent_run.RUNS_DIR / run_id / "rounds.json").read_text())
+    except (OSError, json.JSONDecodeError):
+        return
+    adopted = [r for r in rounds if r.get("decision") and r.get("metrics")]
+    if adopted:
+        v = store.create_validate_job(run, adopted[-1]["loop"])
+        log(f"{v['job_id']}: 排入可信度检查 {run_id} 第 {adopted[-1]['loop']} 轮")
+
+
+def run_validation(job: dict) -> None:
+    job.update(state="running", started_at=store.now())
+    store.write_job(job)
+    log(f"{job['job_id']}: 可信度检查 {job['target_run']} 第 {job['loop']} 轮")
+    try:
+        validate_jobs.run(job, QLIB_IMAGE, store.log_path(job["job_id"]), lambda: store.cancel_requested(job["job_id"]))
+        job["state"] = "done"
+    except InterruptedError:
+        job["state"] = "cancelled"
+    except Exception as e:
+        job.update(state="failed", error=str(e)[:800])
+    job["ended_at"] = store.now()
+    store.write_job(job)
+    log(f"{job['job_id']}: {job['state']}{'：' + job['error'] if job.get('error') else ''}")
 
 
 def init_dirs() -> None:
@@ -191,7 +226,7 @@ def main() -> None:
             time.sleep(POLL_S)
             continue
         try:
-            run_job(job)
+            (run_validation if job.get("kind") == "validate" else run_job)(job)
         except Exception:
             job.update(state="failed", ended_at=store.now(), error=traceback.format_exc()[-1200:])
             store.write_job(job)

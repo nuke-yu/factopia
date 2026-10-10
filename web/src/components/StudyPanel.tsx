@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
-import { api, type Check, type Market, type StudyMarket } from "../api";
+import { useState } from "react";
+import { api, type Check, type CredCheck, type Market, type StudyMarket } from "../api";
 import { cssVar, fix, MARKET_LABEL, pct, signed, useAsync } from "../lib";
 import { Badge, ErrorBox, Loading, Panel } from "./ui";
 import StudyScatter from "./charts/StudyScatter";
@@ -22,11 +23,14 @@ export default function StudyPanel({ researchId, version, current }: { researchI
   const s = study.data;
   const markets = s.rule.markets.map((m) => s.markets[m]).filter(Boolean) as StudyMarket[];
   const anyRounds = markets.some((e) => e.rounds.length > 0);
+  const primaryCred = s.markets[s.rule.primary]?.focus?.credibility;
 
   return (
     <Panel eyebrow={`研究结论 · ${s.research_id} v${s.version} · ${s.rule.markets.map((m) => MARKET_LABEL[m]).join(" / ")}`}
       title="按事先写好的标准判定"
-      actions={<Badge tone={OVERALL_TONE[s.overall.state]}>{s.overall.state === "passed" ? s.overall.label : `假设${s.overall.label}`}</Badge>}>
+      actions={<>
+        {primaryCred && primaryCred.state !== "unchecked" && <Badge tone={CRED_TONE[primaryCred.state]}>可信度{primaryCred.label}</Badge>}
+        <Badge tone={OVERALL_TONE[s.overall.state]}>{s.overall.state === "passed" ? s.overall.label : `假设${s.overall.label}`}</Badge></>}>
       <div className="flex flex-col gap-5">
         <div className="grid gap-4 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
           <div className="flex flex-col gap-2">
@@ -36,6 +40,16 @@ export default function StudyPanel({ researchId, version, current }: { researchI
               </span>
               <span className="text-sm text-muted">{s.overall.reason}</span>
             </div>
+            {primaryCred && primaryCred.state !== "unchecked" && (
+              <p className="text-sm">
+                <span className="text-muted">可信度检查（主市场）：</span>
+                <span style={{ color: cssVar(`--${({ credible: "good", doubtful: "bad", pending: "accent", unchecked: "muted" } as const)[primaryCred.state]}`) }}>{primaryCred.label}</span>
+                <span className="text-muted">
+                  {primaryCred.state === "doubtful" && `——未通过：${primaryCred.checks.filter((c) => c.ok === false).map((c) => c.label.replace(/（.*?）/g, "")).join("、")}。即使按标准判定通过，也不能当作研究结论。`}
+                  {primaryCred.state === "credible" && "——显著、在 AI 未见过的数据上延续、明显好于随机因子。"}
+                </span>
+              </p>
+            )}
             <p className="text-sm leading-relaxed">{s.title && <span className="font-medium">{s.title}：</span>}{s.hypothesis}</p>
           </div>
           <div className="text-xs text-muted leading-relaxed flex flex-col gap-1.5">
@@ -99,6 +113,50 @@ function CheckRow({ c }: { c: Check }) {
   );
 }
 
+const CRED_TONE = { unchecked: "muted", pending: "accent", credible: "good", doubtful: "bad" } as const;
+
+function credValue(c: CredCheck): string {
+  const v = c.value;
+  if (v == null) return "—";
+  if (c.key === "significance") return `t = ${(v as number).toFixed(1)}`;
+  if (c.key === "holdout") return `IC ${fix(v.rank_ic, 3)} · ${pct(v.ai)}（起点 ${pct(v.baseline)}）`;
+  if (c.key === "placebo") return `${pct(v.share, 0)}（${v.n} 组）`;
+  return pct(v as number, 1);
+}
+
+/** 可信度检查：显著性、AI 未见过的数据、随机因子对照、复现（factopia/validate）。 */
+function CredibilityBlock({ e }: { e: StudyMarket }) {
+  const f = e.focus!, cred = f.credibility, job = f.validation_job;
+  const [busy, setBusy] = useState(false);
+  const [started, setStarted] = useState<string | null>(null);
+  const running = job && (job.state === "queued" || job.state === "running");
+  return (
+    <div className="border-t border-line pt-2 flex flex-col gap-1">
+      <div className="flex items-center gap-2 text-xs">
+        <span className="label">可信度</span>
+        <Badge tone={CRED_TONE[cred.state]}>{running && cred.state === "unchecked" ? (job!.state === "queued" ? "排队中" : "检查中") : cred.label}</Badge>
+        {cred.noise?.range && <span className="num text-faint ml-auto" title="同一个模型多次回测（打分相同的股票处理顺序不同）的测试期扣成本年化">
+          多次回测 {pct(cred.noise.range[0])}~{pct(cred.noise.range[1])}</span>}
+      </div>
+      <ul className="flex flex-col gap-1">{cred.checks.map((c) => (
+        <li key={c.key} className="flex items-baseline gap-2 text-xs">
+          <span className="num w-3 text-center" style={{ color: cssVar(c.ok === true ? "--good" : c.ok === false ? "--bad" : "--muted") }}>{c.ok === true ? "✓" : c.ok === false ? "✗" : "—"}</span>
+          <span className="text-muted">{c.label}</span>
+          <span className="num ml-auto text-right">{credValue(c)}</span>
+        </li>
+      ))}</ul>
+      {cred.state === "unchecked" && !running && e.run_id && (
+        started ? <span className="text-[11px] text-faint">已排队，约 10–15 分钟</span> : (
+          <button className="btn self-start mt-1" disabled={busy} onClick={async () => {
+            setBusy(true);
+            try { const j = await api.validate(e.run_id!, f.loop); setStarted(j.job_id); } finally { setBusy(false); }
+          }}>运行可信度检查</button>)
+      )}
+      {job?.state === "failed" && cred.state === "unchecked" && <span className="text-[11px] text-bad truncate" title={job.error ?? ""}>上次检查失败：{job.error}</span>}
+    </div>
+  );
+}
+
 function MarketCard({ e, current }: { e: StudyMarket; current: boolean }) {
   const color = cssVar(`--${e.market}`);
   const f = e.focus, q = f?.quantile, b = e.baseline;
@@ -132,6 +190,7 @@ function MarketCard({ e, current }: { e: StudyMarket; current: boolean }) {
             <div><dt className="text-faint">费用 / 耗时</dt><dd className="num">${(e.cost_usd ?? 0).toFixed(2)} / {Math.round((e.duration_s ?? 0) / 60)} 分钟</dd></div>
           </dl>
           <ul className="flex flex-col gap-1 border-t border-line pt-2">{f.checks.map((c) => <CheckRow key={c.key} c={c} />)}</ul>
+          <CredibilityBlock e={e} />
         </>
       ) : done ? (
         <p className="text-xs text-muted">RD-Agent 没有采纳任何一轮：新因子都没有超过起点（扣成本年化 {pct(b?.annual_return_with_cost)}）。</p>

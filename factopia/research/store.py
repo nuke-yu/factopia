@@ -7,6 +7,8 @@
     /workspace/runtime/jobs/<任务编号>.live.json    运行中的实时状态（运行器每 3 秒更新，factopia/research/live.py）
     /workspace/runtime/jobs/.paused                排队暂停（大模型余额不足、密钥无效等，处理后由页面恢复）
 
+可信度检查任务（kind = "validate"）也在同一队列中：target_run 为被检查的运行，loop 为轮次；run_id 始终为空。
+
 任务状态：queued 排队 → running 运行中 → done 完成 / failed 失败 / cancelled 已停止 / budget_stopped 超出预算停止。
 """
 import json
@@ -80,6 +82,19 @@ def create_jobs(research_id: str, version: int, markets: list[str], horizon: int
     return {"batch_id": batch, "jobs": jobs}
 
 
+def create_validate_job(run: dict, loop: int, placebo_n: int = 20) -> dict:
+    """可信度检查任务（factopia/validate）：与研究任务共用一个队列，按顺序执行，不调用大模型。"""
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    research = run.get("research") or {}
+    job = {"job_id": f"{stamp}_{secrets.token_hex(2)}_0_{run['market']}", "batch_id": f"{stamp}_v", "kind": "validate",
+           "research_id": research.get("id"), "version": research.get("version"), "market": run["market"],
+           "horizon": run["horizon"], "loops": 0, "budget_usd": 0.0, "target_run": run["run_id"], "loop": loop,
+           "placebo_n": placebo_n, "state": "queued", "created_at": now(), "started_at": None, "ended_at": None,
+           "run_id": None, "cost_usd": 0.0, "rounds": 0, "error": None}
+    write_job(job)
+    return job
+
+
 def write_job(job: dict) -> None:
     _atomic_write(JOBS_DIR / f"{job['job_id']}.json", json.dumps(job, ensure_ascii=False, indent=2))
 
@@ -140,4 +155,8 @@ def resume() -> None:
 
 def retry_job(job: dict) -> dict:
     """失败或停止的任务：用同一版本、市场与参数重新排队（新的批次）。"""
+    if job.get("kind") == "validate":
+        run = json.loads((RUNTIME / "results" / "runs" / job["target_run"] / "run.json").read_text(encoding="utf-8"))
+        new = create_validate_job(run, job["loop"], job.get("placebo_n", 20))
+        return {"batch_id": new["batch_id"], "jobs": [new]}
     return create_jobs(job["research_id"], job["version"], [job["market"]], job["horizon"], job["loops"], job["budget_usd"])

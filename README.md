@@ -59,7 +59,7 @@ docker compose run --rm rdagent ls /workspace/runtime
 |---|---|
 | `web` | nginx + 静态页面，转发 `/api` |
 | `api` | 后端接口：读结果；AI 起草（调用 `.env` 中的大模型）；版本与任务写入 `runtime/research`、`runtime/jobs` |
-| `runner` | 后台运行器：按顺序执行任务，启动 RD-Agent，每 15 秒导出一次进度，超出费用上限或收到停止请求时中止 |
+| `runner` | 后台运行器：按顺序执行任务，启动 RD-Agent，每 15 秒导出一次进度，超出费用上限或收到停止请求时中止；研究完成后自动排入可信度检查（在 dind 的回测镜像中运行，无网络，约 14 分钟，不调用大模型） |
 | `exporter` | 运行结束后导出逐日回测、持仓、IC 与分组收益（需要 Qlib） |
 
 ```bash
@@ -115,6 +115,7 @@ $DC run --rm app python -m factopia.export.alpha158
 | `factopia/export/` | 结果导出：RD-Agent 日志、回测与持仓、Alpha158 汇总 → `/workspace/runtime/results/` |
 | `factopia/research/` | 研究规格：授权解析、证据包、AI 起草、提示词生成、版本与任务存储 |
 | `factopia/runner.py` | 后台运行器 |
+| `factopia/validate/` | 可信度检查：AI 未见过的 2024 年以后数据、随机因子对照、多种子回测（Spec 第 14.7 节） |
 | `configs/mandates/` | 模拟客户授权（不含真实客户信息） |
 | `factopia/api/` | 后端接口 |
 | `web/` | 前端（React 19、Vite、Tailwind v4、ECharts GL、React Three Fiber） |

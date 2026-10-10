@@ -141,6 +141,7 @@ export type Spec = {
 };
 export type JobState = "queued" | "running" | "done" | "failed" | "cancelled" | "budget_stopped";
 export type Job = {
+  kind?: "validate"; target_run?: string; loop?: number; placebo_n?: number;
   job_id: string; batch_id: string; research_id: string; version: number; market: Market; horizon: number; loops: number;
   budget_usd: number; state: JobState; state_zh: string; created_at: string; started_at: string | null; ended_at: string | null;
   run_id: string | null; cost_usd: number; rounds: number; error: string | null;
@@ -159,13 +160,42 @@ export type LiveState = {
 export type Check = { key: "rank_ic" | "return" | "drawdown"; label: string; value: number | null; ref: number | null; ok: boolean | null };
 export type RoundVerdict = { loop: number; checks: Check[]; passed: boolean | null };
 export type VerdictRule = { primary: Market; ric_sign: 1 | -1; sign_from_text: boolean; primary_market: boolean };
+// ── 可信度检查（factopia/validate，Spec 第 14.7 节）──
+export type Significance = { mean: number | null; t: number | null; n: number; low: number | null; high: number | null };
+export type ValPeriod = {
+  start: string | null; end: string | null; days: number;
+  annual_return_with_cost: number | null; annual_return_with_cost_range?: [number, number] | null; annual_return_with_cost_all?: number[];
+  max_drawdown_with_cost: number | null; max_drawdown_with_cost_range?: [number, number] | null;
+  information_ratio_with_cost: number | null; annual_return_without_cost: number | null;
+  rank_ic: number | null; rank_ic_t: number | null; rank_ic_low: number | null; rank_ic_high: number | null;
+  spread_mean?: number | null; spread_positive_share?: number | null; tie_share?: number | null;
+};
+export type Validation = {
+  run_id: string; loop: number; market: Market; horizon: number; status: "placebo" | "done"; seeds: number;
+  started_at: string; ended_at?: string; errors: string[];
+  periods: { test: { start: string; end: string }; holdout: { start: string; end: string } };
+  factors: { name: string; n: number; covered: number; match_share: number; corr: number | null }[];
+  ai: { test: ValPeriod; holdout: ValPeriod }; baseline: { test: ValPeriod; holdout: ValPeriod };
+  curve: { dates: string[]; ai: number[][]; baseline: number[][] };
+  original: { ai: Metrics | null; baseline: Metrics | null } | null;
+  placebo?: { n: number; runs: { seed: number; annual_return_with_cost: number | null; max_drawdown_with_cost: number | null; rank_ic: number | null }[];
+    share_ge_ai: number | null; share_ge_baseline: number | null; median: number | null };
+};
+export type CredCheck = { key: "significance" | "holdout" | "reproduce" | "placebo"; label: string; ok: boolean | null; value: any };
+export type Credibility = {
+  state: "unchecked" | "pending" | "credible" | "doubtful"; label: string; checks: CredCheck[];
+  noise: { range: [number, number] | null; seeds: number | null; reported: number | null } | null;
+};
 export type StudyMarket = {
   market: Market; primary: boolean; state: JobState | "none" | "incomplete"; run_id: string | null; attempts: number; job: Job | null;
   cost_usd?: number; duration_s?: number | null; baseline?: Metrics | null;
-  rounds: { loop: number; decision: boolean | null; rank_ic: number | null; return: number | null; drawdown: number | null; passed: boolean | null; hypothesis: string | null }[];
+  rounds: { loop: number; decision: boolean | null; rank_ic: number | null; rank_ic_t: number | null; return: number | null; drawdown: number | null; passed: boolean | null; hypothesis: string | null }[];
   focus: {
     loop: number; metrics: Metrics; checks: Check[]; passed: boolean | null; hypothesis: string | null; factors: string[];
     quantile: { spread_mean: number | null; spread_positive_share: number | null; tie_share: number | null; groups: number } | null;
+    significance: Significance | null; credibility: Credibility; validation_job: Job | null;
+    validation: (Pick<Validation, "status" | "periods" | "seeds" | "started_at" | "ended_at" | "errors" | "ai" | "baseline"> & {
+      placebo: { n: number; share_ge_ai: number | null; share_ge_baseline: number | null; median: number | null } | null }) | null;
   } | null;
 };
 export type Study = {
@@ -213,6 +243,8 @@ export const api = {
     run: Run & { state: ProjectRun["state"] }; rounds: Round[]; job: Job | null; batch: Job[];
     verdicts: RoundVerdict[] | null; rule: VerdictRule | null;
   }>(`/runs/${id}`),
+  validation: (runId: string) => get<{ items: Record<string, Validation>; jobs: Job[] }>(`/runs/${runId}/validation`),
+  validate: (runId: string, loop?: number) => post<Job>(`/runs/${runId}/validate`, loop == null ? {} : { loop }),
   study: (id: string, version: number) => get<Study>(`/research/${id}/versions/${version}/study`),
   backtest: (id: string) => get<Record<string, Columns>>(`/runs/${id}/backtest`),
   monthly: (id: string) => get<Record<string, Monthly>>(`/runs/${id}/monthly`),

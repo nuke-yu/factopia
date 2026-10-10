@@ -17,6 +17,7 @@ COPY factopia/__init__.py factopia/__init__.py
 COPY factopia/api factopia/api
 COPY factopia/research factopia/research
 COPY factopia/factors/__init__.py factopia/factors/stats.py factopia/factors/families.py factopia/factors/
+COPY factopia/validate/__init__.py factopia/validate/metrics.py factopia/validate/
 COPY configs/research /workspace/configs/research
 COPY configs/mandates /workspace/configs/mandates
 COPY configs/rdagent/context /workspace/configs/rdagent/context

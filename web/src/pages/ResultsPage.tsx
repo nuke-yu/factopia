@@ -12,6 +12,7 @@ import DrawdownChart from "../components/charts/DrawdownChart";
 import MonthlyReturns from "../components/charts/MonthlyReturns";
 import { QuantileBars, QuantileNav } from "../components/charts/QuantileChart";
 import StudyPanel from "../components/StudyPanel";
+import ValidationPanel from "../components/ValidationPanel";
 
 export default function ResultsPage() {
   const runs = useAsync(() => api.runs(), []);
@@ -124,6 +125,8 @@ function RunSection({ runId }: { runId: string }) {
           </div>
         </Panel>
       </div>
+
+      {best && <ValidationPanel runId={run.run_id} loop={best.loop} />}
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]">
         <Panel eyebrow="RD-Agent · 逐轮" title="AI 研究轨迹" actions={<ViewToggle precise={precise} onChange={setPrecise} />}>

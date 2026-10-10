@@ -94,3 +94,46 @@ def overall(markets: dict, rule: dict) -> dict:
         parts.append(f"其他市场中 rank IC 方向一致的：{'、'.join(same) or '没有'}" + (f"（{'、'.join(pending)}尚未完成）" if pending else ""))
     parts.append("原文中的其他条件（如 t 值门槛）平台未检验，需人工确认")
     return {"state": "passed", "label": "主市场通过", "reason": "；".join(parts)}
+
+
+# ── 可信度检查（factopia/validate，Spec 第 14.7 节）──────────────────────────
+
+PLACEBO_MAX_SHARE = 0.10   # 随机因子达到同样收益的比例不超过 10%
+REPRO_MIN_SHARE = 0.99     # 重新计算的因子值与 RD-Agent 当时的值一致的比例
+
+
+def credibility(validation: dict | None, sig: dict | None, rule: dict) -> dict:
+    """采纳轮次的可信度：显著性（测试期）、未见数据、安慰剂、复现；回测随机性作为说明，不计入通过与否。
+
+    validation 为 worker 的输出（可能为空或尚未完成）；sig 为测试期逐日 rank IC 的显著性（导出的 signal 文件）。
+    """
+    s = rule["ric_sign"]
+    items = []
+    t = (sig or {}).get("t")
+    items.append({"key": "significance", "label": "测试期 rank IC 显著（|t| > 2 且方向一致）",
+                  "value": t, "ok": None if t is None else (t * s > 2)})
+    v = validation if validation and validation.get("status") in ("placebo", "done") else None
+    if v:
+        ai, bl = v["ai"]["holdout"], v["baseline"]["holdout"]
+        ric, r, br = ai.get("rank_ic"), ai.get("annual_return_with_cost"), bl.get("annual_return_with_cost")
+        items.append({"key": "holdout", "label": "2024 年以后（AI 未见过）rank IC 方向一致且收益高于起点",
+                      "value": {"rank_ic": ric, "rank_ic_t": ai.get("rank_ic_t"), "ai": r, "baseline": br,
+                                "ai_range": ai.get("annual_return_with_cost_range"), "baseline_range": bl.get("annual_return_with_cost_range")},
+                      "ok": None if ric is None or r is None or br is None else (ric * s > 0 and r > br)})
+        rep = [f["match_share"] for f in v.get("factors", [])]
+        items.append({"key": "reproduce", "label": "因子可复现（重新计算的值与 RD-Agent 当时一致）",
+                      "value": min(rep) if rep else None, "ok": None if not rep else min(rep) >= REPRO_MIN_SHARE})
+    pl = (validation or {}).get("placebo") if validation and validation.get("status") == "done" else None
+    if pl and pl.get("share_ge_ai") is not None:
+        items.append({"key": "placebo", "label": f"随机因子达到同样收益的比例不超过 {PLACEBO_MAX_SHARE:.0%}",
+                      "value": {"share": pl["share_ge_ai"], "n": pl["n"], "median": pl.get("median")},
+                      "ok": pl["share_ge_ai"] <= PLACEBO_MAX_SHARE})
+    noise = None
+    if v:
+        rng = v["ai"]["test"].get("annual_return_with_cost_range")
+        noise = {"range": rng, "seeds": v.get("seeds"), "reported": ((v.get("original") or {}).get("ai") or {}).get("annual_return_with_cost")}
+    done = validation is not None and validation.get("status") == "done"
+    oks = [i["ok"] for i in items]
+    state = ("unchecked" if not v else "pending" if not done or None in oks else "credible" if all(oks) else "doubtful")
+    label = {"unchecked": "未检查", "pending": "检查中", "credible": "可信", "doubtful": "存疑"}[state]
+    return {"state": state, "label": label, "checks": items, "noise": noise}
