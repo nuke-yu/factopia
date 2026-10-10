@@ -13,6 +13,7 @@ import MonthlyReturns from "../components/charts/MonthlyReturns";
 import { QuantileBars, QuantileNav } from "../components/charts/QuantileChart";
 import StudyPanel from "../components/StudyPanel";
 import ValidationPanel from "../components/ValidationPanel";
+import PitNotice from "../components/PitNotice";
 
 export default function ResultsPage() {
   const runs = useAsync(() => api.runs(), []);
@@ -36,6 +37,7 @@ export default function ResultsPage() {
           </select>
         </div>
       </div>
+      <PitNotice />
       {runs.error && <ErrorBox error={runs.error} />}
       {runs.data && runs.data.length === 0 && (
         <Notice tone="accent" title="还没有导出的运行结果">先运行 factopia.export.rdagent_run 与 factopia.export.backtests（见 README）。</Notice>

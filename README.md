@@ -118,6 +118,8 @@ $DC run --rm app python -m factopia.export.alpha158
 | `factopia/validate/` | 可信度检查：AI 未见过的 2024 年以后数据、随机因子对照、多种子回测（Spec 第 14.7 节） |
 | `factopia/text/` | 多语言公告与文本信号：法国 AMF 真实公告、香港 / 英国模拟数据，概念标签 / 译文 / 置信度、语言专家复核、按实际可获取时间生成信号、三市场检验、带引用的检索与 AI 摘要（Spec 第 14.9 节）；`python -m factopia.text all`，页面「情报台」 |
 | `configs/text/glossary.yaml` | 四类风险概念与中 / 英 / 法术语表（带版本） |
+| `factopia/refdata/` | 参考数据与时间点一致性：证券主数据（GLEIF 法律实体、OpenFIGI 标识、跨市场挂牌与存托凭证、主要上市地、行业、财务年度、会计口径）、公司行动、成分股起止日期、各数据域的时间点状态（Spec 第 14.10 节）；`python -m factopia.refdata all`，页面「数据台」 |
+| `configs/refdata/`、`configs/universe/membership/` | 市场规则、数据字典、人工确认；成分股起止日期（目前为当前名单） |
 | `configs/mandates/` | 模拟客户授权（不含真实客户信息） |
 | `factopia/api/` | 后端接口 |
 | `web/` | 前端（React 19、Vite、Tailwind v4、ECharts GL、React Three Fiber） |

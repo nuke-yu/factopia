@@ -26,6 +26,7 @@ const ProjectsPage = lazyPage(() => import("./pages/ProjectsPage"));
 const RunPage = lazyPage(() => import("./pages/RunPage"));
 const ResultsPage = lazyPage(() => import("./pages/ResultsPage"));
 const IntelPage = lazyPage(() => import("./pages/IntelPage"));
+const DataPage = lazyPage(() => import("./pages/DataPage"));
 
 /** 页面出错时显示原因与刷新按钮，而不是空白页。切换页面后自动恢复。 */
 class PageBoundary extends Component<{ children: ReactNode; resetKey: string }, { error: Error | null }> {
@@ -60,6 +61,7 @@ function Pages() {
           <Route path="/audit" element={<AuditPage />} />
           <Route path="/results" element={<ResultsPage />} />
           <Route path="/intel" element={<IntelPage />} />
+          <Route path="/data" element={<DataPage />} />
           <Route path="*" element={<Navigate to="/projects" replace />} />
         </Routes>
       </Suspense>
@@ -121,16 +123,19 @@ export default function App() {
                 </div>
               ))}
               <span className="mx-2 h-5 border-l border-line" aria-hidden />
-              <NavLink
-                to="/intel"
-                className={({ isActive }) =>
-                  `flex items-center gap-2 h-9 px-3 rounded border transition-colors whitespace-nowrap ${
-                    isActive ? "border-accent/60 bg-accent/10 text-text" : "border-transparent text-muted hover:text-text"
-                  }`}
-              >
-                <span className="font-medium">情报台</span>
-                <span className="hidden 2xl:inline text-xs text-faint">多语言公告</span>
-              </NavLink>
+              {[{ to: "/intel", name: "情报台", hint: "多语言公告" }, { to: "/data", name: "数据台", hint: "主数据与时间点" }].map((d) => (
+                <NavLink
+                  key={d.to}
+                  to={d.to}
+                  className={({ isActive }) =>
+                    `flex items-center gap-2 h-9 px-3 rounded border transition-colors whitespace-nowrap ${
+                      isActive ? "border-accent/60 bg-accent/10 text-text" : "border-transparent text-muted hover:text-text"
+                    }`}
+                >
+                  <span className="font-medium">{d.name}</span>
+                  <span className="hidden 2xl:inline text-xs text-faint">{d.hint}</span>
+                </NavLink>
+              ))}
             </nav>
             <div className="ml-auto"><ThemeToggle /></div>
           </div>

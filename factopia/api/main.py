@@ -806,3 +806,71 @@ def text_review_decide(body: ReviewIn):
         raise HTTPException(404, str(e))
     except ValueError as e:
         raise HTTPException(422, str(e))
+
+
+# ---------------------------------------------------------------- 数据台：证券主数据、公司行动、数据字典、时间点一致性（Spec 第 14.10 节）
+REFDATA = Path(os.environ.get("FACTOPIA_RUNTIME", "/workspace/runtime")) / "refdata"
+
+
+def _records(df: pd.DataFrame) -> list[dict]:
+    return json.loads(df.to_json(orient="records", force_ascii=False))
+
+
+def _ref_parquet(name: str) -> pd.DataFrame:
+    p = REFDATA / f"{name}.parquet"
+    if not p.exists():
+        raise HTTPException(404, "参考数据尚未生成（先运行 python -m factopia.refdata all）")
+    return pd.read_parquet(p)
+
+
+@app.get("/api/pit")
+def pit_status():
+    """各数据域的时间点一致性状态；所有结果页面据此标注（BR-18）。"""
+    return _json(RESULTS / "pit_status.json")
+
+
+@app.get("/api/refdata/summary")
+def refdata_summary():
+    def rd(name):
+        p = REFDATA / name
+        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
+    pit = RESULTS / "pit_status.json"
+    return {"master": rd("master_summary.json"), "actions": rd("actions_summary.json"),
+            "pit": json.loads(pit.read_text(encoding="utf-8")) if pit.exists() else None}
+
+
+@app.get("/api/refdata/securities")
+def refdata_securities(market: str | None = Query(None, pattern="^(hk|uk|fr)$")):
+    sec = _ref_parquet("securities")
+    rel = _ref_parquet("relations")
+    if market:
+        sec = sec[sec["market"] == market]
+    multi = sec.groupby("issuer_id")["market"].nunique()
+    sec = sec.assign(multi_market=sec["issuer_id"].map(multi).fillna(1) > 1)
+    rel = rel[rel["issuer_id"].isin(sec["issuer_id"])]
+    return {"securities": _records(sec), "relations": _records(rel)}
+
+
+@app.get("/api/refdata/actions")
+def refdata_actions(symbol: str | None = None, type: str | None = None, limit: int = Query(500, le=5000)):
+    df = _ref_parquet("corporate_actions")
+    if symbol:
+        df = df[df["symbol"] == symbol]
+    if type:
+        df = df[df["type"] == type]
+    counts = df["type"].value_counts().to_dict()
+    return {"total": len(df), "counts": counts, "items": _records(df.sort_values("date", ascending=False).head(limit))}
+
+
+@app.get("/api/refdata/dictionary")
+def refdata_dictionary():
+    f = yaml.safe_load((CONFIGS / "refdata" / "fields.yaml").read_text(encoding="utf-8"))
+    m = yaml.safe_load((CONFIGS / "refdata" / "markets.yaml").read_text(encoding="utf-8"))
+    mem = {}
+    for mk in MARKETS:
+        p = CONFIGS / "universe" / "membership" / f"{mk}.csv"
+        if p.exists():
+            d = pd.read_csv(p, dtype=str).fillna("")
+            mem[mk] = {"rows": len(d), "sources": d["source"].value_counts().to_dict(),
+                       "point_in_time": bool(len(d)) and not (d["source"] == "current_list").any()}
+    return {"fields": f, "markets": m, "membership": mem}

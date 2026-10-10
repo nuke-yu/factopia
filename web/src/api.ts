@@ -279,6 +279,39 @@ export type TextSummary = {
   citations: { n: number; dataset: string; doc_id: string; paragraph: number; company: string; title: string;
     published_at: string; available_at: string; simulated: boolean; url: string | null }[];
 };
+// ---------------------------------------------------------------- 数据台：参考数据与时间点一致性
+export type PitDomain = { key: string; name: string; used_in_backtest: boolean; business_date: string; published_at: string;
+  available_at: string; status: "ok" | "warn"; note: string };
+export type PitStatus = { built_at: string; point_in_time: boolean; label: string; reasons: string[]; domains: PitDomain[];
+  membership: Record<string, string> };
+export type Security = {
+  symbol: string; market: Market; name: string; long_name: string | null; exchange: string; currency: string;
+  figi: string | null; composite_figi: string | null; share_class_figi: string | null; security_type: string | null;
+  isin: string | null; lei: string | null; legal_name: string | null; lei_method: string | null; jurisdiction: string | null;
+  sector: string | null; industry: string | null; hq_country: string | null; reporting_currency: string | null;
+  fiscal_year_end_month: number | null; accounting: string; accounting_basis: string; reporting: string;
+  issuer_id: string; primary_listing: string | null; primary_listing_basis: string; is_primary: boolean | null;
+  snapshot_at: string | null; multi_market: boolean;
+};
+export type Relation = { issuer_id: string; venue: string; venue_zh: string | null; ticker: string; name: string | null;
+  security_type: string | null; relation: string; relation_zh: string; in_universe: boolean; status: string; note: string | null };
+export type CorpAction = { symbol: string; market: Market; date: string; type: string; type_zh: string; value: number | null;
+  detail: string; source: string };
+export type RefSummary = {
+  master: { securities: number; issuers: number; with_lei: number; with_figi: number; with_isin: number;
+    relations: Record<string, number>; multi_market_issuers: number; primary_unresolved: number; built_at: string } | null;
+  actions: { total: number; by_type: Record<string, number>; symbols_with_actions: number;
+    adjustment_checks: { symbol: string; date: string; ratio: number; adjusted_return: number; raw_jump: number; ok: boolean }[];
+    adjustment_failures: unknown[]; not_covered: string[]; built_at: string } | null;
+  pit: PitStatus | null;
+};
+export type DictField = { name: string; zh: string; unit: string; source: string; adjustment: string; available: string; note?: string };
+export type RefDictionary = {
+  fields: { version: string; fields: DictField[] };
+  markets: { version: string; markets: Record<Market, { name: string; exchange: string; timezone: string; currency: string;
+    close_local: string; eod_delay_min: number; reporting: string; accounting_default: string }> };
+  membership: Record<string, { rows: number; sources: Record<string, number>; point_in_time: boolean }>;
+};
 export type ReviewDecision = { key: string; action: string; reviewer: string; note: string; at: string; concepts: TextConcept[] | null; translation: Record<string, string> | null };
 export type ReviewItem = {
   key: string; dataset: string; doc_id: string; i: number; simulated: boolean; company: string; instrument: string; title: string;
@@ -303,6 +336,16 @@ const post = <T,>(path: string, body: unknown) =>
   request<T>(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
 export const api = {
+  pit: () => get<PitStatus>("/pit"),
+  refSummary: () => get<RefSummary>("/refdata/summary"),
+  securities: (market?: Market) => get<{ securities: Security[]; relations: Relation[] }>(`/refdata/securities${market ? `?market=${market}` : ""}`),
+  actions: (symbol?: string, type?: string) => {
+    const p = new URLSearchParams({ limit: "800" });
+    if (symbol) p.set("symbol", symbol);
+    if (type) p.set("type", type);
+    return get<{ total: number; counts: Record<string, number>; items: CorpAction[] }>(`/refdata/actions?${p}`);
+  },
+  dictionary: () => get<RefDictionary>("/refdata/dictionary"),
   textOverview: () => get<TextOverview>("/text/overview"),
   textFilings: (ds: string, instrument?: string) =>
     get<{ dataset: string; simulated: boolean; source: string; licence: string; total: number; items: TextFiling[] }>(

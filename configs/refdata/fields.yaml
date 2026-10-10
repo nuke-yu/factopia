@@ -1,0 +1,16 @@
+# 数据字典（BR-17）：研究中使用的字段的定义、单位、来源、复权与可用时间规则。
+version: fields-v1
+fields:
+  - {name: open, zh: 开盘价, unit: 本地币种, source: Yahoo Finance 日线, adjustment: 分红与拆股复权（auto_adjust）, available: 当日收盘后 + eod_delay_min, note: 英股便士已换算为英镑；报价为其他币种的股票按当日汇率换算}
+  - {name: high, zh: 最高价, unit: 本地币种, source: Yahoo Finance 日线, adjustment: 同上, available: 同上}
+  - {name: low, zh: 最低价, unit: 本地币种, source: Yahoo Finance 日线, adjustment: 同上, available: 同上}
+  - {name: close, zh: 收盘价, unit: 本地币种, source: Yahoo Finance 日线, adjustment: 同上（收益为含分红的总收益）, available: 同上}
+  - {name: volume, zh: 成交量, unit: 股, source: Yahoo Finance 日线, adjustment: 拆股复权, available: 同上}
+  - {name: factor, zh: 复权因子, unit: 无, source: 平台, adjustment: 价格已复权，恒为 1, available: —}
+  - {name: fx, zh: 汇率, unit: 报价货币 / 基础货币, source: Yahoo Finance（GBPHKD=X 等）, adjustment: 无, available: 当日伦敦收盘后}
+  - {name: risk_change, zh: 管理层风险表述变化, unit: 每百段净风险表述的变化, source: AMF 公告（法国）/ 模拟数据（香港、英国）, adjustment: —, available: 公告正式发布 + 处理延迟，按收盘时刻顺延（Spec 第 14.9 节）}
+  - {name: sector / industry, zh: 行业分类, unit: —, source: Yahoo Finance（Morningstar 口径）, adjustment: —, available: 当前快照，非时间点一致, note: 不是 GICS / ICB；正式使用需数据商授权的行业分类}
+  - {name: fiscal_year_end, zh: 财务年度结束月, unit: 月, source: Yahoo Finance, adjustment: —, available: 当前快照}
+  - {name: reporting_currency, zh: 财务报告币种, unit: —, source: Yahoo Finance, adjustment: —, available: 当前快照, note: 可能与交易币种不同（如汇丰以美元报告、在香港以港元交易）}
+  - {name: lei, zh: 法律实体识别码, unit: —, source: GLEIF 开放数据（CC0）, adjustment: —, available: 当前快照}
+  - {name: figi / share_class_figi, zh: 金融工具全球识别码 / 股份类别识别码, unit: —, source: OpenFIGI（开放标准）, adjustment: —, available: 当前快照, note: 不同交易所挂牌的同一股份类别有相同的 share_class_figi}

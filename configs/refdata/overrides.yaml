@@ -1,0 +1,11 @@
+# 人工确认与修正（数据负责人维护）。自动匹配错误或需要确认的条目在此覆盖，并写明来源与确认人。
+# securities:
+#   0005.HK: {primary_listing: LN, note: "...", confirmed_by: "", confirmed_at: ""}
+# relations_reject:   # 自动发现但确认不成立的关联（share_class_figi 或 figi）
+#   - BBG000XXXXXX
+# relations_add:     # 自动检索未覆盖的关联（OpenFIGI 检索只看第一页结果，可能漏掉），人工补录并写明来源
+#   - {symbol: 9988.HK, venue: US, ticker: BABA, relation: depositary_receipt, name: ALIBABA GROUP HOLDING-SP ADR,
+#      note: "纽约证券交易所 ADR", source: "", confirmed_by: "", confirmed_at: ""}
+securities: {}
+relations_reject: []
+relations_add: []

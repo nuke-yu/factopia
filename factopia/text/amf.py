@@ -198,3 +198,21 @@ def collect(companies: int | None = None, start: str = "2019-01-01", end: str | 
     meta = meta.sort_values("published_at").reset_index(drop=True)
     meta.to_parquet(meta_path, index=False)
     return meta
+
+
+def ticker_history() -> dict:
+    """同一 ISIN 在 AMF 记录中使用过的交易代码与日期区间（公司行动：代码变更，第 14.10 节）。"""
+    d = ds_dir("fr")
+    isins = pd.read_csv(d / "isin_map.csv").dropna(subset=["isin"])
+    tk, dt = "identificationsociete_iso_code_tkr_iso_cd_tkr", "informationdeposee_inf_dat_emt"
+    out = {}
+    for inst, isin in zip(isins["instrument"], isins["isin"]):
+        r = _get({"select": f"{tk}, min({dt}) as first, max({dt}) as last, count(*) as n",
+                  "where": f'identificationsociete_iso_cd_isi="{isin}" and {tk} is not null',
+                  "group_by": tk, "limit": 50})
+        # 去掉占位代码（99999999）与偶发的笔误（少于 20 条记录）
+        rows = [{"ticker": x[tk], "first": x["first"], "last": x["last"], "n": x["n"]}
+                for x in r.get("results", []) if x.get(tk) and x[tk].isalpha() and x[tk].isupper() and x["n"] >= 20]
+        out[isin] = {"instrument": inst, "tickers": rows}
+    write_json(d / "ticker_history.json", out)
+    return out

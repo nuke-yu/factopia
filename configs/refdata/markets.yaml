@@ -1,0 +1,61 @@
+# 各市场的参考数据规则（BR-15、17、18）。由数据负责人维护；version 随修改递增，结果中记录所用版本。
+version: markets-v1
+markets:
+  hk:
+    name: 香港
+    exchange: 香港交易所（XHKG）
+    figi_exch: HK
+    timezone: Asia/Hong_Kong
+    currency: HKD
+    close_local: "16:00"
+    # 日线收盘数据从收盘到可用的保守延迟（数据商日终文件），计入行情的"实际可获取时间"
+    eod_delay_min: 60
+    reporting: 中期 + 年度业绩（上市规则要求）；部分公司另发季度营运数据
+    accounting_default: HKFRS（与 IFRS 等效）；内地注册的 H 股公司可采用中国企业会计准则（CASBE）
+  uk:
+    name: 英国
+    exchange: 伦敦证券交易所（XLON）
+    figi_exch: LN
+    timezone: Europe/London
+    currency: GBP
+    close_local: "16:30"
+    eod_delay_min: 60
+    reporting: 中期 + 年度报告（FCA 披露与透明度规则）；部分公司另发季度交易更新
+    accounting_default: 英国采纳的 IFRS（UK-adopted IFRS）
+  fr:
+    name: 法国
+    exchange: 泛欧交易所巴黎（XPAR）
+    figi_exch: FP
+    timezone: Europe/Paris
+    currency: EUR
+    close_local: "17:30"
+    eod_delay_min: 60
+    reporting: 半年度 + 年度财务报告（AMF）；多数大型公司另发季度财务信息
+    accounting_default: 欧盟采纳的 IFRS（IFRS as adopted by the EU）
+# 按注册地推断会计口径（覆盖市场默认值）；注册地来自 GLEIF 法律实体数据
+accounting_by_jurisdiction:
+  CN: 中国企业会计准则（CASBE）或 HKFRS，待逐家确认
+  GB: 英国采纳的 IFRS（UK-adopted IFRS）
+  FR: 欧盟采纳的 IFRS（IFRS as adopted by the EU）
+  NL: 欧盟采纳的 IFRS（IFRS as adopted by the EU）
+  LU: 欧盟采纳的 IFRS（IFRS as adopted by the EU）
+  BE: 欧盟采纳的 IFRS（IFRS as adopted by the EU）
+  HK: HKFRS（与 IFRS 等效）
+  KY: HKFRS 或 IFRS，待逐家确认
+  BM: HKFRS 或 IFRS，待逐家确认
+# 跨市场挂牌检索时只看这些主要交易所（OpenFIGI 交易所代码），德国等二级报价场所不计
+cross_listing_venues:
+  US: 美国
+  LN: 伦敦
+  HK: 香港
+  FP: 巴黎
+  NA: 阿姆斯特丹
+  BB: 布鲁塞尔
+  IM: 米兰
+  SM: 马德里
+  SE: 瑞士
+  CG: 上海
+  CS: 深圳
+  AT: 澳大利亚
+  SP: 新加坡
+  JT: 东京

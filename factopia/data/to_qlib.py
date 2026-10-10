@@ -8,6 +8,7 @@ Qlib 日线数据格式：
 
 代码命名：把 Yahoo 代码中的 "." 换成 "_"（如 0700.HK → 0700_HK），基准指数加 "IDX_" 前缀（如 IDX_HSI）。
 价格已在下载时复权，因此复权因子 factor 恒为 1。被质量检查排除的股票不写入。
+股票池文件按成分股起止日期生成（configs/universe/membership；目前为当前成分股，非时间点一致，Spec 第 14.10 节）。
 
 运行：docker compose -f docker-compose.yml -f compose.local.yml run --rm app python -m factopia.data.to_qlib
 RD-Agent 用数据集（截止 2023-12-31，2024 年以后的数据对 AI 完全不可见，Spec MINE-03）：
@@ -22,6 +23,8 @@ from pathlib import Path
 import exchange_calendars as xcals
 import numpy as np
 import pandas as pd
+
+from factopia.refdata import membership
 
 DATA_DIR = Path(os.environ.get("FACTOPIA_DATA_DIR", "/workspace/runtime/data"))
 QLIB_DIR = Path(os.environ.get("FACTOPIA_QLIB_DIR", "/workspace/runtime/qlib_data"))
@@ -77,20 +80,24 @@ def convert_market(market: str, cfg: dict, root: Path, end: str | None = None) -
 
     rows = []
     for symbol, g in std.groupby("symbol"):
-        rows.append((qlib_code(symbol), *_write_instrument(features, qlib_code(symbol), g, calendar)))
-    stocks = pd.DataFrame(rows, columns=["code", "start", "end"])
+        rows.append((symbol, qlib_code(symbol), *_write_instrument(features, qlib_code(symbol), g, calendar)))
+    spans = pd.DataFrame(rows, columns=["symbol", "code", "start", "end"])
+    stocks = spans[["code", "start", "end"]]
+    # 股票池按成分股起止日期生成（configs/universe/membership，BR-18）；all.txt 仍为全部有行情的区间
+    pool = membership.pool_ranges(market, spans[["symbol", "start", "end"]], qlib_code)
     idx_code = qlib_code(cfg["index"])
     idx_start, idx_end = _write_instrument(features, idx_code, index, calendar)
 
     # 股票池与 all 只包含股票；基准指数单独列在 benchmark.txt。
     # RD-Agent 用 D.instruments()（即 all）生成因子数据，指数若在 all 中会参与因子的横截面排序。
     # 回测读取基准时直接按代码取数，不依赖股票池文件。
-    stocks.to_csv(root / "instruments" / f"{cfg['pool']}.txt", sep="\t", index=False, header=False)
+    pool.to_csv(root / "instruments" / f"{cfg['pool']}.txt", sep="\t", index=False, header=False)
     stocks.to_csv(root / "instruments" / "all.txt", sep="\t", index=False, header=False)
     pd.DataFrame([(idx_code, idx_start, idx_end)]).to_csv(
         root / "instruments" / "benchmark.txt", sep="\t", index=False, header=False)
 
     return {"provider_uri": str(root), "calendar_days": len(calendar), "stocks": len(stocks),
+            "point_in_time_pool": membership.is_point_in_time(market),
             "pool": cfg["pool"], "benchmark": idx_code,
             "range": [str(calendar.min().date()), str(calendar.max().date())]}
 
