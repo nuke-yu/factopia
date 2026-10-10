@@ -1,5 +1,5 @@
 # 各市场的参考数据规则（BR-15、17、18）。由数据负责人维护；version 随修改递增，结果中记录所用版本。
-version: markets-v1
+version: markets-v2   # v2：增加交易机制字段（地区差异清单，BR-34）
 markets:
   hk:
     name: 香港
@@ -12,6 +12,14 @@ markets:
     eod_delay_min: 60
     reporting: 中期 + 年度业绩（上市规则要求）；部分公司另发季度营运数据
     accounting_default: HKFRS（与 IFRS 等效）；内地注册的 H 股公司可采用中国企业会计准则（CASBE）
+    trading_hours: 9:30–12:00、13:00–16:00（UTC+8，无夏令时）；开市前时段与收市竞价
+    price_limits: 无每日涨跌停；部分股票适用市场波动调节机制（5 分钟冷静期）
+    settlement: T+2
+    short_selling: 只有港交所指定证券可以卖空
+    lot_size: 每手股数因股票而异
+    disclosure_language: 中文、英文（双语）
+    benchmark: 恒生指数
+    holidays: 恶劣天气（2024-09-23 前八号风球 / 黑雨停市）；内地假期港股通暂停
   uk:
     name: 英国
     exchange: 伦敦证券交易所（XLON）
@@ -22,6 +30,14 @@ markets:
     eod_delay_min: 60
     reporting: 中期 + 年度报告（FCA 披露与透明度规则）；部分公司另发季度交易更新
     accounting_default: 英国采纳的 IFRS（UK-adopted IFRS）
+    trading_hours: 8:00–16:30（UTC+0 / 夏令时 UTC+1）；开盘与收盘竞价
+    price_limits: 无每日涨跌停；大幅波动时进入短暂竞价暂停
+    settlement: T+2；2027-10-11 起 T+1
+    short_selling: 允许；净空头达到股本 0.1% 须向 FCA 申报
+    lot_size: 1 股
+    disclosure_language: 英文
+    benchmark: 富时 100 指数
+    holidays: 英国银行假日；除息日通常为周四
   fr:
     name: 法国
     exchange: 泛欧交易所巴黎（XPAR）
@@ -32,6 +48,14 @@ markets:
     eod_delay_min: 60
     reporting: 半年度 + 年度财务报告（AMF）；多数大型公司另发季度财务信息
     accounting_default: 欧盟采纳的 IFRS（IFRS as adopted by the EU）
+    trading_hours: 9:00–17:30（UTC+1 / 夏令时 UTC+2）；开盘与收盘竞价
+    price_limits: 无每日涨跌停；超出预设范围时短暂暂停
+    settlement: T+2；2027-10-11 起 T+1
+    short_selling: 允许；净空头达到股本 0.1% 须向 AMF 申报（欧盟卖空规定）
+    lot_size: 1 股
+    disclosure_language: 法文为主，大型公司多另发英文版
+    benchmark: CAC 40 指数
+    holidays: 泛欧交易所假日；分红集中在春夏股东大会之后
 # 按注册地推断会计口径（覆盖市场默认值）；注册地来自 GLEIF 法律实体数据
 accounting_by_jurisdiction:
   CN: 中国企业会计准则（CASBE）或 HKFRS，待逐家确认

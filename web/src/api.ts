@@ -122,14 +122,18 @@ export type DraftResult = {
     directions: string[]; exclusions: string[]; falsification: string; data_needs: DataNeed[];
     mandate_interpretations: { term: string; interpretation_zh: string; constraint_en: string | null }[];
     open_questions: string[]; leak_flags: string[]; system_questions: string[]; constraints: string[];
-    signal_source?: SignalSource;
+    signal_source?: SignalSource; region_diff?: RegionDiff;
   };
-  evidence: { groups: string[]; alpha158: EvidenceAlpha[]; past_runs: { run_id: string; market: Market; loop: number; hypothesis: string; adopted: boolean }[] };
+  evidence: { groups: string[]; alpha158: EvidenceAlpha[]; internal?: InternalEvidence[]; past_runs: { run_id: string; market: Market; loop: number; hypothesis: string; adopted: boolean }[] };
   mandate: Mandate;
   meta: { model: string; prompt_version: string; prompt_tokens: number; completion_tokens: number; seconds: number; at: string };
 };
 export type DraftInput = {
   hypothesis: string; direction: string; markets: Market[]; horizon: number; mandate: string; groups: string[]; include_past_runs: boolean;
+};
+export type RegionDiff = {
+  markets: Market[]; markets_version: string; rule_packs: Partial<Record<Market, string>>; differs: number; note: string;
+  rows: { group: string; item: string; values: Partial<Record<Market, string>>; differs: boolean; impact: string; source: string }[];
 };
 export type SignalSource = "price_volume" | "text";
 export type Question = { text: string; source: "AI" | "系统" | "平台"; confirmed: boolean };
@@ -138,7 +142,7 @@ export type Spec = {
   hypothesis_original: string; direction_original: string; hypothesis: string; hypothesis_zh: string; rationale: Rationale;
   directions: string[]; exclusions: string[]; falsification: string; data_needs: DataNeed[]; constraints: string[];
   evidence: { groups: string[]; include_past_runs: boolean; items: string[] }; questions: Question[];
-  run: { loops: number; budget_usd: number }; signal_source?: SignalSource;
+  run: { loops: number; budget_usd: number }; signal_source?: SignalSource; region_diff?: RegionDiff;
   ai_draft: DraftResult["meta"] & { original: Pick<Spec, "hypothesis" | "rationale" | "directions" | "exclusions" | "falsification"> };
   locked_at?: string; locked_by?: string; precheck_setup?: Precheck; edits?: { field: string; by: string; at: string }[]; past_runs?: string[];
 };
@@ -492,7 +496,23 @@ const get = <T,>(path: string) => request<T>(path);
 const post = <T,>(path: string, body: unknown) =>
   request<T>(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
+// ---------------------------------------------------------------- 因子库与语义检索（BR-25、35）
+export type LibraryItem = {
+  id: string; name: string; source: "alpha158" | "approved" | "proprietary"; status: string; group: string | null;
+  description: string | null; formulation: string | null; code: string | null; label: string | null; period_note: string | null; provenance: string;
+  markets: Partial<Record<Market, { rank_ic: number | null; t: number | null; credibility?: string | null; state?: string | null; approved?: boolean; simulated?: boolean }>>;
+};
+export type Library = { summary: { total: number; by_source: Record<string, number>; proprietary_dir: string }; items: LibraryItem[] };
+export type KnowledgeHit = { kind: "factor" | "research" | "field" | "filing"; kind_zh: string; id: string; title: string; ref: string;
+  meta: Record<string, unknown>; score: number; matched: string[]; snippet: string };
+export type KnowledgeSearch = { query: string; method: string; corpus: Record<string, number>; results: KnowledgeHit[];
+  expansion: { method: string; terms: Partial<Record<"en" | "zh" | "fr", string[]>>; intent: string } };
+export type InternalEvidence = { kind: string; kind_zh: string; id: string; title: string; score: number; prompt: string; ref: string };
+
 export const api = {
+  library: () => get<Library>("/library"),
+  knowledge: (q: string, llm = true) => get<KnowledgeSearch>(`/knowledge/search?q=${encodeURIComponent(q)}&llm=${llm}`),
+  regions: (markets: Market[], mandate?: string) => get<RegionDiff>(`/research/regions?markets=${markets.join(",")}${mandate ? `&mandate=${mandate}` : ""}`),
   pit: () => get<PitStatus>("/pit"),
   rulePacks: () => get<RulePacks>("/rules/packs"),
   acceptance: () => get<Acceptance>("/acceptance"),

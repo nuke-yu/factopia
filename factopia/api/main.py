@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 
 from factopia import sources as srcs
 from factopia.research import draft as drafting
-from factopia.research import evidence, mandates, store, verdict
+from factopia.research import evidence, mandates, regions, store, verdict
 from factopia import rules as rulebook
 from factopia.research.context import build_context
 from factopia.rules import context as rule_ctx
@@ -315,6 +315,28 @@ def list_mandates():
     return [mandates.parse(m) for m in mandates.load_all()]
 
 
+@app.get("/api/research/regions")
+def region_differences(markets: str = Query(..., pattern="^(hk|uk|fr)(,(hk|uk|fr))*$"), mandate: str | None = None):
+    """地区差异清单（BR-34）：交易机制、成本、币种与基准、披露与会计、地区规则。"""
+    ms = list(dict.fromkeys(markets.split(",")))
+    return regions.differences(ms, rule_ctx.mandate(mandate) if mandate else None)
+
+
+@app.get("/api/library")
+def factor_library(source: str | None = Query(None, pattern="^(alpha158|approved|proprietary)$")):
+    """内部因子库（BR-35）：Alpha158 公开基准、获批信号、团队专有因子（接口）。"""
+    from factopia.research import library
+    return {"summary": library.summary(), "items": library.items([source] if source else None)}
+
+
+@app.get("/api/knowledge/search")
+def knowledge_search(q: str = Query(..., min_length=1, max_length=300), kinds: str | None = None, llm: bool = True):
+    """语义检索（BR-25）：因子库、内部研究、数据字典、经批准的外部公告；大模型多语言改写 + BM25。"""
+    from factopia.research import semantic
+    ks = [k for k in (kinds or "").split(",") if k in semantic.KIND_ZH] or None
+    return semantic.search(q, ks, use_llm=llm)
+
+
 @app.post("/api/research/draft")
 def research_draft(body: DraftIn):
     """AI 起草研究规格（RS-02）：约 30–60 秒。"""
@@ -392,6 +414,8 @@ def _prepare_spec(raw: dict, lock: bool) -> dict:
         problems.append(f"规格中出现测试期年份（{'、'.join(mentions)}）：须确认已知悉泄漏风险")
     if problems:
         raise HTTPException(422, "；".join(problems))
+    # 地区差异清单（BR-34）：锁定时按市场、授权与数据需求重新生成并随版本保存
+    spec["region_diff"] = regions.differences(spec["markets"], rule_ctx.mandate(spec.get("mandate")), spec.get("data_needs"))
     original = (spec.get("ai_draft") or {}).get("original") or {}
     at = store.now()
     spec["edits"] = [{"field": k, "by": LOCKED_BY, "at": at} for k in EDITABLE if k in original and original[k] != spec.get(k)]

@@ -32,6 +32,7 @@ COPY configs/research /workspace/configs/research
 COPY configs/mandates /workspace/configs/mandates
 COPY configs/rules /workspace/configs/rules
 COPY configs/acceptance /workspace/configs/acceptance
+COPY configs/factor_library /workspace/configs/factor_library
 COPY configs/rdagent/context /workspace/configs/rdagent/context
 
 RUN useradd --uid 10001 --no-create-home factopia

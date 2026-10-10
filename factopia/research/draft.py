@@ -13,9 +13,9 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-from factopia.research import evidence, mandates
+from factopia.research import evidence, mandates, regions
 
-PROMPT_VERSION = "rs-draft-v2"
+PROMPT_VERSION = "rs-draft-v3"   # v3：加入内部知识检索结果（因子库、以往研究、数据字典，只含名称与说明）
 PROMPT_FILE = Path(__file__).parent / "prompts" / f"{PROMPT_VERSION}.md"
 ID_PATTERN = re.compile(r"^[a-z][a-z0-9_]{2,39}$")
 TEST_YEAR = re.compile(r"20(?:2[2-9]|[3-9]\d)")
@@ -78,6 +78,26 @@ def _evidence_text(items: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def internal_knowledge(query: str, limit: int = 8) -> list[dict]:
+    """检索内部知识（BR-25、35）作为证据：因子库、以往研究规格、数据字典。
+    提供给 AI 的只有名称与说明；获批信号与以往研究的结果数值来自测试期，不放入（MINE-11）。AI 解释（含测试期数值）不检索。"""
+    from factopia.research import semantic
+    try:
+        res = semantic.search(query, ["factor", "research", "field"], limit=limit * 2)
+    except Exception:
+        return []
+    out = []
+    for r in res["results"]:
+        if r["id"].endswith(".explain"):
+            continue
+        text = re.sub(TEST_YEAR, "", r["snippet"])[:200] if r["kind"] == "research" else r["snippet"][:200]
+        out.append({"kind": r["kind"], "kind_zh": r["kind_zh"], "id": r["id"], "title": r["title"], "score": r["score"],
+                    "prompt": text, "ref": r["ref"]})
+        if len(out) >= limit:
+            break
+    return out
+
+
 def _strings(x) -> list[str]:
     return [str(v).strip() for v in (x or []) if str(v).strip()]
 
@@ -135,6 +155,12 @@ def _validate(raw: dict, inputs: dict) -> dict:
 def _system_questions(d: dict, inputs: dict) -> list[str]:
     """系统补充的待确认事项：数据缺口、自由文本授权条款的解释、测试期年份（RS-03、RS-04、RS-06）。"""
     qs = []
+    rd = d.get("region_diff")
+    if rd and len(rd["markets"]) > 1:
+        cost = next((r for r in rd["rows"] if r["item"] == "买入单边成本"), None)
+        qs.append(f"地区差异清单（{rd['differs']} 项各市场不同，见审核页）：已知悉交易机制、成本"
+                  + (f"（买入单边 {'、'.join(f'{m.upper()} {v}' for m, v in cost['values'].items())}）" if cost else "")
+                  + "、交收、披露与地区规则的差异，研究按各市场分别回测、分别判定。")
     if d.get("signal_source") == "text":
         qs.append("信号来源为文本（管理层风险表述变化）：开始运行时检验情报台的文本信号，不启动 RD-Agent；"
                   "香港、英国为模拟数据（仅用于流程演示），法国 AMF 真实公告从 2024 年 8 月开始，测试期内数据不足。"
@@ -157,7 +183,9 @@ def make_draft(inputs: dict) -> dict:
     mandate = mandates.parse(mandates.load(inputs["mandate"]))
     alpha = evidence.alpha158_findings(inputs["markets"], inputs["horizon"], inputs.get("groups") or None)
     past = evidence.past_runs(inputs["markets"], inputs["horizon"]) if inputs.get("include_past_runs", True) else []
+    internal = internal_knowledge(inputs["hypothesis"] + " " + (inputs.get("direction") or ""))
     prompt = PROMPT_FILE.read_text(encoding="utf-8").format(
+        internal="\n".join(f"- [{x['kind']}] {x['title']}: {x['prompt']}" for x in internal) or "- none",
         markets=", ".join(inputs["markets"]), horizon=inputs["horizon"],
         direction=inputs.get("direction") or "(not given)", hypothesis=inputs["hypothesis"],
         mandate_name=mandate["name"],
@@ -182,11 +210,12 @@ def make_draft(inputs: dict) -> dict:
             if attempt == 1:
                 raise DraftError(f"大模型两次输出都不合格：{e}") from e
             retry_note = f"\n\nYour previous answer was rejected: {e}. Fix it and answer again with the full JSON object."
+    draft["region_diff"] = regions.differences(inputs["markets"], mandates.load(inputs["mandate"]), draft["data_needs"])
     draft["system_questions"] = _system_questions(draft, inputs)
     draft["constraints"] = mandate["constraints"] + [t["constraint_en"] for t in draft["mandate_interpretations"] if t["constraint_en"]] + PLATFORM_CONSTRAINTS
     return {
         "draft": draft,
-        "evidence": {"alpha158": alpha, "past_runs": past, "groups": inputs.get("groups") or []},
+        "evidence": {"alpha158": alpha, "past_runs": past, "groups": inputs.get("groups") or [], "internal": internal},
         "mandate": mandate,
         "meta": {"model": cfg["model"], "prompt_version": PROMPT_VERSION, **tokens,
                  "seconds": round(time.time() - t0, 1), "at": datetime.now(timezone.utc).isoformat(timespec="seconds")},

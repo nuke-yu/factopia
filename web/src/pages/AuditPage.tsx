@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { api, type DraftResult, type Market, type Question, type Rationale, type SignalSource, type Spec } from "../api";
+import { api, type DraftResult, type Market, type Question, type Rationale, type RegionDiff, type SignalSource, type Spec } from "../api";
 import { testPeriodMentions, useDraft } from "../draft";
 import { cssVar, MARKET_LABEL, useAsync } from "../lib";
 import { Badge, ErrorBox, Loading, Notice, Panel, Seg } from "../components/ui";
@@ -150,6 +150,11 @@ function Review({ result, markets, horizon, inputs, locked, setLocked }: {
               <Seg label="信号来源" value={f.signal_source} options={SOURCES} onChange={(v) => !ro && set({ signal_source: v })} />
               {f.signal_source === "text" && <p className="text-xs text-muted mt-1">香港、英国为模拟数据，仅用于流程演示；法国为 AMF 真实公告（2024 年 8 月起，测试期内数据不足）。可证伪测试须写明 rank IC 方向（positive / negative）。</p>}
             </Row>
+            {d.region_diff && d.region_diff.markets.length > 1 && (
+              <Row name="地区差异清单" source="系统" hint={`${d.region_diff.differs} 项各市场不同 · ${d.region_diff.markets_version} · 规则包 ${Object.values(d.region_diff.rule_packs).join("、")}`}>
+                <RegionDiffTable rd={d.region_diff} />
+              </Row>
+            )}
             <Row name="数据需求与缺口" source="系统">
               <DataNeeds result={result} markets={markets} />
             </Row>
@@ -265,6 +270,35 @@ function Area({ label, value, disabled, onChange }: { label: string; value: stri
   );
 }
 
+function RegionDiffTable({ rd }: { rd: RegionDiff }) {
+  const groups = [...new Set(rd.rows.filter((r) => r.group !== "数据").map((r) => r.group))];
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead className="text-muted"><tr>
+            <th className="text-left font-normal py-1 pr-2">项目</th>
+            {rd.markets.map((m) => <th key={m} className="text-left font-normal pr-2">{MARKET_LABEL[m]}</th>)}
+          </tr></thead>
+          {groups.map((g) => (
+            <tbody key={g}>
+              <tr><td colSpan={rd.markets.length + 1} className="pt-2 pb-0.5 label">{g}</td></tr>
+              {rd.rows.filter((r) => r.group === g).map((r) => (
+                <tr key={r.item} className="border-t border-line align-top">
+                  <td className="py-1 pr-2 min-w-[8rem]"><div className={r.differs ? "text-text" : "text-muted"}>{r.item}</div>
+                    {r.impact && <div className="text-faint mt-0.5">{r.impact}</div>}</td>
+                  {rd.markets.map((m) => <td key={m} className={`py-1 pr-2 ${r.values[m] === "不适用" ? "text-faint" : ""}`}>{r.values[m]}</td>)}
+                </tr>
+              ))}
+            </tbody>
+          ))}
+        </table>
+      </div>
+      <p className="text-xs text-faint">{rd.note}</p>
+    </div>
+  );
+}
+
 function DataNeeds({ result, markets }: { result: DraftResult; markets: Market[] }) {
   return (
     <div className="overflow-x-auto">
@@ -304,6 +338,18 @@ function EvidenceList({ result }: { result: DraftResult }) {
           </div>
         </div>
       ))}
+      {result.evidence.internal && result.evidence.internal.length > 0 && (
+        <div>
+          <div className="font-medium">内部知识检索（因子库、以往研究、数据字典）</div>
+          <ul className="mt-1 flex flex-col gap-1 text-xs">
+            {result.evidence.internal.map((x) => (
+              <li key={x.id}><Badge tone="muted">{x.kind_zh}</Badge> <span className="text-text">{x.title}</span>
+                <span className="text-faint"> · 得分 {x.score}</span></li>
+            ))}
+          </ul>
+          <div className="text-[11px] text-faint mt-1">已提供给 AI：名称与说明（不含测试期以后的数值）</div>
+        </div>
+      )}
       <div className="text-xs text-muted">以往运行：{result.evidence.past_runs.length ? `${result.evidence.past_runs.length} 轮假设（只含方向与是否采纳）` : "无可用记录（受泄漏影响的运行已排除）"}</div>
     </div>
   );

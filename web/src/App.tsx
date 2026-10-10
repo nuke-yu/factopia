@@ -33,6 +33,7 @@ const ApprovalsPage = lazyPage(() => import("./pages/ApprovalsPage"));
 const SignalsPage = lazyPage(() => import("./pages/SignalsPage"));
 const OverviewPage = lazyPage(() => import("./pages/OverviewPage"));
 const AcceptancePage = lazyPage(() => import("./pages/AcceptancePage"));
+const LibraryPage = lazyPage(() => import("./pages/LibraryPage"));
 
 /** 页面出错时显示原因与刷新按钮，而不是空白页。切换页面后自动恢复。 */
 class PageBoundary extends Component<{ children: ReactNode; resetKey: string }, { error: Error | null }> {
@@ -68,6 +69,7 @@ function Pages() {
           <Route path="/results" element={<ResultsPage />} />
           <Route path="/intel" element={<IntelPage />} />
           <Route path="/data" element={<DataPage />} />
+          <Route path="/library" element={<LibraryPage />} />
           <Route path="/rules" element={<RulesPage />} />
           <Route path="/portfolio" element={<PortfolioPage />} />
           <Route path="/approvals" element={<ApprovalsPage />} />
@@ -115,16 +117,16 @@ export default function App() {
           <div className="mx-auto max-w-[1680px] px-4 md:px-6 h-14 flex items-center gap-6">
             <div className="flex items-baseline gap-3 shrink-0">
               <span className="font-display text-lg font-semibold tracking-[0.18em] text-accent">FACTOPIA</span>
-              <span className="hidden lg:inline text-xs text-muted">跨境量化研究平台 · 最小 POC</span>
+              <span className="hidden 2xl:inline text-xs text-muted">跨境量化研究平台 · 最小 POC</span>
             </div>
             <nav className="flex items-center gap-1 overflow-x-auto" aria-label="研究流程">
               {STEPS.map((s, i) => (
                 <div key={s.to} className="flex items-center">
-                  {i > 0 && <span className="mx-1 text-faint" aria-hidden>→</span>}
+                  {i > 0 && <span className="mx-0.5 text-faint" aria-hidden>→</span>}
                   <NavLink
                     to={s.to}
                     className={({ isActive }) =>
-                      `flex items-center gap-2 h-9 px-3 rounded border transition-colors whitespace-nowrap ${
+                      `flex items-center gap-1.5 h-9 px-2 rounded border transition-colors whitespace-nowrap ${
                         isActive ? "border-accent/60 bg-accent/10 text-text" : "border-transparent text-muted hover:text-text"
                       }`}
                   >
@@ -135,7 +137,7 @@ export default function App() {
                 </div>
               ))}
               <span className="mx-2 h-5 border-l border-line" aria-hidden />
-              {[{ to: "/intel", name: "情报台", hint: "多语言公告" }, { to: "/data", name: "数据台", hint: "主数据与时间点" }, { to: "/rules", name: "风控台", hint: "规则包与预检" }, { to: "/portfolio", name: "组合台", hint: "授权组合与报告" }, { to: "/approvals", name: "审批台", hint: "跨地区审批与审计" },
+              {[{ to: "/intel", name: "情报台", hint: "多语言公告" }, { to: "/data", name: "数据台", hint: "主数据与时间点" }, { to: "/library", name: "因子库", hint: "因子库与知识检索" }, { to: "/rules", name: "风控台", hint: "规则包与预检" }, { to: "/portfolio", name: "组合台", hint: "授权组合与报告" }, { to: "/approvals", name: "审批台", hint: "跨地区审批与审计" },
                 { to: "/signals", name: "信号目录", hint: "分市场版本与监控" }, { to: "/overview", name: "总览", hint: "管理总览" }, { to: "/acceptance", name: "验收", hint: "成功标准与红队" }].map((d) => (
                 <NavLink
                   key={d.to}
