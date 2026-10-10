@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { api, type Metrics, type Round, type Run } from "../api";
-import { cssVar, fix, MARKET_LABEL, pct, useAsync } from "../lib";
+import { api, type Metrics, type Quantiles, type Round, type Run } from "../api";
+import { cssVar, fix, MARKET_LABEL, pct, signed, useAsync } from "../lib";
 import { Badge, ErrorBox, Loading, Notice, Panel, Stat, ViewToggle } from "../components/ui";
 import ResearchTrail from "../components/charts/ResearchTrail";
 import TransferCube from "../components/charts/TransferCube";
 import IcSurface from "../components/charts/IcSurface";
 import NavChart from "../components/charts/NavChart";
 import PositionsBars from "../components/charts/PositionsBars";
+import DrawdownChart from "../components/charts/DrawdownChart";
+import { QuantileBars, QuantileNav } from "../components/charts/QuantileChart";
 
 export default function ResultsPage() {
   const runs = useAsync(() => api.runs(), []);
@@ -55,6 +57,7 @@ function CubeSection() {
 function RunSection({ runId }: { runId: string }) {
   const detail = useAsync(() => api.run(runId), [runId]);
   const backtest = useAsync(() => api.backtest(runId), [runId]);
+  const quantiles = useAsync(() => api.quantiles(runId), [runId]);
   const [selected, setSelected] = useState("baseline");
   const [precise, setPrecise] = useState(false);
   useEffect(() => {
@@ -97,12 +100,18 @@ function RunSection({ runId }: { runId: string }) {
                 <dt className="text-faint">验证</dt><dd className="num">{run.settings.valid_start} 至 {run.settings.valid_end}</dd>
                 <dt className="text-faint">测试（回测）</dt><dd className="num">{run.settings.test_start} 至 {run.settings.test_end}</dd>
               </dl>
-              <p className="text-xs text-muted leading-relaxed">净值为各轮在测试期的扣成本后超额收益累计，虚线为基准指数。模型训练不使用测试期数据，但 AI 每轮会看到测试期成绩来决定是否采纳，因此仍需在 2024 年以后的数据上复核。</p>
+              <p className="text-xs text-muted leading-relaxed">净值为各轮在测试期的扣成本后超额收益累计，虚线为基准指数。回撤是累计超额收益从此前最高点回落的幅度，最低点就是表中的最大回撤。模型训练不使用测试期数据，但 AI 每轮会看到测试期成绩来决定是否采纳，因此仍需在 2024 年以后的数据上复核。</p>
               <Link className="btn self-start" to={`/run?run=${run.run_id}`}>回放研究过程 →</Link>
             </div>
             <div>
               <div className="label mb-1">回测净值（测试期，扣成本后超额）</div>
-              {backtest.data ? <NavChart backtest={backtest.data} rounds={rounds} selected={selected} /> : <Loading what="回测" />}
+              {backtest.data ? (
+                <>
+                  <NavChart backtest={backtest.data} rounds={rounds} selected={selected} className="h-[290px]" />
+                  <div className="label mt-2 mb-1">回撤（选中轮次为红色面积）</div>
+                  <DrawdownChart backtest={backtest.data} rounds={rounds} selected={selected} />
+                </>
+              ) : <Loading what="回测" />}
             </div>
           </div>
         </Panel>
@@ -124,10 +133,52 @@ function RunSection({ runId }: { runId: string }) {
         </Panel>
       </div>
 
-      <Panel eyebrow={`${selected === "baseline" ? `第 ${posKey} 轮` : `第 ${selected} 轮`} · 测试期`} title="持仓轮动">
+      <Panel eyebrow={`第 ${posKey} 轮 · 测试期`} title="分组收益">
+        {quantiles.error ? <ErrorBox error={quantiles.error} />
+          : !quantiles.data ? <Loading what="分组收益" />
+          : quantiles.data[posKey] ? <QuantileSection q={quantiles.data[posKey]} />
+          : <div className="text-muted text-sm">该轮没有分组收益数据（先运行 factopia.export.backtests）。</div>}
+      </Panel>
+
+      <Panel eyebrow={`第 ${posKey} 轮 · 测试期`} title="持仓轮动">
         <PositionsBars runId={run.run_id} roundKey={posKey} />
       </Panel>
     </>
+  );
+}
+
+function QuantileSection({ q }: { q: Quantiles }) {
+  const n = q.groups;
+  return (
+    <div className="flex flex-col gap-4">
+      <p className="text-sm text-muted leading-relaxed max-w-[110ch]">
+        每个交易日按模型打分把股票从低到高平均分成 {n} 组，看每组接下来 {q.horizon} 个交易日的实际涨跌。打分有效时，柱子应从左到右逐级升高，
+        右图 {n} 条线像扇子一样展开、第 {n} 组在最上面。这是判断因子好坏最直观的图，与持仓数、交易成本无关。
+      </p>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <Stat label={`第 ${n} 组减第 1 组`} value={signed(q.spread_mean, 2)} tone={(q.spread_mean ?? 0) > 0 ? cssVar("--good") : cssVar("--bad")}
+          sub={`平均未来 ${q.horizon} 日收益之差`} />
+        <Stat label={`第 ${n} 组跑赢第 1 组`} value={pct(q.spread_positive_share)} sub={`占 ${q.days} 个交易日`} />
+        <Stat label="全部股票平均" value={pct(q.universe_mean, 2)} sub={`未来 ${q.horizon} 日收益`} />
+        <Stat label="打分完全相同的股票" value={pct(q.tie_share, 0)} sub="每日最大同分组占比（中位数）" />
+      </div>
+      {(q.tie_share ?? 0) > 0.2 && (
+        <Notice title="模型打分区分度不足">
+          每天约 {pct(q.tie_share, 0)} 的股票得到完全相同的打分，只能放进同一组，所以各组股票数不等（平均 {q.size.map((s) => s.toFixed(0)).join(" / ")} 只），
+          部分交易日有的组没有股票（累计收益里按持有现金计）。这与第 8 章 #21（打分几乎相同、IC 为负）是同一个问题。
+        </Notice>
+      )}
+      <div className="grid gap-5 lg:grid-cols-2">
+        <div>
+          <div className="label mb-1">各组平均未来 {q.horizon} 日收益</div>
+          <QuantileBars q={q} />
+        </div>
+        <div>
+          <div className="label mb-1">各组累计收益（每 {q.horizon} 个交易日调仓）</div>
+          <QuantileNav q={q} />
+        </div>
+      </div>
+    </div>
   );
 }
 

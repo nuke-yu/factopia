@@ -4,7 +4,9 @@ import type { Columns, Round } from "../../api";
 import { cssVar, useThemeVersion } from "../../lib";
 
 /** 各轮扣成本后的累计超额净值与基准指数净值（测试期）。 */
-export default function NavChart({ backtest, rounds, selected }: { backtest: Record<string, Columns>; rounds: Round[]; selected: string }) {
+export default function NavChart({ backtest, rounds, selected, className = "h-[400px]" }: {
+  backtest: Record<string, Columns>; rounds: Round[]; selected: string; className?: string;
+}) {
   const theme = useThemeVersion();
   const option = useMemo(() => {
     const muted = cssVar("--muted"), line = cssVar("--line-2"), text = cssVar("--text");
@@ -31,5 +33,5 @@ export default function NavChart({ backtest, rounds, selected }: { backtest: Rec
       ],
     };
   }, [backtest, rounds, selected, theme]);
-  return <EChart option={option} notMerge className="h-[400px]" />;
+  return <EChart option={option} notMerge className={className} />;
 }

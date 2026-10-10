@@ -76,6 +76,13 @@ export type MarketInfo = {
 export type Overview = { markets: Record<Market, MarketInfo>; fx_date: string };
 
 export type Columns = Record<string, (number | string | null)[]>;
+/** 按模型打分把股票从低（第 1 组）到高（第 5 组）分组后的未来收益。 */
+export type Quantiles = {
+  horizon: number; groups: number; days: number;
+  mean: (number | null)[]; universe_mean: number | null; size: number[]; empty_days: number[];
+  spread_mean: number | null; spread_positive_share: number | null; tie_share: number | null;
+  dates: string[]; nav: (number | null)[][]; nav_universe: (number | null)[];
+};
 export type Positions = { dates: string[]; instruments: string[]; weights: number[][] };
 
 export type ResearchSpec = {
@@ -121,6 +128,7 @@ export const api = {
   runs: () => get<Run[]>("/runs"),
   run: (id: string) => get<{ run: Run; rounds: Round[] }>(`/runs/${id}`),
   backtest: (id: string) => get<Record<string, Columns>>(`/runs/${id}/backtest`),
+  quantiles: (id: string) => get<Record<string, Quantiles>>(`/runs/${id}/quantiles`),
   positions: (id: string, key: string, step = 5) => get<Positions>(`/runs/${id}/positions/${key}?step=${step}`),
   projects: () => get<Project[]>("/projects"),
   events: (id: string) => get<RunEvent[]>(`/runs/${id}/events`),

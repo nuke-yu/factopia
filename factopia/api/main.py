@@ -104,6 +104,13 @@ def signal(run_id: str):
     return {p.stem: _columns(pd.read_parquet(p)) for p in sorted(d.glob("*.parquet"))}
 
 
+@app.get("/api/runs/{run_id}/quantiles")
+def quantiles(run_id: str):
+    """各轮的分组收益（按模型打分分 5 组）。"""
+    d = _run_dir(run_id) / "quantile"
+    return {p.stem: _json(p) for p in sorted(d.glob("*.json"))}
+
+
 @app.get("/api/runs/{run_id}/positions/{key}")
 def positions(run_id: str, key: str, step: int = Query(5, ge=1, le=60)):
     """持仓矩阵：每隔 step 个交易日取一次，股票按持有天数排序。"""
