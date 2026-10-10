@@ -92,6 +92,9 @@ def suspensions(market: str) -> list[dict]:
     return out
 
 
+MIN_JUMP = 0.15     # 只检查未复权跳变 ≥ 15% 的拆股 / 合股
+
+
 def check_adjustment(market: str, splits: pd.DataFrame) -> list[dict]:
     """复权检查：拆股日复权收盘价的日收益应正常（|收益| < 1 - 1/比例 的一半），否则说明复权缺失。"""
     path = RUNTIME / "data" / "standardized" / f"{market}.parquet"
@@ -100,12 +103,17 @@ def check_adjustment(market: str, splits: pd.DataFrame) -> list[dict]:
     px = pd.read_parquet(path, columns=["symbol", "date", "close"]).sort_values(["symbol", "date"])
     px["ret"] = px.groupby("symbol")["close"].pct_change()
     out = []
+    first = px.groupby("symbol")["date"].min()
     for r in splits.to_dict("records"):
+        if r["value"] in (0, 1) or r["symbol"] not in first.index or pd.Timestamp(r["date"]) <= pd.Timestamp(first[r["symbol"]]):
+            continue                                    # 行情开始之前的拆股：无法检查
         g = px[(px["symbol"] == r["symbol"]) & (px["date"] >= r["date"])].head(1)
-        if g.empty or r["value"] in (0, 1):
+        if g.empty or pd.isna(g["ret"].iloc[0]):
             continue
         ret = float(g["ret"].iloc[0])
         jump = abs(1 / r["value"] - 1)
+        if jump < MIN_JUMP:                             # 比例接近 1（如 1.02 送股）：跳变小于正常日波动，无法据此判断
+            continue
         ok = abs(ret) < jump / 2
         out.append({"symbol": r["symbol"], "date": r["date"], "ratio": r["value"], "adjusted_return": round(ret, 4),
                     "raw_jump": round(jump, 4), "ok": bool(ok)})

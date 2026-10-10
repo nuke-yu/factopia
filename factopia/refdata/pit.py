@@ -39,11 +39,11 @@ def build() -> dict:
         "历史上被剔除、退市的股票不在样本中，回测结果可能偏高；需数据商的历史成分股（第 0.2 节）")
     add("fx", "汇率", True, "交易日", "伦敦收盘", "收盘后", True, "组合层换算使用当日收盘汇率")
     text = RUNTIME / "text" / "fr" / "summary.json"
-    add("text", "公告文本信号", False, "公告日期（当地）", "正式发布时间（AMF 发往市场时间）",
+    add("text", "公告文本信号", True, "公告日期（当地）", "正式发布时间（AMF 发往市场时间）",
         "正式发布 + 处理延迟，收盘后发布顺延到下一交易日", True,
-        "第 14.9 节；目前用于情报台检验，尚未进入 RD-Agent 回测" + ("" if text.exists() else "（尚未生成）"))
+        "第 14.9、14.17 节；用于情报台检验与文本信号研究的回测（按实际可获取时间生效）；不提供给 RD-Agent 挖掘" + ("" if text.exists() else "（尚未生成）"))
     add("master", "证券主数据与行业分类", False, "—", "—", "取数时间（当前快照）", False,
-        "行业、财务年度、报告币种为当前快照，不是历史值；目前未用于回测，若用于行业中性化需改用时间点数据")
+        "行业、财务年度、报告币种为当前快照，不是历史值；不用于回测选股，只用于诊断的行业中性化与行业权重（以当前行业近似历史行业）")
     used_warn = [d for d in domains if d["used_in_backtest"] and d["status"] == "warn"]
     out = {"built_at": now(), "point_in_time": not used_warn,
            "label": "时间点一致" if not used_warn else "非时间点一致",
