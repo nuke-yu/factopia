@@ -19,6 +19,7 @@ import yaml
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from factopia import sources as srcs
 from factopia.research import draft as drafting
 from factopia.research import evidence, mandates, store, verdict
 from factopia import rules as rulebook
@@ -361,8 +362,11 @@ def _prepare_spec(raw: dict, lock: bool) -> dict:
     spec = {k: raw.get(k) for k in (
         "id", "title_zh", "based_on", "mandate", "markets", "horizon", "hypothesis_original", "direction_original",
         "hypothesis", "hypothesis_zh", "rationale", "directions", "exclusions", "falsification", "data_needs",
-        "constraints", "evidence", "questions", "run", "ai_draft")}
+        "constraints", "evidence", "questions", "run", "ai_draft", "signal_source")}
     spec["horizon"] = int(spec.get("horizon") or 20)
+    spec["signal_source"] = spec.get("signal_source") or "price_volume"     # price_volume：RD-Agent；text：文本信号研究（第 14.17 节）
+    if spec["signal_source"] not in ("price_volume", "text"):
+        raise HTTPException(422, "信号来源须为 price_volume（量价，RD-Agent）或 text（文本信号）")
     spec["markets"] = spec.get("markets") or []
     _check_markets(spec["markets"])
     ev = spec.get("evidence") or {}
@@ -380,6 +384,8 @@ def _prepare_spec(raw: dict, lock: bool) -> dict:
         problems.append("经济逻辑为必填")
     if any(not q.get("confirmed") for q in spec.get("questions") or []):
         problems.append("还有待确认事项未处理")
+    if spec["signal_source"] == "text" and not verdict.rules(spec)["sign_from_text"]:
+        problems.append("文本信号研究须在可证伪测试中写明 rank IC 的方向（positive / negative）：回测按该方向选股")
     # MINE-11：与页面相同的防泄漏检查在后端再做一次（直接调用接口也不能绕过）；可证伪测试按规定写明测试期，不算
     mentions = test_period_mentions(spec)
     if mentions and not any(q.get("confirmed") and "测试期年份" in str(q.get("text")) for q in spec.get("questions") or []):
@@ -519,6 +525,8 @@ def _study_market(m: str, runs: list[dict], jobs: list[dict], rule: dict) -> dic
                "baseline_diagnostics": _json(bdiag) if bdiag.exists() else None}
         fo |= {"significance": sig, "credibility": verdict.credibility(val, sig, rule),
                "validation": _validation_summary(val), "validation_job": _job_public(vjob) if vjob else None}
+    entry |= {"kind": run.get("kind", "rdagent"), "insufficient": run.get("insufficient"), "price_source": run.get("price_source"),
+              "text_dataset": run.get("text_dataset"), "score_direction": run.get("score_direction", 1)}
     return entry | {"state": state, "run_id": run["run_id"], "cost_usd": run["cost_usd"], "duration_s": run.get("duration_s"),
                     "baseline": (run.get("baseline") or {}).get("metrics"), "rounds": rows, "focus": fo}
 
@@ -851,12 +859,17 @@ def _materials(research_id: str, version: int) -> dict:
     exp = store.RESEARCH_DIR / research_id / f"explain_v{version}.json"
     qp = Path(os.environ.get("FACTOPIA_RUNTIME", "/workspace/runtime")) / "data" / "standardized" / "quality_report.json"
     uses_text = any(d.get("category") == "text" for d in spec.get("data_needs") or [])
-    pending = treview.queue(None, "pending", 1)["counts"]["pending"] if uses_text else 0
+    # 待复核数只统计本研究各市场使用的真实文本数据集；模拟数据集（词典法标注、虚构公司）的复核要求不适用，记录在审批材料中
+    used = [srcs.TEXT_DATASETS[m] for m in spec["markets"]] if uses_text else []
+    real = [d for d in used if d not in srcs.SIMULATED]
+    pending = sum(treview.queue(d, "pending", 1)["counts"]["pending"] for d in real)
+    waived = {d: treview.queue(d, "pending", 1)["counts"]["pending"] for d in used if d in srcs.SIMULATED}
     return {"spec": spec, "study": study(research_id, version), "rules": _version_rules(research_id, version, {}),
             "portfolio": P.load(research_id, version), "report": {"name": reps[0].name, "path": reps[0]} if reps else None,
             "quality": _json(qp) if qp.exists() else None, "text_pending": pending,
             "explanation": json.loads(exp.read_text(encoding="utf-8")) if exp.exists() else None,
-            "translations": {"uses_text": uses_text, "pending_reviews": pending}}
+            "translations": {"uses_text": uses_text, "pending_reviews": pending, "datasets": used,
+                             "waived_simulated": waived, "waived_note": "模拟数据集的复核要求不适用（仅用于流程演示，不得用于生产）" if waived else None}}
 
 
 @app.get("/api/research/{research_id}/versions/{version}/submission-check")
@@ -1042,10 +1055,10 @@ def management_overview():
     health = {m: {"active": 0, "paused": 0, "retired": 0, "alerts": 0, "pause_suggested": 0, "not_production": 0} for m in MARKETS}
     for e in cat:
         h = health[e["market"]]
-        if e["state"] in ("active", "paused", "retired"):
+        if e["state"] in ("active", "paused", "retired") and not e.get("simulated"):
             h[e["state"]] += 1
         else:
-            h["not_production"] += 1
+            h["not_production"] += 1          # 含模拟数据的演示信号（不得用于生产）
         if e["monitor"]:
             h["alerts"] += e["monitor"]["alerts"]
             h["pause_suggested"] += e["monitor"]["suggestion"] == "pause"
@@ -1192,7 +1205,8 @@ def start_runs(research_id: str, version: int, body: RunIn):
     markets = body.markets or spec["markets"]
     if any(m not in spec["markets"] for m in markets):
         raise HTTPException(422, f"版本 v{version} 只包含市场 {spec['markets']}")
-    return store.create_jobs(research_id, version, markets, spec["horizon"], body.loops, body.budget_usd)
+    kind = "text" if spec.get("signal_source") == "text" else None     # 文本信号研究（第 14.17 节）
+    return store.create_jobs(research_id, version, markets, spec["horizon"], body.loops, body.budget_usd, kind)
 
 
 @app.get("/api/jobs")

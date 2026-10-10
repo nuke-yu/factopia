@@ -15,7 +15,7 @@ from pathlib import Path
 
 import yaml
 
-from factopia import approval
+from factopia import approval, sources
 
 RUNTIME = Path(os.environ.get("FACTOPIA_RUNTIME", "/workspace/runtime"))
 CONFIGS = Path(os.environ.get("FACTOPIA_CONFIGS_DIR", "/workspace/configs"))
@@ -115,10 +115,12 @@ def catalog() -> list[dict]:
                     due_dt = min(due_dt, datetime.fromisoformat(mon["computed_at"]) + timedelta(days=7))
                 due = due_dt.date().isoformat()
             res = mt["results"].get(m) or {}
+            sim = bool(res.get("simulated"))                   # 模拟数据的信号：可走完审批与监控流程，但不得用于生产
             out.append({
                 "signal_id": sid, "research_id": rid, "version": ver, "market": m, "market_zh": MARKET_ZH[m],
-                "title": mt["title"], "submission": sub["id"], "state": state, "state_zh": STATE_ZH[state], "reason": reason,
-                "production": state == "active",
+                "title": mt["title"], "submission": sub["id"], "state": state,
+                "state_zh": STATE_ZH[state] + ("（模拟数据，仅演示）" if sim and state in ("active", "paused") else ""), "reason": reason,
+                "production": state == "active" and not sim, "simulated": sim, "kind": res.get("kind", "rdagent"),
                 "labels": {"languages": _languages(spec, mandate), "mandate": f"{mandate.get('name', mt.get('mandate'))}（{mandate.get('service_region', '')}）",
                            "data_scope": {"categories": cats, "universe": {"hk": "恒生指数成分股", "uk": "富时 100 成分股", "fr": "CAC 40 成分股"}[m],
                                           "snapshot": (mt["data_snapshot"].get(m) or "")[:16]},
@@ -164,5 +166,8 @@ def monitor_entry(signal_id: str) -> dict:
         raise CatalogError("该市场版本没有冻结的因子代码")
     sub = approval.load(e["submission"])
     periods = (sub["materials"]["parameters"]["periods"] or {}).get(e["market"]) or {}
+    run_p = RUNTIME / "results" / "runs" / str(e["run"]["run_id"]) / "run.json"
+    run = json.loads(run_p.read_text(encoding="utf-8")) if run_p.exists() else {}
     return {"signal_id": signal_id, "market": e["market"], "factors": factors, "horizon": sub["materials"]["parameters"]["horizon"],
+            "price_dataset": sources.of_run(run),
             "ref_start": periods.get("test_start"), "ref_end": periods.get("test_end"), "thresholds": e["thresholds"]}

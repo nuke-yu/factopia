@@ -24,7 +24,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from factopia import rules
+from factopia import rules, sources
 from factopia.validate import metrics as vm
 
 RUNTIME = Path(os.environ.get("FACTOPIA_RUNTIME", "/workspace/runtime"))
@@ -108,6 +108,26 @@ def build_signal(factors: list[dict], market: str, ref: tuple[str, str], horizon
     # 各因子可用时取平均（有的因子只覆盖部分日期）；覆盖率写入结果，缺失本身也是数据漂移的一部分
     score = pd.concat(parts, keys=range(len(parts))).groupby(level=1).mean()
     score = score.reindex(close.index)
+    return score, info, raw
+
+
+def text_signal(factors: list[dict], ref: tuple[str, str], horizon: int,
+                close: pd.DataFrame) -> tuple[pd.DataFrame, list[dict], dict]:
+    """文本信号（风险表述变化）：读取数据集当前的 signal.parquet（按公告可获取时间生效），处理方式与冻结因子相同。"""
+    fwd = close.shift(-horizon) / close - 1
+    parts, info, raw = [], [], {}
+    for f in factors:
+        sig = pd.read_parquet(RUNTIME / "text" / f["dataset"] / "signal.parquet")["risk_change"].unstack("instrument")
+        df = sig.reindex(index=close.index, columns=close.columns)
+        z = _zs(df)
+        ic_ref = _rank_ic(z.loc[ref[0]:ref[1]], fwd).mean() if z.loc[ref[0]:ref[1]].notna().any().any() else float("nan")
+        sign = 1.0 if (ic_ref if not pd.isna(ic_ref) else 0) >= 0 else -1.0
+        info.append({"name": f["name"], "kind": "text", "dataset": f["dataset"], "sign": sign, "ref_rank_ic": _r(ic_ref),
+                     "coverage_ref": _r(float(df.loc[ref[0]:ref[1]].notna().to_numpy().mean()), 3),
+                     "coverage_live": _r(float(df.loc[ref[1]:].iloc[1:].notna().to_numpy().mean()), 3) if len(df.loc[ref[1]:]) > 1 else 0.0})
+        raw[f["name"]] = df
+        parts.append(z * sign)
+    score = pd.concat(parts, keys=range(len(parts))).groupby(level=1).mean().reindex(close.index)
     return score, info, raw
 
 
@@ -292,20 +312,24 @@ def run(entry: dict, log=print) -> dict:
     out_dir = SIGNALS / sid
     work = out_dir / "work"
     work.mkdir(parents=True, exist_ok=True)
-    px = pd.read_parquet(RUNTIME / "data" / "standardized" / f"{m}.parquet", columns=["symbol", "date", "close", "volume"])
-    px["date"] = pd.to_datetime(px["date"])
-    close = px.pivot(index="date", columns="symbol", values="close").sort_index()
-    vol = px.pivot(index="date", columns="symbol", values="volume").reindex(close.index)
-    adv = (close * vol).rolling(ADV_DAYS, min_periods=10).mean()
+    ds = entry.get("price_dataset")                 # 文本信号研究的模拟市场：模拟行情与等权基准（factopia/sources.py）
+    close = sources.close(m, ds)
+    vol = sources.volume(m, ds)
     ret = close.pct_change(fill_method=None)
+    adv = (close * vol.reindex(close.index)).rolling(ADV_DAYS, min_periods=10).mean() if vol is not None \
+        else pd.DataFrame(np.nan, index=close.index, columns=close.columns)
     styles = {"size": np.log(adv.where(adv > 0)), "momentum": close.shift(21) / close.shift(252) - 1,
               "volatility": ret.rolling(60, min_periods=40).std(), "reversal": close / close.shift(21) - 1}
-    ix = pd.read_parquet(RUNTIME / "data" / "raw" / m / "index.parquet", columns=["date", "close"])
-    ix["date"] = pd.to_datetime(ix["date"]).dt.tz_localize(None).dt.normalize()
-    idx = ix.set_index("date")["close"].sort_index()
+    if vol is None:
+        del styles["size"]
+    idx = sources.index(m, ds)
     ref = (entry["ref_start"], entry["ref_end"])
-    log(f"{sid}：重算 {len(entry['factors'])} 个因子（冻结代码）")
-    score, finfo, raw = build_signal(entry["factors"], m, ref, entry["horizon"], work, close)
+    if all(f.get("kind") == "text" for f in entry["factors"]):
+        log(f"{sid}：读取文本信号（情报台按新公告持续更新）")
+        score, finfo, raw = text_signal(entry["factors"], ref, entry["horizon"], close)
+    else:
+        log(f"{sid}：重算 {len(entry['factors'])} 个因子（冻结代码）")
+        score, finfo, raw = build_signal(entry["factors"], m, ref, entry["horizon"], work, close)
     live_start = (pd.Timestamp(ref[1]) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
     live_end = str(score.dropna(how="all").index.max().date())
     costs = rules.costs(m)
@@ -331,7 +355,10 @@ def run(entry: dict, log=print) -> dict:
         "diagnosis": diagnose(rs, ls, dr, dl), "thresholds": entry.get("thresholds") or {},
         "rolling": {"dates": [str(d.date()) for d in series.index[::3]], "values": [_r(v) for v in series.to_numpy()[::3]],
                     "live_start": live_start},
-        "note": "上线期为测试期之后的数据（2024 年起），用于演示上线后的监控；信号为冻结因子的等权合成，不含模型重新训练",
+        "note": "上线期为测试期之后的数据（2024 年起），用于演示上线后的监控；" + (
+            "信号为情报台的文本信号（风险表述变化，按公告可获取时间生效）" + ("；行情与公告均为模拟数据，仅用于流程演示" if ds else "")
+            if all(f.get("kind") == "text" for f in entry["factors"]) else "信号为冻结因子的等权合成，不含模型重新训练"),
+        "price_source": sources.describe(ds),
     }
     score.stack().rename("score").reset_index().rename(columns={"level_0": "date", "level_1": "symbol"}).to_parquet(out_dir / "score.parquet", index=False)
     tmp = out_dir / "monitor.json.tmp"

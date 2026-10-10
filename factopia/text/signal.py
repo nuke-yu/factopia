@@ -81,10 +81,14 @@ def score_filing(dataset: str, filing: dict, dec: dict) -> dict | None:
             "glossary_version": lab["glossary_version"], "prompt_version": lab["prompt_version"]}
 
 
-def scores(dataset: str) -> pd.DataFrame:
+def scores(dataset: str, realign: bool = True) -> pd.DataFrame:
+    """realign=False：使用上次对齐的结果（aligned.parquet），供没有交易日历的镜像复现信号（文本信号研究的复现检查）。"""
     d = ds_dir(dataset)
-    meta = align(pd.read_parquet(d / "filings.parquet"), dataset)
-    meta.to_parquet(d / "aligned.parquet", index=False)      # 检索与页面直接读取（api 镜像不含交易日历）
+    if realign:
+        meta = align(pd.read_parquet(d / "filings.parquet"), dataset)
+        meta.to_parquet(d / "aligned.parquet", index=False)      # 检索与页面直接读取（api 镜像不含交易日历）
+    else:
+        meta = pd.read_parquet(d / "aligned.parquet")
     dec = review.decisions()
     rows = []
     for f in meta.to_dict("records"):

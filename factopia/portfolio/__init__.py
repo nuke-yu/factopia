@@ -26,7 +26,7 @@ import numpy as np
 import pandas as pd
 import yaml
 
-from factopia import rules
+from factopia import rules, sources
 from factopia.rules import context as rctx
 
 RUNTIME = Path(os.environ.get("FACTOPIA_RUNTIME", "/workspace/runtime"))
@@ -93,23 +93,25 @@ def fx_to_base(base: str) -> pd.DataFrame:
     return pd.DataFrame({m: to_hkd[c] / to_hkd[base] for m, c in LOCAL.items()})
 
 
-def _prices(market: str) -> pd.DataFrame:
-    px = pd.read_parquet(RUNTIME / "data" / "standardized" / f"{market}.parquet", columns=["symbol", "date", "close"])
-    px["date"] = pd.to_datetime(px["date"])
-    return px.pivot(index="date", columns="symbol", values="close").sort_index()
+def _prices(market: str, dataset: str | None = None) -> pd.DataFrame:
+    return sources.close(market, dataset)
 
 
-def _index(market: str) -> pd.Series:
-    ix = pd.read_parquet(RUNTIME / "data" / "raw" / market / "index.parquet", columns=["date", "close"])
-    ix["date"] = pd.to_datetime(ix["date"]).dt.tz_localize(None).dt.normalize()
-    return ix.set_index("date")["close"].sort_index()
+def _index(market: str, dataset: str | None = None) -> pd.Series:
+    return sources.index(market, dataset)
 
 
-def _scores(run_id: str, loop) -> pd.DataFrame:
+def _run(run_id) -> dict:
+    p = RESULTS / "runs" / str(run_id) / "run.json"
+    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+
+
+def _scores(run_id: str, loop, direction: int = 1) -> pd.DataFrame:
+    """逐股打分；direction = −1（文本信号：打分越低越好）时取反，组合统一按"越大越好"选股。"""
     s = pd.read_parquet(RESULTS / "runs" / run_id / "score" / f"{loop}.parquet")
     s["symbol"] = s["instrument"].map(rctx._symbol)
     s["date"] = pd.to_datetime(s["date"])
-    return s.pivot_table(index="date", columns="symbol", values="score").sort_index()
+    return s.pivot_table(index="date", columns="symbol", values="score").sort_index() * direction
 
 
 # ---------------------------------------------------------------- 组合构建
@@ -155,17 +157,24 @@ def build(spec: dict, study: dict) -> dict:
 
     px, idx, sig, src = {}, {}, {}, {}
     for m in markets:
-        px[m] = _prices(m)
-        idx[m] = _index(m)
         e = (study.get("markets") or {}).get(m) or {}
+        run = _run(e.get("run_id"))
+        ds = sources.of_run(run)                  # 文本信号研究的模拟市场：模拟行情、虚构公司股票池、等权基准
+        px[m] = _prices(m, ds)
+        idx[m] = _index(m, ds)
+        if ds:
+            universe[m] = sources.universe(m, ds)
         f = e.get("focus")
         p = RESULTS / "runs" / str(e.get("run_id")) / "score" / f"{(f or {}).get('loop')}.parquet"
+        ps = sources.describe(ds)
         if f and p.exists():
-            sig[m] = _scores(e["run_id"], f["loop"])
+            sig[m] = _scores(e["run_id"], f["loop"], int(run.get("score_direction") or 1))
             src[m] = {"run_id": e["run_id"], "loop": f["loop"], "factors": f.get("factors") or [],
-                      "hypothesis": f.get("hypothesis"), "rank_ic_t": (f.get("significance") or {}).get("t")}
+                      "hypothesis": f.get("hypothesis"), "rank_ic_t": (f.get("significance") or {}).get("t"),
+                      "kind": run.get("kind", "rdagent"), "price_source": ps}
         else:
-            src[m] = {"run_id": e.get("run_id"), "loop": None, "note": "没有采纳轮次的打分：该市场等权持有股票池"}
+            src[m] = {"run_id": e.get("run_id"), "loop": None, "note": "没有采纳轮次的打分：该市场等权持有股票池",
+                      "kind": run.get("kind", "rdagent"), "price_source": ps}
     if not sig:
         raise PortfolioError("各市场都还没有采纳轮次的逐股打分：先完成运行并导出结果")
 

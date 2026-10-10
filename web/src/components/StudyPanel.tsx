@@ -5,7 +5,7 @@ import { cssVar, fix, MARKET_LABEL, pct, signed, useAsync } from "../lib";
 import { Badge, ErrorBox, Loading, Panel } from "./ui";
 import StudyScatter from "./charts/StudyScatter";
 
-const OVERALL_TONE = { rejected: "bad", passed: "good", pending: "accent" } as const;
+const OVERALL_TONE = { rejected: "bad", passed: "good", pending: "accent", insufficient: "warn" } as const;
 const FINDING_COLOR = { bad: "--bad", warn: "--warn", good: "--good" } as const;
 const STATE_ZH: Record<string, string> = {
   queued: "排队中", running: "运行中", done: "已完成", failed: "失败", cancelled: "已停止", budget_stopped: "超出预算停止",
@@ -24,6 +24,7 @@ export default function StudyPanel({ researchId, version, current }: { researchI
   const markets = s.rule.markets.map((m) => s.markets[m]).filter(Boolean) as StudyMarket[];
   const anyRounds = markets.some((e) => e.rounds.length > 0);
   const primaryCred = s.markets[s.rule.primary]?.focus?.credibility;
+  const textStudy = markets.some((e) => e.kind === "text");
 
   return (
     <Panel eyebrow={`研究结论 · ${s.research_id} v${s.version} · ${s.rule.markets.map((m) => MARKET_LABEL[m]).join(" / ")}`}
@@ -54,8 +55,8 @@ export default function StudyPanel({ researchId, version, current }: { researchI
           </div>
           <div className="text-xs text-muted leading-relaxed flex flex-col gap-1.5">
             <div>
-              <span className="text-text">判定方法：</span>主市场（{MARKET_LABEL[s.rule.primary]}）看 RD-Agent 最终采纳的轮次，需同时满足
-              rank IC {s.rule.ric_sign > 0 ? "为正" : "为负"}、扣成本年化超额高于起点、最大回撤不比起点差；其他市场看采纳轮次的 rank IC 方向是否与假设一致。
+              <span className="text-text">判定方法：</span>主市场（{MARKET_LABEL[s.rule.primary]}）看{textStudy ? "按验证期判定采纳的轮次（文本信号研究）" : " RD-Agent 最终采纳的轮次"}，需同时满足
+              rank IC {s.rule.ric_sign > 0 ? "为正" : "为负"}、扣成本年化超额高于起点、{textStudy ? "绝对回撤（扣成本）不比等权持有股票池差" : "最大回撤不比起点差"}；其他市场看采纳轮次的 rank IC 方向是否与假设一致。
               不在各轮中挑最好的一轮，避免多次尝试挑结果。原文中的其他条件（如 t 值门槛、回撤容忍幅度）平台尚未检验，需人工确认。
               {!s.rule.sign_from_text && " 原文没有写明 rank IC 方向，按为正判定。"}
             </div>
@@ -173,20 +174,26 @@ function MarketCard({ e, current }: { e: StudyMarket; current: boolean }) {
         <span className="font-medium">{MARKET_LABEL[e.market as Market]}</span>
         {e.primary && <Badge tone="accent">主市场</Badge>}
         {current && <Badge>当前运行</Badge>}
+        {e.kind === "text" && <Badge tone="accent">文本信号</Badge>}
+        {e.price_source?.simulated && <Badge tone="warn">模拟数据，仅用于流程演示</Badge>}
         <span className="ml-auto">
-          {!done ? <Badge tone={e.state === "running" ? "accent" : "muted"}>{STATE_ZH[e.state] ?? e.state}</Badge>
+          {done && e.insufficient ? <Badge tone="warn">数据不足</Badge>
+            : !done ? <Badge tone={e.state === "running" ? "accent" : "muted"}>{STATE_ZH[e.state] ?? e.state}</Badge>
             : !f ? <Badge tone={e.primary ? "bad" : "muted"}>没有采纳的轮次</Badge>
             : f.passed ? <Badge tone="good">{e.primary ? "通过" : "方向一致"}</Badge>
             : <Badge tone="bad">{e.primary ? "未通过" : "方向相反"}</Badge>}
         </span>
       </div>
 
+      {e.insufficient && <p className="text-xs text-muted">{e.insufficient}</p>}
       {done && f ? (
         <>
-          <div className="text-xs text-faint">第 {f.loop} 轮（RD-Agent 采纳）· {f.factors.slice(0, 3).join("、")}{f.factors.length > 3 ? ` 等 ${f.factors.length} 个` : ""}</div>
+          <div className="text-xs text-faint">第 {f.loop} 轮（{e.kind === "text" ? "验证期判定采纳" : "RD-Agent 采纳"}）· {f.factors.slice(0, 3).join("、")}{f.factors.length > 3 ? ` 等 ${f.factors.length} 个` : ""}</div>
           <dl className="grid grid-cols-2 gap-x-3 gap-y-2 text-xs">
             <div><dt className="text-faint">扣成本年化</dt><dd className="num text-base">{pct(b?.annual_return_with_cost)} → <span className="text-text">{pct(f.metrics.annual_return_with_cost)}</span></dd></div>
-            <div><dt className="text-faint">最大回撤</dt><dd className="num text-base">{pct(b?.max_drawdown_with_cost)} → <span className="text-text">{pct(f.metrics.max_drawdown_with_cost)}</span></dd></div>
+            {e.kind === "text"
+              ? <div><dt className="text-faint">最大回撤（绝对）</dt><dd className="num text-base">{pct(b?.max_drawdown_abs)} → <span className="text-text">{pct(f.metrics.max_drawdown_abs)}</span></dd></div>
+              : <div><dt className="text-faint">最大回撤</dt><dd className="num text-base">{pct(b?.max_drawdown_with_cost)} → <span className="text-text">{pct(f.metrics.max_drawdown_with_cost)}</span></dd></div>}
             <div><dt className="text-faint">rank IC</dt><dd className="num text-base">{fix(f.metrics.rank_ic, 4)}</dd></div>
             <div><dt className="text-faint">第 {q?.groups ?? 5} 组 − 第 1 组</dt>
               <dd className="num text-base" style={{ color: q?.spread_mean == null ? undefined : cssVar(q.spread_mean > 0 ? "--good" : "--bad") }}>{signed(q?.spread_mean, 2)}</dd></div>
@@ -197,8 +204,10 @@ function MarketCard({ e, current }: { e: StudyMarket; current: boolean }) {
           <CredibilityBlock e={e} />
           {f.diagnostics && <DiagnosticsBlock d={f.diagnostics} />}
         </>
-      ) : done ? (
-        <p className="text-xs text-muted">RD-Agent 没有采纳任何一轮：新因子都没有超过起点（扣成本年化 {pct(b?.annual_return_with_cost)}）。</p>
+      ) : done && e.insufficient ? null : done ? (
+        <p className="text-xs text-muted">{e.kind === "text"
+          ? `验证期未满足采纳条件（rank IC 方向与假设一致且扣成本超额高于等权持有股票池），不采纳；起点扣成本年化超额 ${pct(b?.annual_return_with_cost)}。`
+          : `RD-Agent 没有采纳任何一轮：新因子都没有超过起点（扣成本年化 ${pct(b?.annual_return_with_cost)}）。`}</p>
       ) : (
         <p className="text-xs text-muted">{e.job ? `任务${e.job.state_zh}，完成后自动判定。` : "这个版本还没有在该市场运行。"}</p>
       )}

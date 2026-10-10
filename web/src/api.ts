@@ -8,6 +8,7 @@ export type Metrics = {
   rank_ic: number | null;
   annual_return_with_cost: number | null;
   annual_return_without_cost: number | null;
+  max_drawdown_abs?: number | null;   // 文本信号研究：绝对回撤（扣成本）
   max_drawdown_with_cost: number | null;
   information_ratio_with_cost: number | null;
 };
@@ -121,6 +122,7 @@ export type DraftResult = {
     directions: string[]; exclusions: string[]; falsification: string; data_needs: DataNeed[];
     mandate_interpretations: { term: string; interpretation_zh: string; constraint_en: string | null }[];
     open_questions: string[]; leak_flags: string[]; system_questions: string[]; constraints: string[];
+    signal_source?: SignalSource;
   };
   evidence: { groups: string[]; alpha158: EvidenceAlpha[]; past_runs: { run_id: string; market: Market; loop: number; hypothesis: string; adopted: boolean }[] };
   mandate: Mandate;
@@ -129,19 +131,20 @@ export type DraftResult = {
 export type DraftInput = {
   hypothesis: string; direction: string; markets: Market[]; horizon: number; mandate: string; groups: string[]; include_past_runs: boolean;
 };
+export type SignalSource = "price_volume" | "text";
 export type Question = { text: string; source: "AI" | "系统" | "平台"; confirmed: boolean };
 export type Spec = {
   id: string; version?: number; title_zh: string; mandate: string; markets: Market[]; horizon: number;
   hypothesis_original: string; direction_original: string; hypothesis: string; hypothesis_zh: string; rationale: Rationale;
   directions: string[]; exclusions: string[]; falsification: string; data_needs: DataNeed[]; constraints: string[];
   evidence: { groups: string[]; include_past_runs: boolean; items: string[] }; questions: Question[];
-  run: { loops: number; budget_usd: number };
+  run: { loops: number; budget_usd: number }; signal_source?: SignalSource;
   ai_draft: DraftResult["meta"] & { original: Pick<Spec, "hypothesis" | "rationale" | "directions" | "exclusions" | "falsification"> };
   locked_at?: string; locked_by?: string; precheck_setup?: Precheck; edits?: { field: string; by: string; at: string }[]; past_runs?: string[];
 };
 export type JobState = "queued" | "running" | "done" | "failed" | "cancelled" | "budget_stopped";
 export type Job = {
-  kind?: "validate"; target_run?: string; loop?: number; placebo_n?: number;
+  kind?: "validate" | "monitor" | "text"; target_run?: string; loop?: number; placebo_n?: number;
   job_id: string; batch_id: string; research_id: string; version: number; market: Market; horizon: number; loops: number;
   budget_usd: number; state: JobState; state_zh: string; created_at: string; started_at: string | null; ended_at: string | null;
   run_id: string | null; cost_usd: number; rounds: number; error: string | null;
@@ -213,6 +216,9 @@ export type Explanation = { sentences: { text: string; cites: string[] }[]; drop
 export type StudyMarket = {
   market: Market; primary: boolean; state: JobState | "none" | "incomplete"; run_id: string | null; attempts: number; job: Job | null;
   cost_usd?: number; duration_s?: number | null; baseline?: Metrics | null;
+  kind?: "rdagent" | "text"; insufficient?: string | null; score_direction?: number;
+  price_source?: { dataset: string | null; simulated: boolean; label: string; benchmark: string } | null;
+  text_dataset?: { dataset: string; source: string; simulated: boolean; signal_start: string; signal_end: string } | null;
   rounds: { loop: number; decision: boolean | null; rank_ic: number | null; rank_ic_t: number | null; return: number | null; drawdown: number | null; passed: boolean | null; hypothesis: string | null }[];
   focus: {
     loop: number; metrics: Metrics; checks: Check[]; passed: boolean | null; hypothesis: string | null; factors: string[];
@@ -226,7 +232,7 @@ export type StudyMarket = {
 export type Study = {
   research_id: string; version: number; hypothesis: string; title: string | null;
   rule: { primary: Market; markets: Market[]; ric_sign: 1 | -1; sign_from_text: boolean; text: string };
-  overall: { state: "pending" | "rejected" | "passed"; label: string; reason: string };
+  overall: { state: "pending" | "rejected" | "passed" | "insufficient"; label: string; reason: string };
   markets: Partial<Record<Market, StudyMarket>>;
   findings: { tone: "bad" | "warn" | "good"; text: string }[];
   transfer: Transfer; explanation: Explanation | null;

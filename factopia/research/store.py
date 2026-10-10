@@ -68,8 +68,10 @@ def research_ids() -> list[str]:
 
 # ── 运行任务 ─────────────────────────────────────────────────
 
-def create_jobs(research_id: str, version: int, markets: list[str], horizon: int, loops: int, budget_usd: float) -> dict:
-    """一个版本在多个市场运行：每个市场一个任务，属于同一批次，按市场顺序排队。"""
+def create_jobs(research_id: str, version: int, markets: list[str], horizon: int, loops: int, budget_usd: float,
+                kind: str | None = None) -> dict:
+    """一个版本在多个市场运行：每个市场一个任务，属于同一批次，按市场顺序排队。
+    kind = "text"：文本信号研究（factopia/text/research.py），不启动 RD-Agent、不调用大模型。"""
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
     batch = f"{stamp}_{secrets.token_hex(2)}"
     jobs = []
@@ -78,6 +80,8 @@ def create_jobs(research_id: str, version: int, markets: list[str], horizon: int
                "market": m, "horizon": horizon, "loops": loops, "budget_usd": budget_usd,
                "state": "queued", "created_at": now(), "started_at": None, "ended_at": None,
                "run_id": None, "cost_usd": 0.0, "rounds": 0, "error": None}
+        if kind:
+            job |= {"kind": kind, "loops": 1, "budget_usd": 0.0}
         _atomic_write(JOBS_DIR / f"{job['job_id']}.json", json.dumps(job, ensure_ascii=False, indent=2))
         jobs.append(job)
     return {"batch_id": batch, "jobs": jobs}
@@ -175,4 +179,5 @@ def retry_job(job: dict) -> dict:
         run = json.loads((RUNTIME / "results" / "runs" / job["target_run"] / "run.json").read_text(encoding="utf-8"))
         new = create_validate_job(run, job["loop"], job.get("placebo_n", 20))
         return {"batch_id": new["batch_id"], "jobs": [new]}
-    return create_jobs(job["research_id"], job["version"], [job["market"]], job["horizon"], job["loops"], job["budget_usd"])
+    return create_jobs(job["research_id"], job["version"], [job["market"]], job["horizon"], job["loops"], job["budget_usd"],
+                       job.get("kind"))

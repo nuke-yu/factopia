@@ -30,8 +30,8 @@ DATA = {
     "benchmark": ("基准指数日线", {"hk": "可用", "uk": "可用", "fr": "可用"}, True),
     "fx": ("汇率", {"hk": "可用（组合层）", "uk": "可用（组合层）", "fr": "可用（组合层）"}, False),
     "fundamentals": ("财务与基本面数据", {"hk": "未接入", "uk": "未接入", "fr": "未接入"}, False),
-    "text": ("公告与新闻文本", {"hk": "需授权，目前用模拟数据（情报台）", "uk": "渠道待确认，目前用模拟数据（情报台）",
-                               "fr": "AMF 真实公告已接入情报台（文本信号与检验）"}, False),
+    "text": ("公告与新闻文本", {"hk": "需授权，目前用模拟数据（情报台，模拟数据，仅用于流程演示）", "uk": "渠道待确认，目前用模拟数据（情报台，模拟数据，仅用于流程演示）",
+                               "fr": "AMF 真实公告已接入情报台（2024 年 8 月起）"}, False),
     "alternative": ("另类数据", {"hk": "未接入", "uk": "未接入", "fr": "未接入"}, False),
     "other": ("其他数据", {"hk": "待确认", "uk": "待确认", "fr": "待确认"}, False),
 }
@@ -118,6 +118,9 @@ def _validate(raw: dict, inputs: dict) -> dict:
         name, status, usable = DATA[cat]
         out["data_needs"].append({"category": cat, "name": name, "detail": str(d.get("detail") or "").strip(), "usable": usable,
                                   "status": {m: status[m] for m in inputs["markets"]}})
+    # 信号来源：数据需求以公告文本为主（含文本、且不需要量价以外的其他数据）→ 文本信号研究；研究员可在页面上修改
+    cats = {n["category"] for n in out["data_needs"]}
+    out["signal_source"] = "text" if "text" in cats else "price_volume"
     free_text = inputs.get("_free_text") or []
     for t in raw.get("mandate_interpretations") or []:
         term = str(t.get("term") or "").strip()
@@ -132,8 +135,13 @@ def _validate(raw: dict, inputs: dict) -> dict:
 def _system_questions(d: dict, inputs: dict) -> list[str]:
     """系统补充的待确认事项：数据缺口、自由文本授权条款的解释、测试期年份（RS-03、RS-04、RS-06）。"""
     qs = []
+    if d.get("signal_source") == "text":
+        qs.append("信号来源为文本（管理层风险表述变化）：开始运行时检验情报台的文本信号，不启动 RD-Agent；"
+                  "香港、英国为模拟数据（仅用于流程演示），法国 AMF 真实公告从 2024 年 8 月开始，测试期内数据不足。"
+                  "起点为等权持有股票池（不使用文本信号，不是 RD-Agent 的 20 个基础因子），回撤按绝对回撤（扣成本）比较。"
+                  "如需改为量价研究，请把信号来源改为量价。")
     for n in d["data_needs"]:
-        if not n["usable"] and n["category"] != "fx":
+        if not n["usable"] and n["category"] not in ("fx",) and not (n["category"] == "text" and d.get("signal_source") == "text"):
             qs.append(f"研究需要「{n['name']}」（{n['detail']}），但 RD-Agent 目前只能使用日线量价与基准指数；这部分方向不会被实现。")
     for t in d["mandate_interpretations"]:
         qs.append(f"授权条款「{t['term']}」的解释：{t['interpretation_zh']}"

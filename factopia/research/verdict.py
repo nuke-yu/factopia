@@ -12,7 +12,7 @@ RD-Agent 的"是否采纳"由它的 AI 评审决定，主要看收益；研究�
 import re
 
 SIGN = re.compile(r"\b(positive|negative)\s+rank\s+IC\b", re.I)
-NAMES = {"hk": r"Hong Kong|\bHSI\b|Hang Seng", "uk": r"\bUK\b|United Kingdom|\bFTSE\b|London", "fr": r"\bFrance\b|\bFrench\b|\bCAC\b|Paris"}
+NAMES = {"hk": r"Hong Kong|\bHK\b|\bHSI\b|Hang Seng", "uk": r"\bUK\b|United Kingdom|\bFTSE\b|London", "fr": r"\bFrance\b|\bFrench\b|\bFR\b|\bCAC\b|Paris"}
 MARKET_ZH = {"hk": "香港", "uk": "英国", "fr": "法国"}
 
 
@@ -35,18 +35,21 @@ def _sign_zh(s: int) -> str:
     return "为正" if s > 0 else "为负"
 
 
-def check_round(metrics: dict | None, baseline: dict | None, rule: dict, primary: bool) -> list[dict]:
-    """一轮的各项检查；ok 为 None 表示缺少数据、无法判定。"""
+def check_round(metrics: dict | None, baseline: dict | None, rule: dict, primary: bool, kind: str = "rdagent") -> list[dict]:
+    """一轮的各项检查；ok 为 None 表示缺少数据、无法判定。
+    文本信号研究（kind = text）的起点是等权持有股票池，相对基准的超额回撤恒为 0，回撤检查改为比较绝对回撤（扣成本）。"""
     m, b = metrics or {}, baseline or {}
     ric = m.get("rank_ic")
     items = [{"key": "rank_ic", "label": f"rank IC {_sign_zh(rule['ric_sign'])}", "value": ric, "ref": None,
               "ok": None if ric is None else ric * rule["ric_sign"] > 0}]
     if primary:
         r, br = m.get("annual_return_with_cost"), b.get("annual_return_with_cost")
-        d, bd = m.get("max_drawdown_with_cost"), b.get("max_drawdown_with_cost")
+        dk = "max_drawdown_abs" if kind == "text" else "max_drawdown_with_cost"
+        d, bd = m.get(dk), b.get(dk)
         items.append({"key": "return", "label": "扣成本年化超额高于起点", "value": r, "ref": br,
                       "ok": None if r is None or br is None else r > br})
-        items.append({"key": "drawdown", "label": "最大回撤不比起点差", "value": d, "ref": bd,
+        items.append({"key": "drawdown", "label": "最大回撤（绝对，扣成本）不比等权持有股票池差" if kind == "text" else "最大回撤不比起点差",
+                      "value": d, "ref": bd,
                       "ok": None if d is None or bd is None else d >= bd})
     return items
 
@@ -63,7 +66,7 @@ def judge_rounds(run: dict, rounds: list[dict], rule: dict) -> list[dict]:
     base = (run.get("baseline") or {}).get("metrics")
     out = []
     for r in rounds:
-        checks = check_round(r.get("metrics"), base, rule, primary) if r.get("metrics") else []
+        checks = check_round(r.get("metrics"), base, rule, primary, run.get("kind", "rdagent")) if r.get("metrics") else []
         out.append({"loop": r["loop"], "checks": checks, "passed": passed(checks)})
     return out
 
@@ -77,6 +80,8 @@ def focus_round(rounds: list[dict]) -> dict | None:
 def overall(markets: dict, rule: dict) -> dict:
     """研究结论：主市场未完成 → 进行中；主市场没有采纳轮次或采纳轮次未通过 → 否定；否则通过。"""
     p = markets.get(rule["primary"])
+    if p and p.get("insufficient"):
+        return {"state": "insufficient", "label": "数据不足", "reason": p["insufficient"]}
     if not p or p["state"] != "done":
         return {"state": "pending", "label": "进行中", "reason": "主市场的运行尚未完成"}
     if p["focus"] is None:
@@ -147,6 +152,10 @@ def transfer(markets: dict, rule: dict, diagnostics: dict) -> dict:
     信号有效、但在有效市场中扣除成本、汇率或容量后不再有正超额 → 第四类"扣除币种、成本或市场结构影响后不再具有经济意义"。"""
     sign = rule["ric_sign"]
     per, ts = {}, {}
+    short = {m: e["insufficient"] for m, e in markets.items() if e.get("insufficient")}   # 数据不足的市场不参与分类
+    markets = {m: e for m, e in markets.items() if m not in short}
+    if not markets:
+        return {"label": "数据不足", "statistical": "数据不足", "reason": "；".join(short.values()), "markets": {}, "threshold": TRANSFER_T}
     for m, e in markets.items():
         sig = ((e.get("focus") or {}).get("significance") or {})
         t = sig.get("t")
@@ -175,4 +184,7 @@ def transfer(markets: dict, rule: dict, diagnostics: dict) -> dict:
         reasons = sorted({r for m in econ_fail for r in per[m]["economic"]["reasons"]})
         return {"label": "扣除币种、成本或市场结构影响后不再具有经济意义", "statistical": label, "reason": "；".join(reasons),
                 "markets": per, "threshold": TRANSFER_T}
-    return {"label": label, "statistical": label, "reason": "", "markets": per, "threshold": TRANSFER_T}
+    for m, why in short.items():
+        per[m] = {"t_aligned": None, "effective": False, "economic": None, "insufficient": why}
+    return {"label": label, "statistical": label, "reason": "；".join(f"{m.upper()} 数据不足，未参与分类" for m in short),
+            "markets": per, "threshold": TRANSFER_T}

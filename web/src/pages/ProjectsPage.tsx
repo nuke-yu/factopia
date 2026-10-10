@@ -96,7 +96,7 @@ function ProjectCard({ p }: { p: Project }) {
   );
 }
 
-const OVERALL_TONE = { rejected: "bad", passed: "good", pending: "accent" } as const;
+const OVERALL_TONE = { rejected: "bad", passed: "good", pending: "accent", insufficient: "warn" } as const;
 
 /** 每个已运行的版本：按可证伪测试的研究结论，点击进入结果页查看三市场对比。 */
 function StudyLinks({ p }: { p: Project }) {

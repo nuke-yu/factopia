@@ -23,7 +23,7 @@ def risk(excess: pd.Series) -> dict:
     cum = excess.cumsum()
     std = excess.std()
     return {"annual_return": _r(excess.mean() * N),
-            "information_ratio": _r(excess.mean() / std * np.sqrt(N)) if std > 0 else None,
+            "information_ratio": _r(excess.mean() / std * np.sqrt(N)) if std > 1e-12 else None,
             "max_drawdown": _r((cum - cum.cummax()).min())}
 
 

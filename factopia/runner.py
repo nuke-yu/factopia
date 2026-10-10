@@ -238,6 +238,26 @@ def run_monitor(job: dict) -> None:
     log(f"{job['job_id']}: {job['state']}{'：' + job['error'] if job.get('error') else ''}")
 
 
+def run_text(job: dict) -> None:
+    """文本信号研究（第 14.17 节）：检验情报台的文本信号，输出与 RD-Agent 运行相同格式的结果，并直接计算诊断。"""
+    from factopia.diagnostics import diagnose_run
+    from factopia.text import research as text_research
+    job.update(state="running", started_at=store.now())
+    store.write_job(job)
+    try:
+        run_id = text_research.run(job, log=log)
+        job.update(run_id=run_id, rounds=1)
+        store.write_job(job)
+        diagnose_run(rdagent_run.RUNS_DIR / run_id)
+        job["state"] = "done"
+    except Exception as e:
+        job.update(state="failed", error=f"{e}"[:800] or traceback.format_exc()[-800:])
+        log(traceback.format_exc())
+    job["ended_at"] = store.now()
+    store.write_job(job)
+    log(f"{job['job_id']}: {job['state']}{'：' + job['error'] if job.get('error') else ''}")
+
+
 def init_dirs() -> None:
     """研究规格、任务、组合、报告与审批目录由后端写入：交给 api 的用户，运行器以 root 运行仍可读写。"""
     for d in (store.RESEARCH_DIR, store.JOBS_DIR, store.RUNTIME / "portfolio", store.RUNTIME / "reports",
@@ -249,7 +269,7 @@ def init_dirs() -> None:
 
 def execute(job: dict) -> None:
     try:
-        {"validate": run_validation, "monitor": run_monitor}.get(job.get("kind"), run_job)(job)
+        {"validate": run_validation, "monitor": run_monitor, "text": run_text}.get(job.get("kind"), run_job)(job)
     except Exception:
         job.update(state="failed", ended_at=store.now(), error=traceback.format_exc()[-1200:])
         store.write_job(job)

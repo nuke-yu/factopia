@@ -164,6 +164,9 @@ def summary(s: dict) -> dict:
 
 # ---------------------------------------------------------------- 提交
 
+FACTOR_KEYS = ("name", "description", "formulation", "code", "kind", "dataset", "source", "simulated")   # kind = text：文本信号
+
+
 def preconditions(m: dict) -> list[str]:
     """WB-05：提交前的固定顺序检查；返回未满足的条件。"""
     bad = []
@@ -205,7 +208,7 @@ def submit(m: dict, by: str, note: str = "") -> dict:
         if f:
             rounds = json.loads((RUNTIME / "results" / "runs" / e["run_id"] / "rounds.json").read_text(encoding="utf-8"))
             r = next((x for x in rounds if x["loop"] == f["loop"]), {})
-            factors[mk] = [{k: x.get(k) for k in ("name", "description", "formulation", "code")} for x in r.get("factors") or []]
+            factors[mk] = [{k: x[k] for k in FACTOR_KEYS if k in x} for x in r.get("factors") or []]
     q = m.get("quality") or {}
     materials = {
         "title": spec.get("title_zh") or spec["id"], "hypothesis": spec.get("hypothesis"), "hypothesis_original": spec.get("hypothesis_original"),
@@ -217,7 +220,9 @@ def submit(m: dict, by: str, note: str = "") -> dict:
         "results": {mk: {"run_id": e.get("run_id"), "loop": (e.get("focus") or {}).get("loop"),
                          "rank_ic": ((e.get("focus") or {}).get("metrics") or {}).get("rank_ic"),
                          "rank_ic_t": ((e.get("focus") or {}).get("significance") or {}).get("t"),
-                         "credibility": ((e.get("focus") or {}).get("credibility") or {}).get("label")} for mk, e in st["markets"].items()},
+                         "credibility": ((e.get("focus") or {}).get("credibility") or {}).get("label"),
+                         "kind": e.get("kind", "rdagent"), "simulated": bool((e.get("price_source") or {}).get("simulated")),
+                         "insufficient": e.get("insufficient")} for mk, e in st["markets"].items()},
         "transfer": st.get("transfer"), "overall": st.get("overall"),
         "portfolio": {k: m["portfolio"][k] for k in ("built_at", "base_currency", "period", "metrics", "attribution", "fx_split", "feedback")},
         "prechecks": {"setup": m["rules"]["setup"], "portfolio": m["rules"]["portfolio"]},
@@ -306,7 +311,8 @@ def act(sid: str, role: str, by: str, action: str, note: str = "", rule: str | N
         s["lock"] = {"locked_at": now(), "fingerprint": s["fingerprint"], "report": s["materials"]["report"],
                      "code_fingerprint": s["materials"]["code_fingerprint"], "rule_packs": s["materials"]["rule_packs"],
                      "data_snapshot": s["materials"]["data_snapshot"], "deployment": s["approved_markets"], "thresholds": thresholds,
-                     "applicability": {m: ("适用" if m in s["approved_markets"] else "不适用") for m in s["markets"]},
+                     "applicability": {m: ("不适用（模拟数据，仅用于流程演示）" if (s["materials"]["results"].get(m) or {}).get("simulated")
+                                          else "适用" if m in s["approved_markets"] else "不适用") for m in s["markets"]},
                      "conditions": s["conditions"], "by": by}
         ev |= {"markets": s["approved_markets"], "thresholds": thresholds}
     s["updated_at"] = now()

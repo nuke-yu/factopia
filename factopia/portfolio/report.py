@@ -117,6 +117,15 @@ def _hits_zh(pre: dict | None) -> str:
             + _table(["程度", "编号", "市场", "规则", "命中原因", "所需审批"], rows))
 
 
+SIM_NOTE = {"zh": "{m}：行情与公告为模拟数据，仅用于流程演示（虚构公司，植入已知规律），不构成研究结论。",
+            "en": "{m}: prices and filings are simulated data for workflow demonstration only (fictional companies with a planted pattern); not a research finding.",
+            "fr": "{m} : cours et publications simulés, uniquement pour la démonstration du processus (sociétés fictives, régularité implantée) ; ne constitue pas un résultat de recherche."}
+
+
+def _simulated(st: dict, ms: list[str]) -> list[str]:
+    return [m for m in ms if ((st["markets"].get(m) or {}).get("price_source") or {}).get("simulated")]
+
+
 def render(d: dict) -> str:
     """d：spec、study、rules（两次预检）、portfolio（summary）、daily、pit、quality、explanation、feedback。"""
     spec, st, pf, rl = d["spec"], d["study"], d.get("portfolio"), d["rules"]
@@ -141,6 +150,7 @@ blockquote{{margin:6px 0;padding:6px 12px;border-left:3px solid var(--line);colo
 <div class="meta">Factopia 跨境量化研究平台 · 最小 POC · 生成于 {gen}</div>
 <h1>{e(spec.get('title_zh') or spec['id'])}</h1>
 <div class="meta">研究编号 <span class="mono">{e(spec['id'])}</span> · 版本 v{spec['version']} · 授权 {e((pf or {}).get('mandate_name') or spec.get('mandate'))} · 基础币种 {e(base)} · 报告币种 {e((pf or {}).get('report_currency') or base)}</div>
+{"".join(f'<p class="note bad">{e(SIM_NOTE["zh"].format(m=MARKET["zh"][m]))}</p>' for m in _simulated(d["study"], spec["markets"]))}
 <p class="note">本报告为中文主报告；附录 A（English）与附录 B（Français）为证据附件，数字与主报告一致，原文保留。平台只发现、解释和路由，不作投资建议或法律结论；规则内容待各地区合规确认。</p>
 """]
     # ① 运行信息
@@ -243,6 +253,8 @@ blockquote{{margin:6px 0;padding:6px 12px;border-left:3px solid var(--line);colo
            "本 POC 使用模拟授权；不构成投资建议或法律结论。"]
     notes = sorted({(f.get("diagnostics") or {}).get("backtest_note") for f in ((st["markets"].get(m) or {}).get("focus") or {} for m in ms)} - {None, ""})
     lim += notes + ([pf["backtest_note"]] if pf else [])
+    lim += [SIM_NOTE["zh"].format(m=Z[m]) for m in _simulated(st, ms)]
+    lim += [f"{Z[m]}：{(st['markets'].get(m) or {})['insufficient']}；组合中该市场等权持有股票池。" for m in ms if (st["markets"].get(m) or {}).get("insufficient")]
     out.append("<h2>⑦ 已知局限</h2><ul>" + "".join(f"<li>{e(x)}</li>" for x in lim) + "</ul>")
     # 附录
     for lang in ("en", "fr"):
@@ -255,7 +267,8 @@ def _appendix(lang: str, d: dict) -> str:
     T, M = L[lang], MARKET[lang]
     spec, st, pf, rl = d["spec"], d["study"], d.get("portfolio"), d["rules"]
     ms = spec["markets"]
-    s = [f'<section class="appendix" lang="{lang}"><h2>{T["title"]}</h2><p class="note">{T["note"]}</p>',
+    s = [f'<section class="appendix" lang="{lang}"><h2>{T["title"]}</h2><p class="note">{T["note"]}</p>'
+         + "".join(f'<p class="note bad">{e(SIM_NOTE[lang].format(m=M[m]))}</p>' for m in _simulated(st, ms)),
          f'<h3>{T["spec"]}</h3><p><b>{T["hyp_orig"]}</b></p><blockquote>{e(spec.get("hypothesis_original"))}</blockquote>'
          f'<p><b>{T["hyp"]}</b></p><blockquote>{e(spec.get("hypothesis"))}</blockquote><p><b>{T["fals"]}</b></p><blockquote>{e(spec.get("falsification"))}</blockquote>']
     rows = []

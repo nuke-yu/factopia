@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { api, type DraftResult, type Market, type Question, type Rationale, type Spec } from "../api";
+import { api, type DraftResult, type Market, type Question, type Rationale, type SignalSource, type Spec } from "../api";
 import { testPeriodMentions, useDraft } from "../draft";
 import { cssVar, MARKET_LABEL, useAsync } from "../lib";
 import { Badge, ErrorBox, Loading, Notice, Panel, Seg } from "../components/ui";
 import PrecheckView from "../components/PrecheckView";
 
+const SOURCES: { value: SignalSource; label: string }[] = [
+  { value: "price_volume", label: "量价（RD-Agent）" }, { value: "text", label: "文本信号" },
+];
 const RATIONALES: { value: Rationale["category"]; label: string }[] = [
   { value: "behavioural", label: "心理偏差" }, { value: "risk_premium", label: "风险补偿" }, { value: "friction", label: "交易摩擦" },
   { value: "flows", label: "资金流" }, { value: "other", label: "其他" },
@@ -16,12 +19,13 @@ const PLATFORM_QUESTIONS = [
 ];
 const lines = (t: string) => t.split("\n").map((x) => x.replace(/^\s*(?:[-*•]|\d+[.)、])\s*/, "").trim()).filter(Boolean);
 
-type Editable = { id: string; title_zh: string; hypothesis: string; rationale: Rationale; directions: string; exclusions: string; falsification: string };
+type Editable = { id: string; title_zh: string; hypothesis: string; rationale: Rationale; directions: string; exclusions: string; falsification: string; signal_source: SignalSource };
 
 function fromDraft(r: DraftResult): Editable {
   const d = r.draft;
   return { id: d.id ?? "", title_zh: d.title_zh, hypothesis: d.hypothesis, rationale: d.rationale,
-    directions: d.directions.join("\n"), exclusions: d.exclusions.join("\n"), falsification: d.falsification };
+    directions: d.directions.join("\n"), exclusions: d.exclusions.join("\n"), falsification: d.falsification,
+    signal_source: d.signal_source ?? "price_volume" };
 }
 
 export default function AuditPage() {
@@ -82,7 +86,7 @@ function Review({ result, markets, horizon, inputs, locked, setLocked }: {
     data_needs: d.data_needs, constraints: d.constraints,
     evidence: { groups: result.evidence.groups, include_past_runs: inputs.includePastRuns, items: result.evidence.alpha158.map((e) => e.id) },
     questions: [...questions.map((q, i) => ({ ...q, confirmed: checked[i] })), ...(leakQ ? [{ text: leakQ, source: "系统" as const, confirmed: leakOk }] : [])],
-    run: { loops: 5, budget_usd: 2 },
+    run: { loops: 5, budget_usd: 2 }, signal_source: f.signal_source,
     ai_draft: { ...result.meta, original: { hypothesis: d.hypothesis, rationale: d.rationale, directions: d.directions, exclusions: d.exclusions, falsification: d.falsification } },
   }), [f, d, inputs, markets, horizon, questions, checked, leakQ, leakOk, result]);
 
@@ -141,6 +145,10 @@ function Review({ result, markets, horizon, inputs, locked, setLocked }: {
             </Row>
             <Row name="可证伪测试" source="AI 起草" required edited={edited("falsification")} original={original.falsification} hint="在回测测试期上判断">
               <Area label="可证伪测试" value={f.falsification} disabled={ro} onChange={(v) => set({ falsification: v })} />
+            </Row>
+            <Row name="信号来源" source="系统" edited={edited("signal_source")} hint="量价：RD-Agent 自动挖掘；文本：检验情报台的风险表述变化信号（不启动 RD-Agent）">
+              <Seg label="信号来源" value={f.signal_source} options={SOURCES} onChange={(v) => !ro && set({ signal_source: v })} />
+              {f.signal_source === "text" && <p className="text-xs text-muted mt-1">香港、英国为模拟数据，仅用于流程演示；法国为 AMF 真实公告（2024 年 8 月起，测试期内数据不足）。可证伪测试须写明 rank IC 方向（positive / negative）。</p>}
             </Row>
             <Row name="数据需求与缺口" source="系统">
               <DataNeeds result={result} markets={markets} />

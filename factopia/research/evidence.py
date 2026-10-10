@@ -46,7 +46,7 @@ def past_runs(markets: list[str], horizon: int) -> list[dict]:
     items = []
     for p in sorted(RUNS_DIR.glob("*/run.json")):
         run = json.loads(p.read_text(encoding="utf-8"))
-        if run["market"] not in markets or run["horizon"] != horizon or run.get("context_leak"):
+        if run["market"] not in markets or run["horizon"] != horizon or run.get("context_leak") or run.get("kind") == "text":
             continue
         rounds = json.loads((p.parent / "rounds.json").read_text(encoding="utf-8"))
         for r in rounds:

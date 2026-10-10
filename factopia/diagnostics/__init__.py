@@ -28,7 +28,7 @@ import numpy as np
 import pandas as pd
 import yaml
 
-from factopia import rules
+from factopia import rules, sources
 from factopia.factors.stats import newey_west_t
 
 RUNTIME = Path(os.environ.get("FACTOPIA_RUNTIME", "/workspace/runtime"))
@@ -61,25 +61,27 @@ def symbol(code: str) -> str:
 
 # ---------------------------------------------------------------- 市场数据
 
-def market_data(market: str) -> dict:
-    px = pd.read_parquet(RUNTIME / "data" / "standardized" / f"{market}.parquet",
-                         columns=["symbol", "date", "close", "volume", "dq_flag"])
-    close = px.pivot(index="date", columns="symbol", values="close").sort_index()
-    volume = px.pivot(index="date", columns="symbol", values="volume").reindex(close.index)
+def market_data(market: str, dataset: str | None = None) -> dict:
+    """dataset：模拟行情数据集（文本信号研究，factopia/sources.py）；没有成交量时，规模、流动性与容量留空。"""
+    close = sources.close(market, dataset)
+    vol = sources.volume(market, dataset)
     ret = close.pct_change(fill_method=None)
-    adv = (close * volume).rolling(ADV_DAYS, min_periods=10).mean()
+    adv = (close * vol.reindex(close.index)).rolling(ADV_DAYS, min_periods=10).mean() if vol is not None \
+        else pd.DataFrame(np.nan, index=close.index, columns=close.columns)
     styles = {
         "size": np.log(adv.where(adv > 0)),                              # 规模代理：成交额（无市值数据）
         "momentum": close.shift(21) / close.shift(252) - 1,
         "volatility": ret.rolling(60, min_periods=40).std(),
         "reversal": close / close.shift(21) - 1,
     }
+    if vol is None:
+        del styles["size"]
     sectors = {}
     sec = RUNTIME / "refdata" / "securities.parquet"
-    if sec.exists():
+    if sec.exists() and dataset is None:
         s = pd.read_parquet(sec, columns=["symbol", "sector"])
         sectors = dict(zip(s["symbol"], s["sector"]))
-    return {"close": close, "ret": ret, "adv": adv, "styles": styles, "sectors": sectors}
+    return {"close": close, "ret": ret, "adv": adv, "styles": styles, "sectors": sectors, "dataset": dataset}
 
 
 def fx_rate(local: str, base: str) -> pd.Series | None:
@@ -292,8 +294,11 @@ def diagnose_round(run_dir: Path, key: str, md: dict, fx: pd.Series | None, run:
     lc = liquidity_capacity(pos, md, fx)
     fxi = fx_impact(bt, fx, LOCAL[market], base)
     pre_fix = (run.get("started_at") or "") < TIE_FIX_AT
+    if run.get("kind") == "text":
+        pre_fix = False
     out = {"run_id": run_dir.name, "round": key, "market": market, "horizon": horizon, "base_currency": base,
            "backtest_note": "基于 RD-Agent 原始回测（并列顺序修正前，收益受随机选股影响，见第 14.7–14.8 节）" if pre_fix else "",
+           "price_source": sources.describe(md.get("dataset")),
            "cost": ct, "liquidity": lc, "fx": fxi, "exposure": exposures(bt, pos, md), "economic": economic(ct, fxi, lc)}
     sc_p = run_dir / "score" / f"{key}.parquet"
     if sc_p.exists():
@@ -312,7 +317,7 @@ def diagnose_round(run_dir: Path, key: str, md: dict, fx: pd.Series | None, run:
 
 def diagnose_run(run_dir: Path) -> int:
     run = json.loads((run_dir / "run.json").read_text())
-    md = market_data(run["market"])
+    md = market_data(run["market"], sources.of_run(run))
     base = base_currency(run)
     fx = fx_rate(LOCAL[run["market"]], base)
     (run_dir / "diagnostics").mkdir(exist_ok=True)
