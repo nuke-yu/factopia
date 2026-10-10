@@ -435,6 +435,10 @@ def _study_market(m: str, runs: list[dict], jobs: list[dict], rule: dict) -> dic
         sig = _signal_sig(run["run_id"], focus["loop"], run["horizon"])
         val = _validation(run["run_id"], focus["loop"])
         vjob = _validate_job(run["run_id"], focus["loop"])
+        diag = RESULTS / "runs" / run["run_id"] / "diagnostics" / f"{focus['loop']}.json"
+        bdiag = RESULTS / "runs" / run["run_id"] / "diagnostics" / "baseline.json"
+        fo |= {"diagnostics": _json(diag) if diag.exists() else None,
+               "baseline_diagnostics": _json(bdiag) if bdiag.exists() else None}
         fo |= {"significance": sig, "credibility": verdict.credibility(val, sig, rule),
                "validation": _validation_summary(val), "validation_job": _job_public(vjob) if vjob else None}
     return entry | {"state": state, "run_id": run["run_id"], "cost_usd": run["cost_usd"], "duration_s": run.get("duration_s"),
@@ -552,6 +556,33 @@ def _study_findings(markets: dict, rule: dict) -> list[dict]:
                                     f"{'，AI 因子明显好于随机' if c['ok'] else '，AI 因子与随机因子没有明显区别'}。"})
             if c["key"] == "reproduce" and c["ok"] is False:
                 out.append({"tone": "bad", "text": f"{name}：重新计算的因子值与 RD-Agent 当时的只有 {c['value']:.0%} 一致，代码可能用到了未来数据。"})
+    for m, e in markets.items():      # 研究结果诊断（第 14.11 节）
+        d, name = ((e.get("focus") or {}).get("diagnostics")), MARKET_ZH[m]
+        if not d:
+            continue
+        c, lq, s = d["cost"], d["liquidity"], d.get("signal") or {}
+        be = c.get("breakeven_cost_multiple")
+        out.append({"tone": "bad" if (c["net_excess"] or 0) <= 0 < (c["gross_excess"] or 0) else "warn" if be is not None and be < 2 else "good",
+                    "text": f"{name}：扣成本前年化超额 {c['gross_excess']:.1%}，成本拖累 {c['cost_drag']:.1%}（其中税费约 {c['tax_share']:.0%}），"
+                            f"扣成本后 {c['net_excess']:.1%}；年化换手 {c['turnover_annual']:.1f} 倍"
+                            + (f"，成本达到现在的 {be:.1f} 倍时超额归零。" if be is not None and be > 0 else "。")
+                            + (f"（{d['backtest_note']}）" if d.get("backtest_note") else "")})
+        if lq.get("capacity_base"):
+            out.append({"tone": "warn" if lq["capacity_base"] < 50e6 else "good",
+                        "text": f"{name}：按每笔调仓不超过日均成交额 10% 估算，容量约 {lq['capacity_base'] / 1e6:,.0f} 百万 {d['base_currency']}；"
+                                f"{lq['low_liquidity_weight']:.0%} 的持仓在成交额最低的 20% 股票中。"})
+        if not d["fx"].get("same_currency") and d["fx"].get("fx_contribution") is not None:
+            out.append({"tone": "warn", "text": f"{name}：换算为 {d['fx']['base']} 后，汇率对组合年化收益的贡献为 {d['fx']['fx_contribution']:+.1%}。"})
+        if s.get("neutral_rank_ic") is not None and s.get("rank_ic"):
+            kept = s.get("neutral_retained")
+            ctrl = "、".join({"size": "规模", "momentum": "动量", "volatility": "波动", "reversal": "反转"}.get(c, c)
+                            for c in s.get("neutral_controls") or [])
+            base = f"{name}：剔除{ctrl}影响后 Rank IC 为 {s['neutral_rank_ic']:.3f}（原始 {s['rank_ic']:.3f}）"
+            if s["rank_ic"] * sign <= 0:      # 原始方向已与假设相反：只报数字
+                out.append({"tone": "warn", "text": base + "，原始方向与假设相反。"})
+            else:
+                out.append({"tone": "warn" if kept is not None and kept < 0.5 else "good",
+                            "text": base + ("，大部分来自风格暴露。" if kept is not None and kept < 0.5 else "，不是简单的风格暴露。")})
     rows = [(m, x) for m, e in markets.items() for x in e.get("rounds", []) if x.get("rank_ic") is not None]
     if rows:
         ok = sum(1 for _, x in rows if x["rank_ic"] * sign > 0)
@@ -565,6 +596,28 @@ def _study_findings(markets: dict, rule: dict) -> list[dict]:
     return out
 
 
+def _cross_market(markets: dict) -> dict | None:
+    """三市场因子相关结构（BR-28）：各市场采纳轮次的逐月 Rank IC 两两相关（月份对齐，避免交易日历不同）。"""
+    monthly = {}
+    for m, e in markets.items():
+        f = e.get("focus")
+        p = RESULTS / "runs" / str(e.get("run_id")) / "signal" / f"{(f or {}).get('loop')}.parquet"
+        if f and p.exists():
+            sig = pd.read_parquet(p)
+            monthly[m] = sig.set_index(pd.to_datetime(sig["date"]))["rank_ic"].resample("ME").mean()
+    if len(monthly) < 2:
+        return None
+    df = pd.DataFrame(monthly).dropna()
+    pairs = []
+    ms = list(monthly)
+    for i in range(len(ms)):
+        for j in range(i + 1, len(ms)):
+            c = df[ms[i]].corr(df[ms[j]]) if len(df) >= 6 else None
+            pairs.append({"a": ms[i], "b": ms[j], "corr": None if c is None or pd.isna(c) else round(float(c), 3)})
+    return {"months": len(df), "pairs": pairs,
+            "note": "逐月 Rank IC 的相关：越高说明三个市场的信号同涨同跌（同一驱动因素），越低说明各市场由不同因素驱动"}
+
+
 @app.get("/api/research/{research_id}/versions/{version}/study")
 def study(research_id: str, version: int):
     """研究结论（Spec 第 14.5 节）：同一锁定版本在各市场的结果，按可证伪测试判定。"""
@@ -574,10 +627,30 @@ def study(research_id: str, version: int):
             if (r.get("research") or {}).get("id") == research_id and (r.get("research") or {}).get("version") == version]
     jobs = [j for j in store.list_jobs() if j["research_id"] == research_id and j["version"] == version]
     markets = {m: _study_market(m, runs, jobs, rule) for m in rule["markets"]}
+    diags = {m: (e.get("focus") or {}).get("diagnostics") for m, e in markets.items()}
+    exp = store.RESEARCH_DIR / research_id / f"explain_v{version}.json"
     return {"research_id": research_id, "version": version, "hypothesis": spec.get("hypothesis"),
             "title": spec.get("title_zh") or spec.get("title"),
             "rule": {k: rule[k] for k in ("primary", "markets", "ric_sign", "sign_from_text", "text")},
-            "overall": verdict.overall(markets, rule), "markets": markets, "findings": _study_findings(markets, rule)}
+            "overall": verdict.overall(markets, rule), "transfer": verdict.transfer(markets, rule, diags),
+            "cross_market": _cross_market(markets),
+            "markets": markets, "findings": _study_findings(markets, rule),
+            "explanation": json.loads(exp.read_text(encoding="utf-8")) if exp.exists() else None}
+
+
+@app.post("/api/research/{research_id}/versions/{version}/explain")
+def explain_study(research_id: str, version: int):
+    """AI 解释市场差异（BR-38）：基于平台事实清单，每句必须引用事实编号；存档供研究员确认。"""
+    from factopia.research import explain as explaining
+    st = study(research_id, version)
+    diags = {m: (e.get("focus") or {}).get("diagnostics") for m, e in st["markets"].items()}
+    try:
+        out = explaining.explain(st, diags)
+    except drafting.DraftError as e:
+        raise HTTPException(503, str(e))
+    path = store.RESEARCH_DIR / research_id / f"explain_v{version}.json"
+    path.write_text(json.dumps(out, ensure_ascii=False, indent=1), encoding="utf-8")
+    return out
 
 
 class RunIn(BaseModel):

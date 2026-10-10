@@ -20,6 +20,11 @@ def main() -> None:
             try:
                 n = export_run(run_dir)
                 marker.unlink()
+                try:      # 研究结果诊断（换手、成本、流动性、容量、汇率、暴露、中性化等，Spec 第 14.11 节）
+                    from factopia.diagnostics import diagnose_run
+                    diagnose_run(run_dir)
+                except Exception:
+                    (run_dir / ".diagnostics_failed").write_text(traceback.format_exc()[-2000:])
                 print(f"[exporter {datetime.now():%H:%M:%S}] {run_dir.name}: 导出 {n} 组回测结果", flush=True)
             except Exception:
                 (run_dir / ".backtest_failed").write_text(traceback.format_exc()[-2000:])

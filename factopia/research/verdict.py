@@ -137,3 +137,42 @@ def credibility(validation: dict | None, sig: dict | None, rule: dict) -> dict:
     state = ("unchecked" if not v else "pending" if not done or None in oks else "credible" if all(oks) else "doubtful")
     label = {"unchecked": "未检查", "pending": "检查中", "credible": "可信", "doubtful": "存疑"}[state]
     return {"state": state, "label": label, "checks": items, "noise": noise}
+
+
+TRANSFER_T = 2.0
+
+
+def transfer(markets: dict, rule: dict, diagnostics: dict) -> dict:
+    """四类迁移标签（BR-05）：按各市场采纳轮次的 Rank IC t 值（Newey-West，方向按假设）分为三市场通用 / 地区特定 / 需调参 / 无效；
+    信号有效、但在有效市场中扣除成本、汇率或容量后不再有正超额 → 第四类"扣除币种、成本或市场结构影响后不再具有经济意义"。"""
+    sign = rule["ric_sign"]
+    per, ts = {}, {}
+    for m, e in markets.items():
+        sig = ((e.get("focus") or {}).get("significance") or {})
+        t = sig.get("t")
+        ts[m] = None if t is None else t * sign
+        if e.get("state") == "done" and not e.get("focus"):     # 已完成但没有采纳的轮次：该市场视为无效
+            ts[m] = 0.0
+        eco = (diagnostics.get(m) or {}).get("economic")
+        per[m] = {"t_aligned": ts[m], "effective": ts[m] is not None and ts[m] > TRANSFER_T,
+                  "economic": eco}
+    known = {m: t for m, t in ts.items() if t is not None}
+    if len(known) < len(markets):
+        return {"label": "待定", "reason": "部分市场尚无结果", "markets": per, "threshold": TRANSFER_T}
+    eff = [m for m in known if known[m] > TRANSFER_T]
+    if len(eff) == len(known):
+        label = "三市场通用"
+    elif eff:
+        label = "地区特定（" + "、".join(m.upper() for m in eff) + "）"
+    elif all(t > TRANSFER_T / 2 for t in known.values()):
+        label = "需调整定义 / 阈值 / 参数后才能迁移"
+    else:
+        label = "无效"
+    cand = eff or [m for m in known if known[m] > TRANSFER_T / 2]
+    econ_fail = [m for m in cand
+                 if per[m]["economic"] and not per[m]["economic"]["meaningful"] and per[m]["economic"]["reasons"]]
+    if label != "无效" and econ_fail and econ_fail == cand:       # 有效的市场全部在扣除后失去经济意义
+        reasons = sorted({r for m in econ_fail for r in per[m]["economic"]["reasons"]})
+        return {"label": "扣除币种、成本或市场结构影响后不再具有经济意义", "statistical": label, "reason": "；".join(reasons),
+                "markets": per, "threshold": TRANSFER_T}
+    return {"label": label, "statistical": label, "reason": "", "markets": per, "threshold": TRANSFER_T}

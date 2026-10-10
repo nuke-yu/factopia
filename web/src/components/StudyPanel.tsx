@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
 import { useState } from "react";
-import { api, type Check, type CredCheck, type Market, type StudyMarket } from "../api";
+import { api, type Check, type CredCheck, type Diagnostics, type Explanation, type Market, type Study, type StudyMarket } from "../api";
 import { cssVar, fix, MARKET_LABEL, pct, signed, useAsync } from "../lib";
 import { Badge, ErrorBox, Loading, Panel } from "./ui";
 import StudyScatter from "./charts/StudyScatter";
@@ -69,6 +69,9 @@ export default function StudyPanel({ researchId, version, current }: { researchI
         <div className={`grid gap-3 ${markets.length >= 3 ? "md:grid-cols-3" : markets.length === 2 ? "md:grid-cols-2" : ""}`}>
           {markets.map((e) => <MarketCard key={e.market} e={e} current={current === e.run_id} />)}
         </div>
+
+        <TransferBlock s={s} />
+        <ExplainBlock s={s} onDone={study.reload} />
 
         {anyRounds && (
           <div className="grid gap-5 xl:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]">
@@ -191,6 +194,7 @@ function MarketCard({ e, current }: { e: StudyMarket; current: boolean }) {
           </dl>
           <ul className="flex flex-col gap-1 border-t border-line pt-2">{f.checks.map((c) => <CheckRow key={c.key} c={c} />)}</ul>
           <CredibilityBlock e={e} />
+          {f.diagnostics && <DiagnosticsBlock d={f.diagnostics} />}
         </>
       ) : done ? (
         <p className="text-xs text-muted">RD-Agent 没有采纳任何一轮：新因子都没有超过起点（扣成本年化 {pct(b?.annual_return_with_cost)}）。</p>
@@ -208,3 +212,106 @@ function MarketCard({ e, current }: { e: StudyMarket; current: boolean }) {
   );
 }
 
+
+const STYLE_ZH: Record<string, string> = { size: "规模", momentum: "动量", volatility: "波动", reversal: "短期反转" };
+const money = (x: number | null | undefined, ccy: string) => (x == null ? "—" : `${(x / 1e6).toLocaleString("zh-CN", { maximumFractionDigits: 0 })} 百万 ${ccy}`);
+
+/** 研究结果诊断（第 14.11 节；BR-04、26、27、28）：成本、换手、流动性、容量、汇率、暴露、中性化、稳定性。 */
+function DiagnosticsBlock({ d }: { d: Diagnostics }) {
+  const c = d.cost, l = d.liquidity, x = d.fx, ex = d.exposure, sg = d.signal;
+  const row = (k: string, v: string, tone?: "good" | "bad" | "warn") => (
+    <div className="flex justify-between gap-3"><span className="text-faint">{k}</span><span className="num text-right" style={tone ? { color: cssVar(`--${tone}`) } : undefined}>{v}</span></div>
+  );
+  return (
+    <details className="border-t border-line pt-2 text-xs">
+      <summary className="cursor-pointer flex flex-wrap items-center gap-2">
+        <span className="label">诊断</span>
+        <Badge tone={d.economic.meaningful ? "good" : "warn"}>{d.economic.label}</Badge>
+      </summary>
+      <div className="flex flex-col gap-1 mt-2">
+        {d.backtest_note && <p className="text-warn">{d.backtest_note}</p>}
+        {row("扣成本前 → 扣成本后年化超额", `${pct(c.gross_excess)} → ${pct(c.net_excess)}`, (c.net_excess ?? 0) > 0 ? "good" : "bad")}
+        {row("成本拖累（其中税费）", `${pct(c.cost_drag)}（${pct(c.tax_share, 0)}）`)}
+        {row("成本 2 倍 / 3 倍时超额", `${pct(c.excess_by_cost_multiple["2"])} / ${pct(c.excess_by_cost_multiple["3"])}`)}
+        {row("盈亏平衡成本倍数", c.breakeven_cost_multiple == null ? "—" : `${c.breakeven_cost_multiple.toFixed(1)} 倍`, (c.breakeven_cost_multiple ?? 0) < 2 ? "warn" : undefined)}
+        {row("年化换手 / 平均持有", `${fix(c.turnover_annual, 1)} 倍 / ${fix(c.holding_days, 0)} 天`)}
+        {row("容量（调仓 ≤ 日均成交额 10%）", money(l.capacity_base, d.base_currency))}
+        {row("持仓在低流动性股票的比例", pct(l.low_liquidity_weight, 0))}
+        {!x.same_currency && row(`汇率贡献（${x.local}→${x.base}）`, signed(x.fx_contribution))}
+        {row("对基准 beta", fix(ex.beta, 2))}
+        {row("风格暴露", Object.entries(ex.style).map(([k, v]) => `${STYLE_ZH[k] ?? k} ${v == null ? "—" : v.toFixed(2)}`).join(" · "))}
+        {ex.max_sector_weight != null && row("最大行业权重", pct(ex.max_sector_weight, 0))}
+        {sg && <>
+          {row("中性化后 Rank IC（原始）", `${fix(sg.neutral_rank_ic, 3)}（${fix(sg.rank_ic, 3)}）`)}
+          {row("分年度 IC 方向一致", pct(sg.year_sign_consistency, 0))}
+          {row("高 / 低波动市场 IC", `${fix(sg.regime.high_vol, 3)} / ${fix(sg.regime.low_vol, 3)}`)}
+          {row("上涨 / 下跌市场 IC", `${fix(sg.regime.up_market, 3)} / ${fix(sg.regime.down_market, 3)}`)}
+          {sg.redundancy.baseline_model != null && row("与起点模型打分相关", fix(sg.redundancy.baseline_model, 2))}
+          {row("IC 随持有期（1/5/10/20/40 日）", Object.values(sg.ic_by_horizon).map((v) => fix(v, 3)).join(" / "))}
+        </>}
+        {!sg && <p className="text-faint">逐股打分尚未导出：重新导出后补齐中性化、稳定性与冗余诊断。</p>}
+      </div>
+    </details>
+  );
+}
+
+function TransferBlock({ s }: { s: Study }) {
+  const t = s.transfer;
+  if (!t) return null;
+  const tone = t.label.startsWith("三市场") ? "good" : t.label === "无效" || t.label.startsWith("扣除") ? "bad" : t.label === "待定" ? "muted" : "warn";
+  return (
+    <div className="flex flex-wrap items-center gap-3 border border-line rounded p-3">
+      <span className="label">迁移性（四类）</span>
+      <Badge tone={tone}>{t.label}</Badge>
+      {t.statistical && t.statistical !== t.label && <span className="text-xs text-muted">统计上：{t.statistical}</span>}
+      {t.reason && <span className="text-xs text-muted">{t.reason}</span>}
+      <span className="text-xs text-faint">
+        {Object.entries(t.markets).map(([m, v]) => `${MARKET_LABEL[m as Market]} t = ${v.t_aligned == null ? "—" : v.t_aligned.toFixed(1)}`).join(" · ")}
+        （按假设方向，|t| &gt; {t.threshold} 视为有效）
+      </span>
+      {s.cross_market && (
+        <span className="text-xs text-muted w-full" title={s.cross_market.note}>
+          三市场相关结构（逐月 Rank IC，{s.cross_market.months} 个月）：
+          {s.cross_market.pairs.map((p) => `${MARKET_LABEL[p.a]}—${MARKET_LABEL[p.b]} ${p.corr == null ? "—" : p.corr.toFixed(2)}`).join(" · ")}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function ExplainBlock({ s, onDone }: { s: Study; onDone: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const e: Explanation | null = s.explanation;
+  const run = async () => {
+    setBusy(true); setErr(null);
+    try { await api.explain(s.research_id, s.version); onDone(); }
+    catch (x) { setErr(String((x as Error).message ?? x)); } finally { setBusy(false); }
+  };
+  const fact = (id: string) => e?.facts.find((f) => f.id === id)?.text ?? "";
+  return (
+    <div className="border border-line rounded p-3 flex flex-col gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="label">AI 解释市场差异</span>
+        <span className="text-xs text-faint">每句必须引用平台事实（F 编号）；AI 只做解释，不改变判定，需研究员确认</span>
+        <button className="btn ml-auto" disabled={busy} onClick={run}>{busy ? "生成中…" : e ? "重新生成" : "生成解释"}</button>
+      </div>
+      {err && <p className="text-xs text-bad">{err}</p>}
+      {e && (
+        <>
+          <ul className="list-disc pl-5 text-sm flex flex-col gap-1">
+            {e.sentences.map((x, i) => (
+              <li key={i}>{x.text} {x.cites.map((c) => <span key={c} className="num text-accent cursor-help" title={fact(c)}>[{c}]</span>)}</li>
+            ))}
+          </ul>
+          {e.transfer_view && <p className="text-sm"><span className="text-muted">迁移判断：</span>{e.transfer_view}</p>}
+          {e.local_adjustments.length > 0 && <p className="text-sm"><span className="text-muted">本地化建议：</span>{e.local_adjustments.join("；")}</p>}
+          <details className="text-xs text-faint">
+            <summary className="cursor-pointer">事实清单（{e.facts.length} 条）· {e.model} · {e.prompt_version} · {e.created_at.replace("T", " ")}{e.dropped ? ` · 丢弃 ${e.dropped} 句无引用的解释` : ""}</summary>
+            <ul className="mt-1 flex flex-col gap-0.5">{e.facts.map((f) => <li key={f.id}><span className="num text-accent">{f.id}</span> {f.text}</li>)}</ul>
+          </details>
+        </>
+      )}
+    </div>
+  );
+}

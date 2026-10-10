@@ -8,6 +8,7 @@
     positions/<轮次>.parquet  日期、股票、权重
     signal/<轮次>.parquet     日期、模型打分与未来收益的 IC、RankIC
     quantile/<轮次>.json      按模型打分把股票分成 5 组后，各组的未来收益（因子分析的标准做法）
+    score/<轮次>.parquet      日期、股票、模型打分（供诊断：中性化、冗余、稳定性，factopia.diagnostics）
 """
 import json
 import os
@@ -94,7 +95,9 @@ def export_round(art: Path, out: Path, key: str, horizon: int) -> None:
     sig = pd.DataFrame({"ic": _load(art / "sig_analysis/ic.pkl"), "rank_ic": _load(art / "sig_analysis/ric.pkl")})
     _to_parquet(sig.rename_axis("date").reset_index(), out / "signal" / f"{key}.parquet")
 
-    q = quantile_returns(_load(art / "pred.pkl")["score"], _load(art / "label.pkl").iloc[:, 0], horizon)
+    pred = _load(art / "pred.pkl")["score"]
+    _to_parquet(pred.rename("score").rename_axis(["date", "instrument"]).reset_index(), out / "score" / f"{key}.parquet")
+    q = quantile_returns(pred, _load(art / "label.pkl").iloc[:, 0], horizon)
     tmp = out / "quantile" / f"{key}.json.tmp"
     tmp.write_text(json.dumps(q, ensure_ascii=False), encoding="utf-8")
     tmp.replace(out / "quantile" / f"{key}.json")
@@ -103,7 +106,7 @@ def export_round(art: Path, out: Path, key: str, horizon: int) -> None:
 def export_run(run_dir: Path) -> int:
     run = json.loads((run_dir / "run.json").read_text())
     rounds = json.loads((run_dir / "rounds.json").read_text())
-    for sub in ("backtest", "positions", "signal", "quantile"):
+    for sub in ("backtest", "positions", "signal", "quantile", "score"):
         (run_dir / sub).mkdir(exist_ok=True)
     targets = [("baseline", run["baseline"]["workspace"] if run.get("baseline") else None)]
     targets += [(str(r["loop"]), r["workspace"]) for r in rounds]

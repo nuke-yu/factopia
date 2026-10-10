@@ -187,6 +187,29 @@ export type Credibility = {
   state: "unchecked" | "pending" | "credible" | "doubtful"; label: string; checks: CredCheck[];
   noise: { range: [number, number] | null; seeds: number | null; reported: number | null } | null;
 };
+export type Diagnostics = {
+  run_id: string; round: string; market: Market; horizon: number; base_currency: string; backtest_note: string;
+  cost: { gross_excess: number | null; net_excess: number | null; cost_drag: number | null; tax_drag: number | null; tax_share: number | null;
+    excess_by_cost_multiple: Record<string, number | null>; breakeven_cost_multiple: number | null;
+    turnover_daily: number | null; turnover_annual: number | null; holding_days: number | null };
+  liquidity: { holdings_adv_weighted: number | null; low_liquidity_weight: number | null; avg_holdings: number | null;
+    capacity_local: number | null; capacity_base: number | null; capacity_rule: string };
+  fx: { base: string; local: string; same_currency: boolean; fx_contribution: number | null; portfolio_local?: number | null;
+    portfolio_base?: number | null; excess_local?: number | null; excess_base?: number | null };
+  exposure: { beta: number | null; style: Record<string, number | null>; sector_weights: Record<string, number>;
+    max_sector_weight: number | null; sector_hhi: number | null; style_note: string };
+  economic: { meaningful: boolean; reasons: string[]; label: string };
+  signal: { rank_ic: number | null; rank_ic_t: number | null; neutral_rank_ic: number | null; neutral_rank_ic_t: number | null;
+    neutral_retained: number | null; neutral_controls: string[]; ic_by_year: Record<string, number | null>;
+    year_sign_consistency: number | null; ic_by_horizon: Record<string, number | null>;
+    regime: { high_vol: number | null; low_vol: number | null; up_market: number | null; down_market: number | null };
+    redundancy: Record<string, number | null> } | null;
+};
+export type Transfer = { label: string; statistical?: string; reason: string; threshold: number;
+  markets: Record<string, { t_aligned: number | null; effective: boolean; economic: Diagnostics["economic"] | null }> };
+export type Explanation = { sentences: { text: string; cites: string[] }[]; dropped: number; transfer_view: string;
+  local_adjustments: string[]; facts: { id: string; market: Market; key: string; text: string }[];
+  model: string; prompt_version: string; created_at: string; note: string };
 export type StudyMarket = {
   market: Market; primary: boolean; state: JobState | "none" | "incomplete"; run_id: string | null; attempts: number; job: Job | null;
   cost_usd?: number; duration_s?: number | null; baseline?: Metrics | null;
@@ -195,6 +218,7 @@ export type StudyMarket = {
     loop: number; metrics: Metrics; checks: Check[]; passed: boolean | null; hypothesis: string | null; factors: string[];
     quantile: { spread_mean: number | null; spread_positive_share: number | null; tie_share: number | null; groups: number } | null;
     significance: Significance | null; credibility: Credibility; validation_job: Job | null;
+    diagnostics: Diagnostics | null; baseline_diagnostics: Diagnostics | null;
     validation: (Pick<Validation, "status" | "periods" | "seeds" | "started_at" | "ended_at" | "errors" | "ai" | "baseline"> & {
       placebo: { n: number; share_ge_ai: number | null; share_ge_baseline: number | null; median: number | null } | null }) | null;
   } | null;
@@ -205,6 +229,8 @@ export type Study = {
   overall: { state: "pending" | "rejected" | "passed"; label: string; reason: string };
   markets: Partial<Record<Market, StudyMarket>>;
   findings: { tone: "bad" | "warn" | "good"; text: string }[];
+  transfer: Transfer; explanation: Explanation | null;
+  cross_market: { months: number; pairs: { a: Market; b: Market; corr: number | null }[]; note: string } | null;
 };
 export type RunnerStatus = { paused: { reason: string; at: string } | null; queued: number; running: number };
 export type Preview = { market: Market; test_start: string; dates: Record<string, string>; text: string; chars: number };
@@ -373,6 +399,7 @@ export const api = {
   validation: (runId: string) => get<{ items: Record<string, Validation>; jobs: Job[] }>(`/runs/${runId}/validation`),
   validate: (runId: string, loop?: number) => post<Job>(`/runs/${runId}/validate`, loop == null ? {} : { loop }),
   study: (id: string, version: number) => get<Study>(`/research/${id}/versions/${version}/study`),
+  explain: (id: string, version: number) => post<Explanation>(`/research/${id}/versions/${version}/explain`, {}),
   backtest: (id: string) => get<Record<string, Columns>>(`/runs/${id}/backtest`),
   monthly: (id: string) => get<Record<string, Monthly>>(`/runs/${id}/monthly`),
   quantiles: (id: string) => get<Record<string, Quantiles>>(`/runs/${id}/quantiles`),
