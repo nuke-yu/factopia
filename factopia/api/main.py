@@ -677,3 +677,132 @@ def market_context(market: str, lang: str = Query("zh", pattern="^(zh|en)$")):
         raise HTTPException(404, "市场不存在")
     path = CONFIGS / "rdagent" / "context" / f"{market}.{lang}.md"
     return {"market": market, "lang": lang, "markdown": path.read_text(encoding="utf-8")}
+
+
+# ---------------------------------------------------------------- 情报台：多语言公告与文本信号（Spec 第 11 章）
+from factopia.text import common as tcommon            # noqa: E402
+from factopia.text import review as treview            # noqa: E402
+from factopia.text import search as tsearch            # noqa: E402
+
+
+def _text_ds(dataset: str) -> Path:
+    if dataset not in tcommon.DATASETS:
+        raise HTTPException(404, f"数据集不存在：{dataset}")
+    return tcommon.ds_dir(dataset)
+
+
+@app.get("/api/text/overview")
+def text_overview():
+    """各数据集（法国真实 / 香港、英国模拟）的规模、来源、许可、检验结果与三市场对比。"""
+    out = []
+    for ds, cfg in tcommon.DATASETS.items():
+        d = tcommon.ds_dir(ds)
+        s = tcommon.read_json(d / "summary.json") or {}
+        out.append({"dataset": ds, "market": cfg["market"], "market_zh": MARKET_ZH[cfg["market"]],
+                    "simulated": cfg["simulated"], "source": cfg["source"], "licence": cfg["licence"],
+                    "processing_delay_min": cfg["processing_delay_min"], "ready": bool(s),
+                    "n_filings": s.get("n_filings", 0), "n_companies": s.get("n_companies", 0),
+                    "n_changes": s.get("n_changes", 0), "hold_days": s.get("hold_days"),
+                    "evaluation": s.get("evaluation"), "truth": tcommon.read_json(d / "truth.json")})
+    g = tcommon.glossary()
+    concepts = [{"concept": c, "zh": v["zh_name"], "en": v["en_name"], "fr": v["fr_name"], "terms": v["terms"]}
+                for c, v in g["concepts"].items()]
+    return {"datasets": out, "compare": tcommon.read_json(tcommon.TEXT / "compare.json"),
+            "glossary_version": g["version"], "concepts": concepts,
+            "review_counts": treview.queue(limit=0)["counts"]}
+
+
+@app.get("/api/text/{dataset}/filings")
+def text_filings(dataset: str, instrument: str | None = None, limit: int = Query(200, le=2000)):
+    s = tcommon.read_json(_text_ds(dataset) / "summary.json")
+    if not s:
+        raise HTTPException(404, "该数据集尚未生成文本信号（先运行 python -m factopia.text all）")
+    items = [f for f in s["filings"] if not instrument or f["instrument"] == instrument]
+    return {"dataset": dataset, "simulated": s["simulated"], "source": s["source"], "licence": s["licence"],
+            "total": len(items), "items": items[:limit]}
+
+
+@app.get("/api/text/{dataset}/filings/{doc_id}")
+def text_filing(dataset: str, doc_id: str):
+    """一篇公告：原文段落（不改动）+ 各段的概念标签、译文、置信度、复核状态。"""
+    d = _text_ds(dataset)
+    if not re.fullmatch(r"[A-Za-z0-9_\-]{3,80}", doc_id):
+        raise HTTPException(404, "公告不存在")
+    doc = tcommon.read_json(d / "docs" / f"{doc_id}.json")
+    if not doc:
+        raise HTTPException(404, "公告不存在")
+    lab = tcommon.read_json(d / "labels" / f"{doc_id}.json") or {"labels": []}
+    s = tcommon.read_json(d / "summary.json") or {"filings": []}
+    meta = next((f for f in s["filings"] if f["id"] == doc_id), None)
+    dec = treview.decisions()
+    names = tcommon.concept_names()
+    by_i = {x["i"]: treview.apply(x, dec.get(treview.key(dataset, doc_id, x["i"]))) for x in lab["labels"]}
+    paras = []
+    for p in doc["paragraphs"]:
+        x = by_i.get(p["i"])
+        paras.append({"i": p["i"], "text": p["text"],
+                      "concepts": [{**c, "name": names.get(c["concept"], c["concept"])} for c in x["concepts"]] if x else [],
+                      "translation": (x or {}).get("translation") or {}, "translation_confidence": (x or {}).get("translation_confidence"),
+                      "flags": [{"code": f, "label": treview.FLAG_ZH.get(f, f)} for f in (x or {}).get("flags", [])],
+                      "review_status": (x or {}).get("review_status"), "method": (x or {}).get("method")})
+    return {"dataset": dataset, "simulated": tcommon.DATASETS[dataset]["simulated"], "meta": meta,
+            "model": lab.get("model"), "prompt_version": lab.get("prompt_version"),
+            "glossary_version": lab.get("glossary_version"), "labelled_at": lab.get("labelled_at"),
+            "pages_total": doc.get("pages_total"), "pages_read": doc.get("pages_read"), "paragraphs": paras}
+
+
+@app.get("/api/text/search")
+def text_search(q: str = "", dataset: list[str] | None = Query(None), concept: list[str] | None = Query(None),
+                limit: int = Query(50, le=200)):
+    for ds in dataset or []:
+        _text_ds(ds)
+    return tsearch.search(q, dataset, concept, limit)
+
+
+@app.get("/api/text/review")
+def text_review_queue(status: str = Query("pending", pattern="^(pending|done|all)$"), dataset: str | None = None,
+                      limit: int = Query(100, le=500)):
+    if dataset:
+        _text_ds(dataset)
+    return treview.queue(dataset, status, limit)
+
+
+class SummaryIn(BaseModel):
+    q: str = Field(min_length=1, max_length=300)
+    dataset: list[str] | None = None
+    concept: list[str] | None = None
+
+
+@app.post("/api/text/summary")
+def text_summary(body: SummaryIn):
+    """对检索结果做 AI 摘要；每句结论带引用编号，无引用的句子被丢弃（BR-10）。"""
+    for ds in body.dataset or []:
+        _text_ds(ds)
+    hits = tsearch.search(body.q, body.dataset, body.concept, 12)["results"]
+    try:
+        return tsearch.summarize(body.q, hits)
+    except drafting.DraftError as e:
+        raise HTTPException(503, str(e))
+
+
+class ReviewIn(BaseModel):
+    dataset: str
+    doc_id: str
+    i: int
+    action: str
+    reviewer: str
+    note: str = ""
+    concepts: list[dict] | None = None
+    translation: dict | None = None
+
+
+@app.post("/api/text/review")
+def text_review_decide(body: ReviewIn):
+    _text_ds(body.dataset)
+    try:
+        return treview.decide(body.dataset, body.doc_id, body.i, body.action, body.reviewer, body.note,
+                              body.concepts, body.translation)
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(422, str(e))

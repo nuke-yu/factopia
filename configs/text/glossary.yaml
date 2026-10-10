@@ -1,0 +1,52 @@
+# 统一概念标签与三语术语表（BR-09、BR-12；Spec 第 11.5 节）
+# 默认整词匹配；以 * 结尾表示词干匹配。版本号随每次修改递增；每条理解结果都记录所用的术语表版本，便于追溯。
+# terms 用于：① 预筛（只把含相关词的段落交给大模型，控制成本）；② 跨语言检索（任意语言的提问映射到概念）；
+# ③ 未配置大模型时的词典法标注（置信度较低，全部进入复核）。
+version: glossary-v1
+concepts:
+  risk_increase:
+    zh_name: 风险增加
+    en_name: Risk increase
+    fr_name: Hausse des risques
+    terms:
+      zh: [风险上升, 风险增加, 不确定性加大, 前景不明, 下行风险, 减值, 亏损扩大, 盈利预警]
+      en: [risk increased, heightened risk, downside risk, uncertain outlook, impairment, profit warning, deteriorat*, headwind]
+      fr: [hausse des risques, risque accru, incertitude, perspectives incertaines, dépréciation, avertissement sur résultats, détérioration, dégradation, dégrad*]
+  demand_weakening:
+    zh_name: 需求转弱
+    en_name: Demand weakening
+    fr_name: Affaiblissement de la demande
+    terms:
+      zh: [需求转弱, 需求疲软, 需求放缓, 订单减少, 销量下滑, 收入下降, 客户谨慎]
+      en: [demand weakened, weak demand, softer demand, demand slowdown, lower volumes, declining sales, revenue decline, order intake fell]
+      fr: [demande s'affaiblit, demande faible, ralentissement de la demande, baisse des volumes, recul des ventes, baisse du chiffre d'affaires, repli de l'activité]
+  cost_pressure:
+    zh_name: 成本压力
+    en_name: Cost pressure
+    fr_name: Pression sur les coûts
+    terms:
+      zh: [成本压力, 成本上升, 原材料价格上涨, 通胀压力, 利润率下降, 能源成本]
+      en: [cost pressure, rising costs, cost inflation, input costs, margin pressure, energy costs, wage inflation]
+      fr: [pression sur les coûts, hausse des coûts, inflation des coûts, coûts des matières premières, pression sur les marges, coûts de l'énergie]
+  regulatory_uncertainty:
+    zh_name: 监管不确定性
+    en_name: Regulatory uncertainty
+    fr_name: Incertitude réglementaire
+    terms:
+      zh: [监管不确定性, 监管变化, 监管调查, 政策风险, 罚款, 诉讼, 合规]
+      en: [regulatory uncertainty, regulatory change, investigation, litigation, fine, sanction, compliance, tariff]
+      fr: [incertitude réglementaire, évolution réglementaire, enquête, litige, amende, sanction, conformité, droits de douane]
+# 否定词：命中时即使大模型给出高置信度也进入复核（"需求并未转弱"）
+negation:
+  zh: [并未, 没有, 未见, 未出现, 不再, 并非]
+  en: [not, no longer, never, without, neither, nor]
+  fr: [ne pas, n'a pas, pas de, aucun, aucune, ni, ne plus, sans]
+# 监管措辞与关键财务术语：命中即进入复核（BR-11）
+regulatory_wording:
+  zh: [监管机构, 证监会, 港交所, 上市规则, 披露义务]
+  en: [regulator, FCA, listing rules, disclosure obligation, market abuse]
+  fr: [AMF, autorité, règlement, obligation d'information, abus de marché]
+key_financial_terms:
+  zh: [商誉减值, 持续经营, 盈利预警, 财务指引]
+  en: [goodwill impairment, going concern, guidance, covenant]
+  fr: [dépréciation du goodwill, continuité d'exploitation, objectifs financiers, covenant]

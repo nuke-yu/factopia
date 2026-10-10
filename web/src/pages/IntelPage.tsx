@@ -1,0 +1,479 @@
+import { useEffect, useMemo, useState } from "react";
+import EChart from "../components/EChart";
+import { Badge, ErrorBox, Loading, Notice, Panel, Seg, Stat } from "../components/ui";
+import {
+  api, type ReviewItem, type TextCompareRow, type TextConcept, type TextDataset, type TextDoc, type TextFiling,
+  type TextHit, type TextOverview, type TextSummary,
+} from "../api";
+import { cssVar, fix, MARKET_LABEL, marketColor, signed, useAsync, useThemeVersion } from "../lib";
+
+// 情报台（Spec 第 11 章；BR-08 至 12、15、49）：多语言公告 → 概念标签 / 译文 / 置信度 → 复核 → 文本信号 → 三市场检验
+
+const SIM = "模拟数据，仅用于流程演示";
+const LANG: Record<string, string> = { zh: "中文", en: "英文", fr: "法文" };
+const REVIEW_ZH: Record<string, string> = {
+  pending: "待复核", not_required: "无需复核", confirm: "已确认", correct: "已修正", reject: "判定不涉及风险",
+};
+type Tab = "filings" | "search" | "review" | "glossary";
+
+const time = (iso: string | null | undefined) => (iso ? iso.replace("T", " ").replace(/(:\d\d)(\+00:00|Z)$/, "$1 UTC") : "—");
+
+function SimBadge({ simulated }: { simulated: boolean }) {
+  return simulated ? <Badge tone="warn">{SIM}</Badge> : <Badge tone="good">真实公告</Badge>;
+}
+
+function ConceptChips({ concepts }: { concepts: TextConcept[] }) {
+  if (!concepts.length) return <span className="text-xs text-faint">不涉及四类风险</span>;
+  return (
+    <span className="inline-flex flex-wrap gap-1">
+      {concepts.map((c, k) => (
+        <Badge key={k} tone={c.direction > 0 ? "bad" : "good"}>
+          {c.name ?? c.concept} {c.direction > 0 ? "↑加重" : "↓缓解"}{c.negated ? " · 否定句" : ""} · {fix(c.confidence, 2)}
+        </Badge>
+      ))}
+    </span>
+  );
+}
+
+/** 一条引用：来源、段落、三个时间。 */
+function Cite({ ds, simulated, title, company, paragraph, published, available, effective, url }: {
+  ds: string; simulated: boolean; title: string; company: string; paragraph: number; published: string; available: string;
+  effective: string | null; url?: string | null;
+}) {
+  return (
+    <div className="text-xs text-faint flex flex-wrap gap-x-3 gap-y-0.5">
+      <span>{company} · {title} · 第 {paragraph + 1} 段</span>
+      <span>正式发布 <span className="num">{time(published)}</span></span>
+      <span>实际可获取 <span className="num">{time(available)}</span></span>
+      <span>生效交易日 <span className="num">{effective ?? "—"}</span></span>
+      {url && <a className="text-accent underline" href={url} target="_blank" rel="noreferrer">原始 PDF</a>}
+      {simulated && <span className="text-warn">{SIM}</span>}
+      <span className="sr-only">{ds}</span>
+    </div>
+  );
+}
+
+function SourceCard({ d }: { d: TextDataset }) {
+  const e = d.evaluation;
+  return (
+    <div className="panel p-4 flex flex-col gap-3" style={{ borderTop: `2px solid ${marketColor(d.market)}` }}>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-display font-semibold">{d.market_zh}</span>
+        <SimBadge simulated={d.simulated} />
+      </div>
+      <div className="text-xs text-muted">来源：{d.source} · 许可：{d.licence}</div>
+      {!d.ready ? <div className="text-sm text-faint">尚未生成（python -m factopia.text all）</div> : (
+        <div className="grid grid-cols-3 gap-3">
+          <Stat label="公告" value={d.n_filings} sub={`${d.n_companies} 家公司`} />
+          <Stat label="逐日 Rank IC" value={fix(e?.rank_ic_mean, 3)} sub={`t = ${fix(e?.rank_ic_t, 2)}`} />
+          <Stat label="公告后事件" value={fix(e?.events.diff_t, 2)} sub="悲观 − 乐观 的 t 值" />
+        </div>
+      )}
+      {d.truth && <div className="text-xs text-warn">植入规律：{d.truth.rule}；预期：{d.truth.expected}</div>}
+      <div className="text-xs text-faint">处理延迟 {d.processing_delay_min} 分钟计入可获取时间；分数沿用 {d.hold_days ?? "—"} 个交易日</div>
+    </div>
+  );
+}
+
+function CompareTable({ rows, note, horizon }: { rows: TextCompareRow[]; note: string; horizon: number }) {
+  return (
+    <Panel title="三个市场分别检验" eyebrow={`演示主线 · 管理层风险表述变化 → 未来 ${horizon} 个交易日相对收益`}>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="label text-left">
+            <tr><th className="py-1 pr-3">市场</th><th className="pr-3">数据</th><th className="pr-3 text-right">公告</th>
+              <th className="pr-3 text-right">Rank IC</th><th className="pr-3 text-right">t 值</th><th className="pr-3 text-right">三分组收益差</th>
+              <th className="pr-3 text-right">悲观组超额</th><th className="pr-3 text-right">乐观组超额</th><th className="pr-3 text-right">事件 t 值</th><th>结论</th></tr>
+          </thead>
+          <tbody className="num">
+            {rows.map((r) => (
+              <tr key={r.dataset} className="border-t border-line">
+                <td className="py-1.5 pr-3 font-sans">{MARKET_LABEL[r.market]}</td>
+                <td className="pr-3 font-sans">{r.simulated ? <Badge tone="warn">模拟</Badge> : <Badge tone="good">真实</Badge>}</td>
+                <td className="pr-3 text-right">{r.n_filings}</td>
+                <td className="pr-3 text-right">{fix(r.rank_ic_mean, 3)}</td>
+                <td className="pr-3 text-right">{fix(r.rank_ic_t, 2)}</td>
+                <td className="pr-3 text-right">{signed(r.tercile_spread_mean, 2)}</td>
+                <td className="pr-3 text-right">{signed(r.event_pessimistic?.mean_excess, 2)}</td>
+                <td className="pr-3 text-right">{signed(r.event_optimistic?.mean_excess, 2)}</td>
+                <td className="pr-3 text-right">{fix(r.event_diff_t, 2)}</td>
+                <td className="font-sans">{r.verdict}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="text-xs text-faint mt-2">
+        假设方向：风险表述越悲观，未来收益越低（Rank IC 与事件 t 值为负）。t 值绝对值大于 2 视为显著。{note}
+      </p>
+    </Panel>
+  );
+}
+
+function IcChart({ monthly }: { monthly: Record<string, number> }) {
+  const theme = useThemeVersion();
+  const option = useMemo(() => {
+    const keys = Object.keys(monthly), muted = cssVar("--muted"), line = cssVar("--line-2");
+    return {
+      grid: { left: 44, right: 12, top: 16, bottom: 28 },
+      tooltip: { trigger: "axis", valueFormatter: (v: number) => v.toFixed(3) },
+      xAxis: { type: "category", data: keys, axisLabel: { color: muted }, axisLine: { lineStyle: { color: line } } },
+      yAxis: { type: "value", axisLabel: { color: muted }, splitLine: { lineStyle: { color: line, opacity: 0.4 } } },
+      series: [{ type: "bar", data: keys.map((k) => ({ value: monthly[k], itemStyle: { color: monthly[k] < 0 ? cssVar("--good") : cssVar("--bad") } })) }],
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [monthly, theme]);
+  return <EChart option={option} notMerge className="h-[200px]" />;
+}
+
+function DocView({ ds, id, onClose }: { ds: string; id: string; onClose: () => void }) {
+  const { data, error, loading } = useAsync<TextDoc>(() => api.textDoc(ds, id), [ds, id]);
+  const [onlyLabelled, setOnlyLabelled] = useState(true);
+  if (loading) return <Loading what="公告" />;
+  if (error || !data) return <ErrorBox error={error ?? "无数据"} />;
+  const m = data.meta;
+  const paras = data.paragraphs.filter((p) => !onlyLabelled || p.concepts.length || p.flags.length);
+  return (
+    <Panel title={m?.title ?? id} eyebrow={`${m?.company ?? ""} · ${LANG[m?.language ?? ""] ?? ""}原文`}
+      actions={<>
+        <Seg label="段落" value={onlyLabelled ? "y" : "n"} onChange={(v) => setOnlyLabelled(v === "y")}
+          options={[{ value: "y", label: "只看标注段落" }, { value: "n", label: "全部段落" }]} />
+        <button className="btn" onClick={onClose}>关闭</button>
+      </>}>
+      <div className="flex flex-col gap-2 mb-3">
+        <SimBadge simulated={data.simulated} />
+        <div className="text-xs text-muted">
+          理解模型 <span className="num">{data.model}</span> · 提示词 <span className="num">{data.prompt_version}</span> ·
+          术语表 <span className="num">{data.glossary_version}</span> · 标注时间 <span className="num">{time(data.labelled_at)}</span>
+          {data.pages_total ? <> · 读取 {data.pages_read}/{data.pages_total} 页</> : null}
+        </div>
+        {m && <div className="text-xs text-muted">
+          业务日期 <span className="num">{m.business_date}</span> · 正式发布 <span className="num">{time(m.published_at)}</span> ·
+          实际可获取 <span className="num">{time(m.available_at)}</span> · 生效交易日 <span className="num">{m.effective_date}</span>
+          {m.after_close && <span className="text-warn"> · 收盘后发布，顺延到下一交易日</span>}
+          {m.url && <> · <a className="text-accent underline" href={m.url} target="_blank" rel="noreferrer">原始 PDF</a></>}
+        </div>}
+      </div>
+      <div className="flex flex-col divide-y divide-line">
+        {paras.map((p) => (
+          <div key={p.i} className="py-2.5 grid gap-2 md:grid-cols-2">
+            <div>
+              <div className="label mb-1">第 {p.i + 1} 段 · 原文</div>
+              <p className="text-sm leading-relaxed">{p.text}</p>
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <div className="label">机器翻译{p.translation_confidence != null && <> · 置信度 {fix(p.translation_confidence, 2)}</>}</div>
+              {Object.keys(p.translation).length ? Object.entries(p.translation).map(([k, v]) => (
+                <p key={k} className="text-sm text-muted"><span className="text-faint">{LANG[k]}：</span>{v}</p>
+              )) : <p className="text-xs text-faint">{p.method === "lexicon" ? "词典法标注，无译文" : "—"}</p>}
+              <ConceptChips concepts={p.concepts} />
+              <div className="flex flex-wrap gap-1">
+                {p.review_status && <Badge tone={p.review_status === "pending" ? "warn" : "muted"}>{REVIEW_ZH[p.review_status]}</Badge>}
+                {p.flags.map((f) => <Badge key={f.code} tone="accent">{f.label}</Badge>)}
+              </div>
+            </div>
+          </div>
+        ))}
+        {!paras.length && <div className="text-sm text-faint py-3">本篇没有与四类风险相关的段落</div>}
+      </div>
+    </Panel>
+  );
+}
+
+function FilingsTab({ ov }: { ov: TextOverview }) {
+  const ready = ov.datasets.filter((d) => d.ready);
+  const [ds, setDs] = useState(ready[0]?.dataset ?? "fr");
+  const [open, setOpen] = useState<string | null>(null);
+  const { data, error, loading } = useAsync(() => api.textFilings(ds), [ds]);
+  const cur = ov.datasets.find((d) => d.dataset === ds);
+  return (
+    <div className="flex flex-col gap-4">
+      <Seg label="数据集" value={ds} onChange={(v) => { setDs(v); setOpen(null); }}
+        options={ov.datasets.map((d) => ({ value: d.dataset, label: `${d.market_zh}${d.simulated ? "（模拟）" : ""}` }))} />
+      {cur?.evaluation && Object.keys(cur.evaluation.ic_monthly).length > 0 && (
+        <Panel title="逐月 Rank IC" eyebrow="风险表述变化 vs 未来收益 · 绿色 = 方向符合假设（负相关）">
+          <IcChart monthly={cur.evaluation.ic_monthly} />
+        </Panel>
+      )}
+      {open && <DocView ds={ds} id={open} onClose={() => setOpen(null)} />}
+      {loading ? <Loading what="公告列表" /> : error ? <ErrorBox error={error} /> : data && (
+        <Panel title={`公告与风险表述打分（${data.total} 篇）`} eyebrow={`${data.source} · ${data.licence}`}>
+          <div className="overflow-x-auto max-h-[560px]">
+            <table className="w-full text-sm">
+              <thead className="label text-left sticky top-0 bg-bg-2">
+                <tr><th className="py-1 pr-3">公司</th><th className="pr-3">公告</th><th className="pr-3">语言</th>
+                  <th className="pr-3">正式发布</th><th className="pr-3">实际可获取</th><th className="pr-3">生效交易日</th>
+                  <th className="pr-3 text-right">风险语气</th><th className="pr-3 text-right">较上期变化</th><th>待复核</th></tr>
+              </thead>
+              <tbody>
+                {data.items.map((f: TextFiling) => (
+                  <tr key={f.id} className={`border-t border-line cursor-pointer hover:bg-bg-3 ${open === f.id ? "bg-accent/10" : ""}`}
+                    onClick={() => setOpen(f.id)} tabIndex={0} onKeyDown={(e) => e.key === "Enter" && setOpen(f.id)}>
+                    <td className="py-1.5 pr-3 whitespace-nowrap">{f.company}<div className="num text-xs text-faint">{f.instrument}</div></td>
+                    <td className="pr-3 max-w-[28ch] truncate" title={f.title}>{f.title}</td>
+                    <td className="pr-3">{LANG[f.language] ?? f.language}</td>
+                    <td className="pr-3 num text-xs whitespace-nowrap">{time(f.published_at)}</td>
+                    <td className="pr-3 num text-xs whitespace-nowrap">{time(f.available_at)}</td>
+                    <td className="pr-3 num text-xs whitespace-nowrap">{f.effective_date}{f.after_close && <span className="text-warn"> 顺延</span>}</td>
+                    <td className="pr-3 num text-right">{fix(f.tone_total, 2)}</td>
+                    <td className="pr-3 num text-right" style={{ color: f.change == null ? undefined : f.change > 0 ? cssVar("--bad") : cssVar("--good") }}>
+                      {f.change == null ? "首期" : `${f.change > 0 ? "+" : ""}${f.change.toFixed(2)}`}</td>
+                    <td>{f.pending_review ? <Badge tone="warn">{f.pending_review}</Badge> : <span className="text-faint">—</span>}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="text-xs text-faint mt-2">风险语气 = 每百段的净风险表述（加重为正、缓解或否定为负，按置信度加权，使用复核后的结果）。点击一行查看原文、译文与引用。</p>
+        </Panel>
+      )}
+    </div>
+  );
+}
+
+function SearchTab({ ov }: { ov: TextOverview }) {
+  const [q, setQ] = useState("需求转弱");
+  const [concepts, setConcepts] = useState<string[]>([]);
+  const [submitted, setSubmitted] = useState({ q: "需求转弱", concepts: [] as string[] });
+  const { data, error, loading } = useAsync(() => api.textSearch(submitted.q, [], submitted.concepts), [submitted]);
+  const [summary, setSummary] = useState<TextSummary | null>(null);
+  const [sumBusy, setSumBusy] = useState(false);
+  const [sumErr, setSumErr] = useState<string | null>(null);
+  useEffect(() => { setSummary(null); setSumErr(null); }, [submitted]);
+  const summarize = async () => {
+    setSumBusy(true); setSumErr(null);
+    try { setSummary(await api.textSummary(submitted.q, submitted.concepts)); }
+    catch (e) { setSumErr(String((e as Error).message ?? e)); } finally { setSumBusy(false); }
+  };
+  return (
+    <div className="flex flex-col gap-4">
+      <form className="panel p-4 flex flex-col gap-3" onSubmit={(e) => { e.preventDefault(); setSubmitted({ q, concepts }); }}>
+        <label className="label" htmlFor="intel-q">用任意语言提问（中文 / English / Français）</label>
+        <div className="flex flex-wrap gap-2">
+          <input id="intel-q" className="field flex-1 min-w-[16rem]" value={q} onChange={(e) => setQ(e.target.value)}
+            placeholder="如：demand weakened / la demande s'affaiblit / 成本压力" />
+          <button className="btn btn-primary" type="submit">检索</button>
+        </div>
+        <div className="flex flex-wrap gap-2 items-center">
+          <span className="text-xs text-faint">或按概念：</span>
+          {ov.concepts.map((c) => (
+            <button key={c.concept} type="button" aria-pressed={concepts.includes(c.concept)}
+              className={`btn h-7 text-xs ${concepts.includes(c.concept) ? "border-accent text-accent" : ""}`}
+              onClick={() => setConcepts((s) => s.includes(c.concept) ? s.filter((x) => x !== c.concept) : [...s, c.concept])}>
+              {c.zh}
+            </button>
+          ))}
+        </div>
+      </form>
+      {data && data.results.length > 0 && (
+        <Panel title="AI 摘要" eyebrow="每句结论必须引用检索结果；没有引用的句子会被丢弃"
+          actions={<button className="btn btn-primary" disabled={sumBusy || !submitted.q} onClick={summarize}>{sumBusy ? "生成中…" : summary ? "重新生成" : "生成摘要"}</button>}>
+          {sumErr && <Notice tone="bad" title="摘要生成失败">{sumErr}</Notice>}
+          {!summary && !sumErr && <p className="text-sm text-faint">基于前 12 条检索结果，用中文概括各市场、各公司的相关表述。</p>}
+          {summary && (
+            <div className="flex flex-col gap-3">
+              <ul className="flex flex-col gap-1.5 text-sm list-disc pl-5">
+                {summary.sentences.map((s, k) => (
+                  <li key={k}>{s.text} {s.cites.map((c) => <a key={c} href={`#cite-${c}`} className="num text-accent">[{c}]</a>)}</li>
+                ))}
+              </ul>
+              <div className="flex flex-col gap-1 border-t border-line pt-2">
+                {summary.citations.map((c) => (
+                  <div key={c.n} id={`cite-${c.n}`} className="text-xs text-faint">
+                    <span className="num text-accent">[{c.n}]</span> {c.company} · {c.title} · 第 {c.paragraph + 1} 段 · 正式发布 <span className="num">{time(c.published_at)}</span> ·
+                    实际可获取 <span className="num">{time(c.available_at)}</span>{c.simulated && <span className="text-warn"> · {SIM}</span>}
+                    {c.url && <> · <a className="text-accent underline" href={c.url} target="_blank" rel="noreferrer">原始 PDF</a></>}
+                  </div>
+                ))}
+              </div>
+              <p className="text-xs text-faint">模型 {summary.model}{summary.dropped ? ` · 丢弃了 ${summary.dropped} 句没有引用的结论` : ""}</p>
+            </div>
+          )}
+        </Panel>
+      )}
+      {loading ? <Loading what="检索结果" /> : error ? <ErrorBox error={error} /> : data && (
+        <Panel title={`${data.results.length}${data.truncated ? "+" : ""} 条结果`}
+          eyebrow={data.concepts.length ? `提问映射到概念：${data.concepts.map((c) => `${c.name}${c.terms.length ? `（${c.terms.join("、")}）` : ""}`).join("；")}` : "未映射到概念，按关键词匹配原文与译文"}>
+          <div className="flex flex-col divide-y divide-line">
+            {data.results.map((h: TextHit, k) => (
+              <div key={k} className="py-2.5 flex flex-col gap-1.5">
+                <div className="flex flex-wrap gap-2 items-center">
+                  <Badge tone="accent">{MARKET_LABEL[ov.datasets.find((d) => d.dataset === h.dataset)?.market ?? "fr"]}</Badge>
+                  <SimBadge simulated={h.simulated} />
+                  <span className="text-xs text-muted">{h.language_zh}原文 · 匹配：{h.matched.join("、")} · {REVIEW_ZH[h.review_status]}</span>
+                </div>
+                <p className="text-sm">{h.original}</p>
+                {Object.entries(h.translation).map(([k2, v]) => <p key={k2} className="text-sm text-muted"><span className="text-faint">{LANG[k2]}译文：</span>{v}</p>)}
+                <ConceptChips concepts={h.concepts} />
+                <Cite ds={h.dataset} simulated={h.simulated} title={h.title} company={h.company} paragraph={h.paragraph}
+                  published={h.published_at} available={h.available_at} effective={h.effective_date} url={h.url} />
+              </div>
+            ))}
+            {!data.results.length && <div className="text-sm text-faint py-3">没有找到相关段落</div>}
+          </div>
+        </Panel>
+      )}
+    </div>
+  );
+}
+
+function ReviewCard({ item, conceptsList, reviewer, onDone }: {
+  item: ReviewItem; conceptsList: TextOverview["concepts"]; reviewer: string; onDone: () => void;
+}) {
+  const [mode, setMode] = useState<"view" | "correct">("view");
+  const [picked, setPicked] = useState<Record<string, number>>(
+    Object.fromEntries(item.concepts.map((c) => [c.concept, c.direction])));
+  const [zh, setZh] = useState(item.translation.zh ?? "");
+  const [note, setNote] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const send = async (action: string) => {
+    setBusy(true); setErr(null);
+    try {
+      await api.textDecide({
+        dataset: item.dataset, doc_id: item.doc_id, i: item.i, action, reviewer, note,
+        concepts: action === "correct" ? Object.entries(picked).map(([concept, direction]) => ({ concept, direction, negated: direction < 0 })) : null,
+        translation: action === "correct" && zh && zh !== item.translation.zh ? { zh } : null,
+      });
+      onDone();
+    } catch (e) { setErr(String((e as Error).message ?? e)); } finally { setBusy(false); }
+  };
+  return (
+    <div className="py-3 flex flex-col gap-2">
+      <div className="flex flex-wrap gap-2 items-center">
+        <SimBadge simulated={item.simulated} />
+        <span className="text-xs text-muted">{item.company} · {item.title} · 第 {item.i + 1} 段 · {item.language_zh} · {time(item.published_at)}</span>
+        {item.flags.map((f) => <Badge key={f.code} tone="accent">{f.label}</Badge>)}
+      </div>
+      <p className="text-sm">{item.original}</p>
+      {Object.entries(item.translation).map(([k, v]) => <p key={k} className="text-sm text-muted"><span className="text-faint">{LANG[k]}译文：</span>{v}</p>)}
+      <div className="text-xs text-faint">模型判断（{item.method === "lexicon" ? "词典法" : item.model}）：</div>
+      <ConceptChips concepts={item.model_concepts} />
+      {item.decision && <div className="text-xs text-muted">
+        复核记录：{item.history.map((h) => `${h.at.replace("T", " ")} ${h.reviewer} ${REVIEW_ZH[h.action]}${h.note ? `（${h.note}）` : ""}`).join("；")}
+      </div>}
+      {!item.decision && mode === "view" && (
+        <div className="flex flex-wrap gap-2">
+          <button className="btn btn-primary" disabled={busy || !reviewer} onClick={() => send("confirm")}>确认模型判断</button>
+          <button className="btn" disabled={busy || !reviewer} onClick={() => setMode("correct")}>修正</button>
+          <button className="btn" disabled={busy || !reviewer} onClick={() => send("reject")}>不涉及风险</button>
+          <input aria-label="复核理由" className="field flex-1 min-w-[12rem]" placeholder="理由（可选）" value={note} onChange={(e) => setNote(e.target.value)} />
+        </div>
+      )}
+      {mode === "correct" && (
+        <div className="flex flex-col gap-2 border border-line rounded p-3">
+          <div className="flex flex-wrap gap-2">
+            {conceptsList.map((c) => {
+              const v = picked[c.concept];
+              const next = v === undefined ? 1 : v > 0 ? -1 : undefined;
+              return (
+                <button key={c.concept} type="button" className={`btn h-7 text-xs ${v === undefined ? "" : v > 0 ? "border-bad text-bad" : "border-good text-good"}`}
+                  onClick={() => setPicked((p) => { const n = { ...p }; if (next === undefined) delete n[c.concept]; else n[c.concept] = next; return n; })}>
+                  {c.zh}{v === undefined ? "" : v > 0 ? " ↑加重" : " ↓缓解/否定"}
+                </button>
+              );
+            })}
+          </div>
+          <label className="label" htmlFor={`zh-${item.key}`}>中文译文（可修改）</label>
+          <textarea id={`zh-${item.key}`} className="field min-h-16" value={zh} onChange={(e) => setZh(e.target.value)} />
+          <input aria-label="修正理由" className="field" placeholder="修正理由" value={note} onChange={(e) => setNote(e.target.value)} />
+          <div className="flex gap-2">
+            <button className="btn btn-primary" disabled={busy} onClick={() => send("correct")}>保存修正</button>
+            <button className="btn" onClick={() => setMode("view")}>取消</button>
+          </div>
+          <p className="text-xs text-faint">点击概念切换：加重 → 缓解/否定 → 不选。</p>
+        </div>
+      )}
+      {err && <Notice tone="bad" title="提交失败">{err}</Notice>}
+    </div>
+  );
+}
+
+function ReviewTab({ ov, onChanged }: { ov: TextOverview; onChanged: () => void }) {
+  const [status, setStatus] = useState<"pending" | "done">("pending");
+  const [ds, setDs] = useState<string>("");
+  const [tick, setTick] = useState(0);
+  const [reviewer, setReviewer] = useState(() => { try { return localStorage.getItem("factopia-reviewer") ?? ""; } catch { return ""; } });
+  useEffect(() => { try { localStorage.setItem("factopia-reviewer", reviewer); } catch { /* 忽略 */ } }, [reviewer]);
+  const { data, error, loading } = useAsync(() => api.textReview(status, ds || undefined), [status, ds, tick]);
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="panel p-4 flex flex-wrap gap-3 items-center">
+        <Seg label="状态" value={status} onChange={setStatus}
+          options={[{ value: "pending", label: `待复核 ${data?.counts.pending ?? ""}` }, { value: "done", label: `已复核 ${data?.counts.done ?? ""}` }]} />
+        <Seg label="数据集" value={ds} onChange={setDs}
+          options={[{ value: "", label: "全部" }, ...ov.datasets.map((d) => ({ value: d.dataset, label: `${d.market_zh}${d.simulated ? "（模拟）" : ""}` }))]} />
+        <label className="text-sm text-muted flex items-center gap-2 whitespace-nowrap" htmlFor="intel-reviewer">复核人
+          <input id="intel-reviewer" className="field w-40" value={reviewer} onChange={(e) => setReviewer(e.target.value)} placeholder="姓名（必填）" />
+        </label>
+      </div>
+      <Notice tone="accent" title="进入复核的条件">
+        低置信度判断、翻译置信度低、否定句、监管措辞、关键财务术语、仅词典法标注。复核结果只追加记录不覆盖，打分与检索使用复核后的结果。
+      </Notice>
+      {loading ? <Loading what="复核队列" /> : error ? <ErrorBox error={error} /> : data && (
+        <Panel title={status === "pending" ? "待复核段落" : "已复核段落"} eyebrow={`显示前 ${data.items.length} 条`}>
+          <div className="flex flex-col divide-y divide-line">
+            {data.items.map((it) => (
+              <ReviewCard key={it.key} item={it} conceptsList={ov.concepts} reviewer={reviewer}
+                onDone={() => { setTick((t) => t + 1); onChanged(); }} />
+            ))}
+            {!data.items.length && <div className="text-sm text-faint py-3">没有{status === "pending" ? "待复核" : "已复核"}的段落</div>}
+          </div>
+        </Panel>
+      )}
+    </div>
+  );
+}
+
+function GlossaryTab({ ov }: { ov: TextOverview }) {
+  return (
+    <Panel title="统一概念标签与三语术语表" eyebrow={`版本 ${ov.glossary_version} · configs/text/glossary.yaml`}>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="label text-left"><tr><th className="py-1 pr-3">概念</th><th className="pr-3">中文</th><th className="pr-3">英文</th><th>法文</th></tr></thead>
+          <tbody>
+            {ov.concepts.map((c) => (
+              <tr key={c.concept} className="border-t border-line align-top">
+                <td className="py-2 pr-3 whitespace-nowrap"><div className="font-medium">{c.zh}</div><div className="text-xs text-faint">{c.en} · {c.fr}</div></td>
+                {(["zh", "en", "fr"] as const).map((l) => <td key={l} className="pr-3 py-2 text-xs text-muted">{(c.terms[l] ?? []).join("、")}</td>)}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="text-xs text-faint mt-2">术语表用于预筛段落、跨语言检索和未配置大模型时的词典法标注；每条理解结果都记录所用版本。</p>
+    </Panel>
+  );
+}
+
+export default function IntelPage() {
+  const [tick, setTick] = useState(0);
+  const { data, error, loading } = useAsync(() => api.textOverview(), [tick]);
+  const [tab, setTab] = useState<Tab>("filings");
+  if (loading && !data) return <Loading what="情报台" />;
+  if (error || !data) return <ErrorBox error={error ?? "无数据"} />;
+  return (
+    <div className="flex flex-col gap-5">
+      <div className="flex flex-wrap items-end gap-3">
+        <div>
+          <div className="label">情报台</div>
+          <h1 className="font-display text-xl font-semibold">多语言公告与文本信号</h1>
+        </div>
+        <span className="text-sm text-muted">原文优先 · 译文与概念标签另存 · 按实际可获取时间生效</span>
+        <span className="ml-auto"><Badge tone={data.review_counts.pending ? "warn" : "good"}>待复核 {data.review_counts.pending}</Badge></span>
+      </div>
+      <div className="grid gap-4 md:grid-cols-3">
+        {data.datasets.map((d) => <SourceCard key={d.dataset} d={d} />)}
+      </div>
+      {data.compare && <CompareTable rows={data.compare.markets} note={data.compare.note} horizon={data.compare.horizon} />}
+      <Seg label="视图" value={tab} onChange={setTab} options={[
+        { value: "filings", label: "公告与打分" }, { value: "search", label: "跨语言检索" },
+        { value: "review", label: `语言专家复核` }, { value: "glossary", label: "术语表" },
+      ]} />
+      {tab === "filings" && <FilingsTab ov={data} />}
+      {tab === "search" && <SearchTab ov={data} />}
+      {tab === "review" && <ReviewTab ov={data} onChanged={() => setTick((t) => t + 1)} />}
+      {tab === "glossary" && <GlossaryTab ov={data} />}
+    </div>
+  );
+}

@@ -25,6 +25,7 @@ function lazyPage(load: () => Promise<{ default: ComponentType }>) {
 const ProjectsPage = lazyPage(() => import("./pages/ProjectsPage"));
 const RunPage = lazyPage(() => import("./pages/RunPage"));
 const ResultsPage = lazyPage(() => import("./pages/ResultsPage"));
+const IntelPage = lazyPage(() => import("./pages/IntelPage"));
 
 /** 页面出错时显示原因与刷新按钮，而不是空白页。切换页面后自动恢复。 */
 class PageBoundary extends Component<{ children: ReactNode; resetKey: string }, { error: Error | null }> {
@@ -58,6 +59,7 @@ function Pages() {
           <Route path="/research" element={<ResearchPage />} />
           <Route path="/audit" element={<AuditPage />} />
           <Route path="/results" element={<ResultsPage />} />
+          <Route path="/intel" element={<IntelPage />} />
           <Route path="*" element={<Navigate to="/projects" replace />} />
         </Routes>
       </Suspense>
@@ -118,6 +120,17 @@ export default function App() {
                   </NavLink>
                 </div>
               ))}
+              <span className="mx-2 h-5 border-l border-line" aria-hidden />
+              <NavLink
+                to="/intel"
+                className={({ isActive }) =>
+                  `flex items-center gap-2 h-9 px-3 rounded border transition-colors whitespace-nowrap ${
+                    isActive ? "border-accent/60 bg-accent/10 text-text" : "border-transparent text-muted hover:text-text"
+                  }`}
+              >
+                <span className="font-medium">情报台</span>
+                <span className="hidden 2xl:inline text-xs text-faint">多语言公告</span>
+              </NavLink>
             </nav>
             <div className="ml-auto"><ThemeToggle /></div>
           </div>

@@ -116,6 +116,8 @@ $DC run --rm app python -m factopia.export.alpha158
 | `factopia/research/` | 研究规格：授权解析、证据包、AI 起草、提示词生成、版本与任务存储 |
 | `factopia/runner.py` | 后台运行器 |
 | `factopia/validate/` | 可信度检查：AI 未见过的 2024 年以后数据、随机因子对照、多种子回测（Spec 第 14.7 节） |
+| `factopia/text/` | 多语言公告与文本信号：法国 AMF 真实公告、香港 / 英国模拟数据，概念标签 / 译文 / 置信度、语言专家复核、按实际可获取时间生成信号、三市场检验、带引用的检索与 AI 摘要（Spec 第 14.9 节）；`python -m factopia.text all`，页面「情报台」 |
+| `configs/text/glossary.yaml` | 四类风险概念与中 / 英 / 法术语表（带版本） |
 | `configs/mandates/` | 模拟客户授权（不含真实客户信息） |
 | `factopia/api/` | 后端接口 |
 | `web/` | 前端（React 19、Vite、Tailwind v4、ECharts GL、React Three Fiber） |

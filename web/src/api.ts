@@ -222,6 +222,73 @@ export type RunEvent = EventBase & (
   | { kind: "cost"; total_usd: number }
 );
 
+
+// ---------------------------------------------------------------- 情报台：多语言公告与文本信号
+export type TextConcept = { concept: string; name?: string; direction: number; negated: boolean; confidence: number; evidence?: string };
+export type TextFlag = { code: string; label: string };
+export type TextEval = {
+  horizon: number; n_days: number; rank_ic_mean: number | null; rank_ic_t: number | null; positive_ratio: number | null;
+  tercile_spread_mean: number | null; tercile_spread_t: number | null; avg_coverage: number | null;
+  events: { pessimistic: { n: number; mean_excess: number | null }; optimistic: { n: number; mean_excess: number | null };
+    rank_corr: number | null; diff_t: number | null };
+  ic_monthly: Record<string, number>;
+};
+export type TextDataset = {
+  dataset: string; market: Market; market_zh: string; simulated: boolean; source: string; licence: string;
+  processing_delay_min: number; ready: boolean; n_filings: number; n_companies: number; n_changes: number;
+  hold_days: number | null; evaluation: TextEval | null;
+  truth: { label: string; rule: string; expected: string; companies: number; filings: number } | null;
+};
+export type TextCompareRow = {
+  dataset: string; market: Market; simulated: boolean; n_filings: number; n_companies: number;
+  rank_ic_mean: number | null; rank_ic_t: number | null; tercile_spread_mean: number | null; n_days: number;
+  event_pessimistic?: { n: number; mean_excess: number | null }; event_optimistic?: { n: number; mean_excess: number | null };
+  event_diff_t?: number | null; verdict: string;
+};
+export type TextOverview = {
+  datasets: TextDataset[]; compare: { horizon: number; markets: TextCompareRow[]; note: string } | null;
+  glossary_version: string; review_counts: { pending: number; done: number };
+  concepts: { concept: string; zh: string; en: string; fr: string; terms: Record<string, string[]> }[];
+};
+export type TextCitation = { i: number; concept: string; name: string; value: number; negated: boolean; evidence: string; review: string; text: string };
+export type TextFiling = {
+  id: string; instrument: string; company: string; title: string; language: string; subtype: string | null; url: string | null;
+  business_date: string; published_at: string; available_at: string; effective_date: string | null; after_close: boolean;
+  tone: Record<string, number>; tone_total: number; change: number | null; prev_id: string | null;
+  changes: Record<string, number | null>; pending_review: number; model: string; glossary_version: string;
+  prompt_version: string; citations: TextCitation[];
+};
+export type TextParagraph = {
+  i: number; text: string; concepts: TextConcept[]; translation: Record<string, string>; translation_confidence: number | null;
+  flags: TextFlag[]; review_status: string | null; method: string | null;
+};
+export type TextDoc = {
+  dataset: string; simulated: boolean; meta: TextFiling | null; model: string | null; prompt_version: string | null;
+  glossary_version: string | null; labelled_at: string | null; pages_total: number | null; pages_read: number | null;
+  paragraphs: TextParagraph[];
+};
+export type TextHit = {
+  dataset: string; simulated: boolean; source: string; licence: string; doc_id: string; paragraph: number; company: string;
+  instrument: string; title: string; url: string | null; language: string; language_zh: string; business_date: string;
+  published_at: string; available_at: string; effective_date: string | null; original: string;
+  translation: Record<string, string>; translation_confidence: number | null; concepts: TextConcept[]; matched: string[];
+  review_status: string; model: string; glossary_version: string;
+};
+export type TextSummary = {
+  sentences: { text: string; cites: number[] }[]; dropped: number; model: string | null;
+  citations: { n: number; dataset: string; doc_id: string; paragraph: number; company: string; title: string;
+    published_at: string; available_at: string; simulated: boolean; url: string | null }[];
+};
+export type ReviewDecision = { key: string; action: string; reviewer: string; note: string; at: string; concepts: TextConcept[] | null; translation: Record<string, string> | null };
+export type ReviewItem = {
+  key: string; dataset: string; doc_id: string; i: number; simulated: boolean; company: string; instrument: string; title: string;
+  published_at: string; language: string; language_zh: string; original: string; translation: Record<string, string>;
+  translation_confidence: number | null; model: string; glossary_version: string; method: string;
+  concepts: TextConcept[]; model_concepts: TextConcept[]; flags: TextFlag[]; decision: ReviewDecision | null; history: ReviewDecision[];
+};
+export type ReviewIn = { dataset: string; doc_id: string; i: number; action: string; reviewer: string; note?: string;
+  concepts?: { concept: string; direction: number; negated?: boolean }[] | null; translation?: Record<string, string> | null };
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`/api${path}`, init);
   if (!res.ok) {
@@ -236,6 +303,22 @@ const post = <T,>(path: string, body: unknown) =>
   request<T>(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
 export const api = {
+  textOverview: () => get<TextOverview>("/text/overview"),
+  textFilings: (ds: string, instrument?: string) =>
+    get<{ dataset: string; simulated: boolean; source: string; licence: string; total: number; items: TextFiling[] }>(
+      `/text/${ds}/filings${instrument ? `?instrument=${encodeURIComponent(instrument)}` : ""}`),
+  textDoc: (ds: string, id: string) => get<TextDoc>(`/text/${ds}/filings/${id}`),
+  textSearch: (q: string, datasets: string[] = [], concepts: string[] = []) => {
+    const p = new URLSearchParams({ q, limit: "60" });
+    datasets.forEach((d) => p.append("dataset", d));
+    concepts.forEach((c) => p.append("concept", c));
+    return get<{ query: string; concepts: { concept: string; name: string; terms: string[] }[]; results: TextHit[]; truncated: boolean }>(`/text/search?${p}`);
+  },
+  textSummary: (q: string, concepts: string[] = []) => post<TextSummary>("/text/summary", { q, concept: concepts.length ? concepts : null }),
+  textReview: (status: "pending" | "done" | "all", dataset?: string) =>
+    get<{ items: ReviewItem[]; counts: { pending: number; done: number }; actions: Record<string, string> }>(
+      `/text/review?status=${status}&limit=60${dataset ? `&dataset=${dataset}` : ""}`),
+  textDecide: (body: ReviewIn) => post<ReviewDecision>("/text/review", body),
   overview: () => get<Overview>("/overview"),
   cube: (h: number) => get<Cube>(`/alpha158/${h}/cube`),
   surface: (h: number, m: Market) => get<Surface>(`/alpha158/${h}/surface?market=${m}`),

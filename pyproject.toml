@@ -14,6 +14,9 @@ dependencies = [
     "skfolio",
     # Qlib 的实验记录依赖 MLflow 文件存储，3.13 起默认关闭（见 Qlib 主分支 pyproject 注释）
     "mlflow<3.13",
+    # 公告 PDF 提取文本（factopia.text）
+    "pypdf",
+    "pyyaml",
 ]
 
 [tool.uv]
