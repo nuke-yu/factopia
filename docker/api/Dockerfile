@@ -21,7 +21,7 @@ COPY factopia/portfolio factopia/portfolio
 COPY factopia/approval factopia/approval
 COPY factopia/signals factopia/signals
 COPY factopia/acceptance factopia/acceptance
-COPY factopia/sources.py factopia/sources.py
+COPY factopia/sources.py factopia/access.py factopia/
 COPY factopia/factors/__init__.py factopia/factors/stats.py factopia/factors/families.py factopia/factors/
 COPY factopia/validate/__init__.py factopia/validate/metrics.py factopia/validate/
 COPY factopia/text/__init__.py factopia/text/common.py factopia/text/review.py factopia/text/understand.py factopia/text/search.py factopia/text/
@@ -33,6 +33,7 @@ COPY configs/mandates /workspace/configs/mandates
 COPY configs/rules /workspace/configs/rules
 COPY configs/acceptance /workspace/configs/acceptance
 COPY configs/factor_library /workspace/configs/factor_library
+COPY configs/access /workspace/configs/access
 COPY configs/rdagent/context /workspace/configs/rdagent/context
 
 RUN useradd --uid 10001 --no-create-home factopia

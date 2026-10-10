@@ -1,6 +1,6 @@
 import { Fragment, useMemo, useState } from "react";
 import { Badge, ErrorBox, Loading, Notice, Panel, Seg, Stat } from "../components/ui";
-import { api, MARKETS, type Market, type Relation, type Security } from "../api";
+import { api, visibleMarkets, type Market, type Relation, type Security } from "../api";
 import { MARKET_LABEL, marketColor, useAsync } from "../lib";
 
 // 数据台（Spec 第 14.10 节；BR-13、16、17、18）：证券主数据与跨市场关联、公司行动、数据字典、时间点一致性
@@ -110,7 +110,7 @@ function SecuritiesTab({ relationsOnly }: { relationsOnly: boolean }) {
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap gap-3 items-center">
         <Seg label="市场" value={market} onChange={setMarket}
-          options={[{ value: "all", label: "全部" }, ...MARKETS.map((m) => ({ value: m, label: MARKET_LABEL[m] }))]} />
+          options={[{ value: "all", label: "全部" }, ...visibleMarkets().map((m) => ({ value: m, label: MARKET_LABEL[m] }))]} />
         <input aria-label="搜索证券" className="field max-w-xs" placeholder="代码或名称" value={q} onChange={(e) => setQ(e.target.value)} />
         <span className="text-sm text-muted">{rows.length} 只</span>
       </div>

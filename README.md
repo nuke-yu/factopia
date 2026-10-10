@@ -118,6 +118,7 @@ $DC run --rm app python -m factopia.export.alpha158
 | `factopia/validate/` | 可信度检查：AI 未见过的 2024 年以后数据、随机因子对照、多种子回测（Spec 第 14.7 节） |
 | `factopia/text/` | 多语言公告与文本信号：法国 AMF 真实公告、香港 / 英国模拟数据，概念标签 / 译文 / 置信度、语言专家复核、按实际可获取时间生成信号、三市场检验、带引用的检索与 AI 摘要（Spec 第 14.9 节）；`python -m factopia.text all`，页面「情报台」；`text/research.py` 为文本信号研究（研究规格信号来源选"文本"后由后台运行器执行，输出与 RD-Agent 相同格式的结果，第 14.17 节） |
 | `factopia/research/regions.py`、`library.py`、`semantic.py` | 地区差异清单；内部因子库（Alpha158、获批信号、团队专有因子接入口 `configs/factor_library/`）；知识检索（大模型三语改写 + BM25）（Spec 第 14.18 节）；页面「因子库」 |
+| `factopia/access.py` | 演示用地区视角（不是登录鉴权）：按 `configs/access/regions.yaml` 过滤数据与信号，越权留痕（Spec 第 14.20 节）；页面顶部"地区视角" |
 | `factopia/sources.py` | 行情来源：真实标准化行情与指数，或模拟文本数据集的模拟行情（等权基准）；运行结果记录来源，诊断、组合、监控按运行读取 |
 | `configs/text/glossary.yaml` | 四类风险概念与中 / 英 / 法术语表（带版本） |
 | `factopia/refdata/` | 参考数据与时间点一致性：证券主数据（GLEIF 法律实体、OpenFIGI 标识、跨市场挂牌与存托凭证、主要上市地、行业、财务年度、会计口径）、公司行动、成分股起止日期、各数据域的时间点状态（Spec 第 14.10 节）；`python -m factopia.refdata all`，页面「数据台」 |

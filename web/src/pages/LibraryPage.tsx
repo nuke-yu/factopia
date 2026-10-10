@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { Badge, ErrorBox, Loading, Panel, Seg } from "../components/ui";
-import { api, MARKETS, type KnowledgeSearch, type LibraryItem } from "../api";
+import { api, visibleMarkets, type KnowledgeSearch, type LibraryItem } from "../api";
 import { MARKET_LABEL, useAsync } from "../lib";
 
 // 因子库与知识检索（Spec 第 14.18 节；BR-25、35）：内部因子库（Alpha158、获批信号、团队专有因子接口）
@@ -114,7 +114,7 @@ export default function LibraryPage() {
               <th className="text-left font-normal py-1 pr-2">因子</th>
               <th className="text-left font-normal pr-2">来源 / 状态</th>
               <th className="text-left font-normal pr-2">说明</th>
-              {MARKETS.map((m) => <th key={m} className="text-right font-normal pr-2">{MARKET_LABEL[m]} t</th>)}
+              {visibleMarkets().map((m) => <th key={m} className="text-right font-normal pr-2">{MARKET_LABEL[m]} t</th>)}
               <th className="text-left font-normal pr-2">迁移标签</th>
             </tr></thead>
             <tbody>
@@ -125,7 +125,7 @@ export default function LibraryPage() {
                     <div className="text-faint mt-0.5">{i.group}</div></td>
                   <td className="pr-2 min-w-[16rem]">{i.description}
                     {i.source === "approved" && <div className="text-faint mt-0.5">{i.period_note}</div>}</td>
-                  {MARKETS.map((m) => {
+                  {visibleMarkets().map((m) => {
                     const x = i.markets[m];
                     return <td key={m} className="pr-2 text-right num whitespace-nowrap">{tCell(x?.t)}
                       {x?.state && <div className="text-faint">{x.state}</div>}</td>;

@@ -237,6 +237,9 @@ def redteam(ctx: dict) -> dict:
     c.check("RT-16", "报告与提交编号不接受路径穿越", "请求 ../../etc/passwd 形式的报告名与提交编号", lambda: ctx["path_traversal"]())
     # 模拟数据标注
     c.check("RT-17", "模拟数据带标注且与真实数据隔离", "检查香港 / 英国模拟公告是否全部标注", lambda: ctx["simulated_labelled"]())
+    # 地区视角（第 14.20 节，演示用）
+    c.check("RT-18", "地区角色不能查看其他地区的信号与运行", "以香港团队角色请求法国信号、法国运行", lambda: ctx["region_isolated"]())
+    c.check("RT-19", "跨地区内容只对总部开放", "以伦敦团队角色请求多市场组合、审计证据包、以法国合规身份审批", lambda: ctx["cross_region_guarded"]())
     passed = sum(r["passed"] for r in c.results)
     out = {"ran_at": now(), "passed": passed, "total": len(c.results), "results": c.results}
     OUT.mkdir(parents=True, exist_ok=True)

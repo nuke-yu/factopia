@@ -9,7 +9,7 @@ const OVERALL_TONE = { rejected: "bad", passed: "good", pending: "accent", insuf
 const FINDING_COLOR = { bad: "--bad", warn: "--warn", good: "--good" } as const;
 const STATE_ZH: Record<string, string> = {
   queued: "排队中", running: "运行中", done: "已完成", failed: "失败", cancelled: "已停止", budget_stopped: "超出预算停止",
-  incomplete: "未完成", none: "尚未运行",
+  incomplete: "未完成", none: "尚未运行", hidden: "其他地区，无权查看",
 };
 
 /**
@@ -209,7 +209,8 @@ function MarketCard({ e, current }: { e: StudyMarket; current: boolean }) {
           ? `验证期未满足采纳条件（rank IC 方向与假设一致且扣成本超额高于等权持有股票池），不采纳；起点扣成本年化超额 ${pct(b?.annual_return_with_cost)}。`
           : `RD-Agent 没有采纳任何一轮：新因子都没有超过起点（扣成本年化 ${pct(b?.annual_return_with_cost)}）。`}</p>
       ) : (
-        <p className="text-xs text-muted">{e.job ? `任务${e.job.state_zh}，完成后自动判定。` : "这个版本还没有在该市场运行。"}</p>
+        <p className="text-xs text-muted">{(e.state as string) === "hidden" ? "当前地区视角不显示其他地区的结果（演示用地区视角）。"
+          : e.job ? `任务${e.job.state_zh}，完成后自动判定。` : "这个版本还没有在该市场运行。"}</p>
       )}
 
       <div className="flex flex-wrap gap-2 mt-auto">

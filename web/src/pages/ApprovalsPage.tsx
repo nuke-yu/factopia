@@ -173,7 +173,7 @@ function Detail({ sid, roles }: { sid: string; roles: string[] }) {
               <tbody>
                 {sub.markets.map((m) => { const r = sub.materials.results[m]; return (
                   <tr key={m} className="border-t border-line"><td className="py-1.5 pr-3 font-sans">{MARKET_LABEL[m]}</td>
-                    <td className="pr-3 text-xs">{r?.run_id ?? "—"} · {r?.loop ?? "—"}</td><td className="pr-3">{r?.rank_ic?.toFixed(4) ?? "—"}</td>
+                    <td className="pr-3 text-xs">{(r as { hidden?: string } | undefined)?.hidden ?? `${r?.run_id ?? "—"} · ${r?.loop ?? "—"}`}</td><td className="pr-3">{r?.rank_ic?.toFixed(4) ?? "—"}</td>
                     <td className="pr-3">{r?.rank_ic_t?.toFixed(2) ?? "—"}</td><td className="pr-3 font-sans">{r?.credibility ?? "—"}</td>
                     <td className="text-xs text-faint">{(sub.materials.data_snapshot[m] ?? "—").slice(0, 12)}…</td></tr>); })}
               </tbody>

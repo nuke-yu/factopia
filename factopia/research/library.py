@@ -89,13 +89,23 @@ SOURCES = {"alpha158": alpha158, "approved": approved, "proprietary": proprietar
 
 
 def items(sources: list[str] | None = None) -> list[dict]:
+    from factopia import access
     out = []
     for k in sources or list(SOURCES):
         try:
             out += SOURCES[k]()
         except FileNotFoundError:
             continue
-    return out
+    if access.cross_region():
+        return out
+    # 地区视角（第 14.20 节）：各市场统计只保留本地区；获批信号只保留涉及本地区市场的
+    view = []
+    for i in out:
+        ms = {m: v for m, v in (i.get("markets") or {}).items() if access.can(m)}
+        if i["source"] == "approved" and not ms:
+            continue
+        view.append({**i, "markets": ms})
+    return view
 
 
 def summary() -> dict:

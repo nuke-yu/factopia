@@ -19,6 +19,7 @@ import yaml
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from factopia import access
 from factopia import sources as srcs
 from factopia.research import draft as drafting
 from factopia.research import evidence, mandates, regions, store, verdict
@@ -36,6 +37,28 @@ MARKETS = ("hk", "uk", "fr")
 MARKET_ZH = {"hk": "香港", "uk": "英国", "fr": "法国"}
 
 app = FastAPI(title="Factopia API", version="0.1.0", docs_url="/api/docs", openapi_url="/api/openapi.json")
+
+
+@app.middleware("http")
+async def _region_view(request, call_next):
+    """地区视角（第 14.20 节，演示用）：请求头 X-Factopia-Region 决定当前地区角色。"""
+    token = access.set_role(request.headers.get(access.HEADER) or request.cookies.get(access.COOKIE) or request.query_params.get("region"))
+    try:
+        return await call_next(request)
+    finally:
+        access.reset(token)
+
+
+@app.exception_handler(access.Denied)
+def _region_denied(request, exc):
+    from fastapi.responses import JSONResponse
+    return JSONResponse(status_code=403, content={"detail": str(exc)})
+
+
+@app.get("/api/access")
+def access_info():
+    """当前地区角色、可选角色与策略（演示用，不是登录鉴权）。"""
+    return access.info()
 
 
 @app.exception_handler(PermissionError)
@@ -58,6 +81,7 @@ def _cached_json(path: Path, mtime: float):  # 文件更新后 mtime 变化，�
 def _run_dir(run_id: str) -> Path:
     if not RUN_ID.match(run_id) or not (RESULTS / "runs" / run_id / "run.json").exists():
         raise HTTPException(404, f"运行不存在：{run_id}")
+    access.require(run_id.split("_", 1)[0], f"运行 {run_id}")       # 地区视角：运行编号以市场开头
     return RESULTS / "runs" / run_id
 
 
@@ -85,15 +109,22 @@ def overview():
 
 @app.get("/api/alpha158/{horizon}/cube")
 def cube(horizon: int):
-    return _json(RESULTS / "alpha158" / f"h{horizon}" / "cube.json")
+    data = _json(RESULTS / "alpha158" / f"h{horizon}" / "cube.json")
+    if access.cross_region():
+        return data
+    ms = set(access.markets())                                     # 地区视角：只保留本地区市场的统计
+    keep = lambda d: {m: v for m, v in d.items() if m in ms} if isinstance(d, dict) else d
+    return {**data, "factors": [{**f, "periods": {k: {**v, "t": keep(v.get("t")), "ric": keep(v.get("ric"))} for k, v in f["periods"].items()}}
+                                for f in data["factors"]]}
 
 
 @app.get("/api/alpha158/{horizon}/surface")
 def surface(horizon: int, market: str | None = Query(None, pattern="^(hk|uk|fr)$")):
     data = _json(RESULTS / "alpha158" / f"h{horizon}" / "surface.json")
     if market:
+        access.require(market, f"{market} 市场的因子评估")
         return {**data, "markets": {market: data["markets"][market]}}
-    return data
+    return {**data, "markets": {m: v for m, v in data["markets"].items() if access.can(m)}}
 
 
 @app.get("/api/runs")
@@ -101,7 +132,8 @@ def runs():
     items = []
     for p in sorted((RESULTS / "runs").glob("*/run.json"), reverse=True):
         run = _json(p)
-        items.append({k: v for k, v in run.items() if k not in ("context", "log_dir")})
+        if access.can(run["market"]):                              # 地区视角
+            items.append({k: v for k, v in run.items() if k not in ("context", "log_dir")})
     return items
 
 
@@ -259,8 +291,9 @@ def projects():
         ex = yaml.safe_load(p.read_text(encoding="utf-8"))
         if ex["id"] not in known:
             specs.append({**ex, "markets": [ex["market"]], "versions": [], "example": True})
-    all_runs = [_json(p) for p in sorted((RESULTS / "runs").glob("*/run.json"), reverse=True)]
-    all_jobs = store.list_jobs()
+    all_runs = [r for r in (_json(p) for p in sorted((RESULTS / "runs").glob("*/run.json"), reverse=True)) if access.can(r["market"])]
+    all_jobs = [j for j in store.list_jobs() if access.can(j["market"])]            # 地区视角
+    specs = [sp for sp in specs if any(access.can(m) for m in (sp.get("markets") or [sp.get("market")]))]
     jobs_by_run = {j["run_id"]: j for j in all_jobs if j.get("run_id")}
     items = []
     for spec in specs:
@@ -484,13 +517,21 @@ def _version_rules(research_id: str, version: int, overrides: dict) -> dict:
 @app.get("/api/research/{research_id}/versions/{version}/rules")
 def version_rules(research_id: str, version: int):
     """一个锁定版本的两次预检：立项预检（锁定时存档）与组合预检（采纳轮次的持仓与诊断）。"""
-    return _version_rules(research_id, version, {})
+    return _rules_view(_version_rules(research_id, version, {}))
 
 
 @app.post("/api/research/{research_id}/versions/{version}/rules")
 def version_rules_check(research_id: str, version: int, body: RulesCheckIn):
     """带演示覆盖的预检：如把授权改为允许卖空、加入受限证券、追加卖空持仓，验证规则能否拦截（不写入任何文件）。"""
-    return _version_rules(research_id, version, body.overrides)
+    return _rules_view(_version_rules(research_id, version, body.overrides))
+
+
+def _rules_view(r: dict) -> dict:
+    """地区视角：只保留通用规则与本地区市场的命中（命中证据可能含其他地区的持仓）。"""
+    if access.cross_region():
+        return r
+    keep = lambda h: str(h.get("market")) == "all" or any(access.can(m) for m in str(h.get("market")).split(","))
+    return {k: ({**v, "hits": [h for h in v["hits"] if keep(h)]} if isinstance(v, dict) and "hits" in v else v) for k, v in r.items()}
 
 
 @app.get("/api/research/{research_id}/versions")
@@ -729,6 +770,23 @@ def _cross_market(markets: dict) -> dict | None:
 
 
 @app.get("/api/research/{research_id}/versions/{version}/study")
+def study_view(research_id: str, version: int):
+    """研究结论（地区视角）：地区角色只看到本地区市场的结果，其他市场标为无权查看；
+    迁移标签、三市场相关结构与 AI 解释涉及其他地区，只对总部开放。"""
+    st = study(research_id, version)
+    if access.cross_region():
+        return st
+    if not any(access.can(m) for m in st["markets"]):
+        access.deny(f"研究 {research_id} v{version}（不涉及本地区市场）")
+    hidden = {"state": "hidden", "focus": None, "rounds": [], "run_id": None, "attempts": 0, "job": None}
+    return {**st, "markets": {m: (e if access.can(m) else {"market": m, "primary": e.get("primary"), **hidden}) for m, e in st["markets"].items()},
+            "transfer": {"label": "跨地区内容，只对总部开放", "statistical": None, "reason": "", "markets": {}, "threshold": None},
+            "overall": {**st["overall"], "reason": st["overall"]["reason"] if access.can(st["rule"]["primary"]) and "其他市场" not in st["overall"]["reason"]
+                        else "跨地区结论：详细原因涉及其他地区，只对总部开放"},
+            "cross_market": None, "explanation": None, "findings": [f for f in st.get("findings") or [] if any(f["text"].startswith(MARKET_ZH[m]) for m in access.markets())],
+            "region_view": access.role()["name"]}
+
+
 def study(research_id: str, version: int):
     """研究结论（Spec 第 14.5 节）：同一锁定版本在各市场的结果，按可证伪测试判定。"""
     spec = get_version(research_id, version)
@@ -751,6 +809,7 @@ def study(research_id: str, version: int):
 @app.post("/api/research/{research_id}/versions/{version}/explain")
 def explain_study(research_id: str, version: int):
     """AI 解释市场差异（BR-38）：基于平台事实清单，每句必须引用事实编号；存档供研究员确认。"""
+    access.require_cross_region("AI 解释市场差异")
     from factopia.research import explain as explaining
     st = study(research_id, version)
     diags = {m: (e.get("focus") or {}).get("diagnostics") for m, e in st["markets"].items()}
@@ -773,6 +832,7 @@ def _portfolio_mod():
 @app.get("/api/research/{research_id}/versions/{version}/portfolio")
 def get_portfolio(research_id: str, version: int):
     """已构建的授权组合（没有则 summary 为 null）与研究员记录的反馈决定。"""
+    access.require_cross_region("多市场授权组合")
     get_version(research_id, version)
     P = _portfolio_mod()
     return {"summary": P.load(research_id, version), "feedback": P.feedback(research_id, version)}
@@ -781,6 +841,7 @@ def get_portfolio(research_id: str, version: int):
 @app.post("/api/research/{research_id}/versions/{version}/portfolio")
 def build_portfolio(research_id: str, version: int):
     """按授权构建组合并回测（约数秒）：多币种、汇率拆分、Brinson 归因、反馈建议。"""
+    access.require_cross_region("多市场授权组合")
     P = _portfolio_mod()
     spec = get_version(research_id, version)
     try:
@@ -793,6 +854,7 @@ def build_portfolio(research_id: str, version: int):
 @app.get("/api/research/{research_id}/versions/{version}/portfolio/series")
 def portfolio_series(research_id: str, version: int):
     """净值序列（基础币种）与各市场权重，供组合台画图。"""
+    access.require_cross_region("多市场授权组合")
     get_version(research_id, version)
     p = _portfolio_mod().out_dir(research_id, version) / "daily.parquet"
     if not p.exists():
@@ -815,6 +877,7 @@ class FeedbackIn(BaseModel):
 @app.post("/api/research/{research_id}/versions/{version}/portfolio/feedback")
 def portfolio_feedback(research_id: str, version: int, body: FeedbackIn):
     """记录研究员对反馈建议的决定（BR-32）：保留 / 进一步研究 / 限定地区 / 重新校准 / 停用。"""
+    access.require_cross_region("组合反馈")
     P = _portfolio_mod()
     if P.load(research_id, version) is None:
         raise HTTPException(404, "尚未构建组合")
@@ -826,6 +889,7 @@ def portfolio_feedback(research_id: str, version: int, body: FeedbackIn):
 @app.get("/api/complement/{market}")
 def complement(market: str, keys: str | None = None):
     """互补组合（BR-28）：同一市场多个采纳信号的冗余与合成（前半段定权重、后半段评估）。"""
+    access.require(market, f"{market} 市场的互补组合")
     from factopia.portfolio import combine
     _check_markets([market])
     cands = combine.candidates(market, study)
@@ -839,6 +903,7 @@ REPORT_NAME = re.compile(r"^[a-z][a-z0-9_]{2,39}_v\d+_\d{14}\.html$")
 @app.post("/api/research/{research_id}/versions/{version}/report")
 def make_report(research_id: str, version: int):
     """生成研究报告（BR-40；RPT-01 至 03）：中文主报告 + 英文 / 法文证据附件，单文件 HTML，存档于 runtime/reports。"""
+    access.require_cross_region("研究报告")
     from factopia.portfolio import report
     P = _portfolio_mod()
     spec = get_version(research_id, version)
@@ -862,6 +927,7 @@ def make_report(research_id: str, version: int):
 
 @app.get("/api/research/{research_id}/versions/{version}/reports")
 def list_reports(research_id: str, version: int):
+    access.require_cross_region("研究报告")
     return [{"name": p.name, "url": f"/api/reports/{p.name}", "bytes": p.stat().st_size}
             for p in sorted(REPORTS.glob(f"{research_id}_v{version}_*.html"), reverse=True)] if REPORTS.exists() else []
 
@@ -869,6 +935,7 @@ def list_reports(research_id: str, version: int):
 @app.get("/api/reports/{name}")
 def get_report(name: str):
     from fastapi.responses import HTMLResponse
+    access.require_cross_region("研究报告")
     if not REPORT_NAME.match(name) or not (REPORTS / name).exists():
         raise HTTPException(404, "报告不存在")
     return HTMLResponse((REPORTS / name).read_text(encoding="utf-8"))
@@ -908,6 +975,7 @@ def _materials(research_id: str, version: int) -> dict:
 @app.get("/api/research/{research_id}/versions/{version}/submission-check")
 def submission_check(research_id: str, version: int):
     """WB-05：提交审批前的固定顺序检查。"""
+    access.require_cross_region("提交审批")
     A = _approval_mod()
     m = _materials(research_id, version)
     return {"ready": not A.preconditions(m), "missing": A.preconditions(m),
@@ -923,11 +991,18 @@ class SubmitIn(BaseModel):
 
 @app.get("/api/approvals")
 def list_approvals(research_id: str | None = None):
-    return {"items": _approval_mod().list_all(research_id), "roles": _approval_mod().roles()}
+    items = [x for x in _approval_mod().list_all(research_id) if any(access.can(m) for m in x["markets"])]   # 地区视角
+    return {"items": items, "roles": [r for r in _approval_mod().roles() if _role_allowed(r)]}
+
+
+def _role_allowed(role_name: str) -> bool:
+    """地区视角：地区角色只能以本地区的审批角色处理（如香港团队 → 本地研究员（香港）、香港合规）；其他角色只对总部开放。"""
+    return access.cross_region() or any(MARKET_ZH[m] in role_name for m in access.markets())
 
 
 @app.post("/api/approvals")
 def submit_approval(body: SubmitIn):
+    access.require_cross_region("提交审批")
     A = _approval_mod()
     open_ = [s for s in A.list_all(body.research_id) if s["version"] == body.version and s["status"] == "in_review"]
     if open_:
@@ -944,7 +1019,13 @@ def _approval_detail(sid: str) -> dict:
         s = A.load(sid)
     except A.ApprovalError as e:
         raise HTTPException(404, str(e))
+    if not any(access.can(m) for m in s["markets"]):
+        access.deny(f"审批提交 {sid}（不涉及本地区市场）")
     cur = A.current_fingerprint(sid, {"portfolio": _portfolio_mod().load(s["research_id"], s["version"])})
+    if not access.cross_region():              # 地区视角：其他地区的结果与多市场组合打码
+        mt = s["materials"]
+        s = {**s, "materials": {**mt, "results": {m: (v if access.can(m) else {"hidden": "其他地区，无权查看"}) for m, v in mt["results"].items()},
+                                "portfolio": {"hidden": "多市场组合，只对总部开放"}, "transfer": None}}
     return {"submission": s, "summary": A.summary(s), "events": A.events(sid), "chain": A.verify_chain(sid),
             "materials_current": cur == s["fingerprint"], "materials_note": None if cur == s["fingerprint"] else cur.split(":", 1)[-1] + "在提交后发生变化",
             "action_zh": A.ACTION_ZH}
@@ -968,6 +1049,8 @@ class ActIn(BaseModel):
 def approval_action(sid: str, body: ActIn):
     """审批操作：当前角色才能处理当前步骤；例外须写理由；运营完成部署核对时校验材料指纹与部署范围。"""
     A = _approval_mod()
+    if not _role_allowed(body.role):
+        access.deny(f"以「{body.role}」身份审批（不是本地区的审批角色）")
     by = f"模拟用户（{body.role}）"
     try:
         s = A.load(sid)
@@ -982,6 +1065,7 @@ def approval_action(sid: str, body: ActIn):
 def approval_evidence(sid: str):
     """审计证据包（zip）：提交材料、全部事件（哈希链）、报告、规则包、因子代码、文件清单与说明。"""
     from fastapi.responses import Response
+    access.require_cross_region("审计证据包")
     A = _approval_mod()
     try:
         name, data = A.evidence_zip(sid)
@@ -1001,7 +1085,7 @@ def _signals_mod():
 def list_signals():
     S = _signals_mod()
     jobs = [j for j in store.list_jobs() if j.get("kind") == "monitor"]
-    items = S.catalog()
+    items = [e for e in S.catalog() if access.can(e["market"])]                    # 地区视角
     for e in items:
         j = next((x for x in reversed(jobs) if x.get("target_signal") == e["signal_id"]), None)
         e["monitor_job"] = _job_public(j) if j else None
@@ -1010,6 +1094,7 @@ def list_signals():
 
 @app.get("/api/signals/{signal_id}")
 def get_signal(signal_id: str):
+    access.require(signal_id.rsplit(".", 1)[-1], f"信号 {signal_id}")
     S = _signals_mod()
     try:
         e = S.entry(signal_id)
@@ -1022,6 +1107,7 @@ def get_signal(signal_id: str):
 @app.post("/api/signals/{signal_id}/monitor")
 def start_monitor(signal_id: str):
     """排入监控任务（后台运行器执行，约 1–3 分钟）。只有获批版本（生产中或已暂停）进入监控层（BR-41）。"""
+    access.require(signal_id.rsplit(".", 1)[-1], f"信号 {signal_id}")
     S = _signals_mod()
     try:
         e = S.entry(signal_id)
@@ -1044,6 +1130,7 @@ class SignalActIn(BaseModel):
 @app.post("/api/signals/{signal_id}/actions")
 def signal_action(signal_id: str, body: SignalActIn):
     """暂停 / 恢复 / 停用一个市场版本（BR-24：只影响该市场，其他市场的版本不变）。"""
+    access.require(signal_id.rsplit(".", 1)[-1], f"变更信号 {signal_id} 的状态")
     S = _signals_mod()
     try:
         return S.act(signal_id, body.action, body.role, body.note)
@@ -1060,7 +1147,7 @@ def management_overview():
     runs = [_json(p) for p in (RESULTS / "runs").glob("*/run.json")]
     research = [j for j in jobs if j.get("kind") not in ("validate", "monitor")]
     regions = {}
-    for m in MARKETS:
+    for m in access.markets():                  # 地区视角
         mr = [r for r in runs if r["market"] == m]
         mj = [j for j in research if j["market"] == m]
         regions[m] = {
@@ -1071,7 +1158,7 @@ def management_overview():
             "jobs_failed": sum(1 for j in mj if j["state"] == "failed"), "jobs_queued": sum(1 for j in mj if j["state"] in ("queued", "running")),
             "validations": sum(1 for j in jobs if j.get("kind") == "validate" and j["market"] == m and j["state"] == "done"),
         }
-    subs = A.list_all()
+    subs = [x for x in A.list_all() if any(access.can(m) for m in x["markets"])]
     # 审批瓶颈：各角色从上一步完成到本步处理的平均用时；审批中的提交卡在哪一步
     role_wait: dict[str, list[float]] = {}
     for s in subs:
@@ -1084,8 +1171,8 @@ def management_overview():
                         key=lambda x: -x["avg_hours"])
     pending = [{"id": s["id"], "role": s["current_role"], "waiting_hours": s["waiting_hours"], "title": s["title"]}
                for s in subs if s["status"] == "in_review"]
-    cat = S.catalog()
-    health = {m: {"active": 0, "paused": 0, "retired": 0, "alerts": 0, "pause_suggested": 0, "not_production": 0} for m in MARKETS}
+    cat = [e for e in S.catalog() if access.can(e["market"])]
+    health = {m: {"active": 0, "paused": 0, "retired": 0, "alerts": 0, "pause_suggested": 0, "not_production": 0} for m in access.markets()}
     for e in cat:
         h = health[e["market"]]
         if e["state"] in ("active", "paused", "retired") and not e.get("simulated"):
@@ -1149,7 +1236,7 @@ def _criteria() -> list[dict]:
     chain_ok = all(A.verify_chain(x["id"])["ok"] for x in subs) if subs else False
     out.append({"no": 6, "text": "候选信号完成跨地区审批，所有修改、意见和例外进入审计轨迹", "ok": bool(appr) and chain_ok,
                 "evidence": f"完成审批 {len(appr)} 次；全部提交的哈希链校验{'通过' if chain_ok else '未通过'}；审计证据包可导出（审批台）", "link": "/approvals"})
-    cat = S.catalog()
+    cat = [e for e in S.catalog() if access.can(e["market"])]
     by_res: dict = {}
     for e in cat:
         if e["monitor"]:
@@ -1179,6 +1266,7 @@ def _versions_cycle() -> list[dict]:
 
 @app.get("/api/acceptance")
 def acceptance():
+    access.require_cross_region("验收（成功标准与红队测试）")
     from factopia import acceptance as AC
     return {"criteria": _criteria(), "targets": AC.targets(_versions_cycle()), "redteam": AC.load_redteam()}
 
@@ -1186,6 +1274,7 @@ def acceptance():
 @app.post("/api/acceptance/redteam")
 def run_redteam():
     """红队测试（约数秒）：审批与目录用例在临时目录中进行，不影响真实记录。"""
+    access.require_cross_region("验收（成功标准与红队测试）")
     from factopia import acceptance as AC
     from factopia import approval as A
     sample_id = next((x["research_id"] for x in A.list_all() if x["status"] in ("approved", "approved_restricted")), None)
@@ -1204,6 +1293,42 @@ def run_redteam():
             r2 = True
         return r1 and r2, f"报告名校验拒绝 {len(bad)} 个；提交编号校验{'拒绝' if r2 else '未拒绝'}"
 
+    def _as(role: str, fn) -> str:
+        """以某个地区角色调用接口：返回 denied / allowed（不写留痕以外的任何内容）。"""
+        tok = access.set_role(role)
+        try:
+            fn()
+            return "allowed"
+        except access.Denied:
+            return "denied"
+        except HTTPException as e:
+            return f"http {e.status_code}"
+        finally:
+            access.reset(tok)
+
+    def region_isolated():
+        fr_sig = next((e["signal_id"] for e in _signals_mod().catalog() if e["market"] == "fr"), None)
+        fr_run = next((p.parent.name for p in sorted((RESULTS / "runs").glob("fr_*/run.json"))), None)
+        r1 = _as("hk", lambda: get_signal(fr_sig)) if fr_sig else "无法国信号"
+        r2 = _as("hk", lambda: run_detail(fr_run)) if fr_run else "无法国运行"
+        r3 = _as("hk", lambda: list_signals())
+        tok = access.set_role("hk")
+        try:
+            seen = sorted({e["market"] for e in list_signals()["items"]})
+        finally:
+            access.reset(tok)
+        ok = r1 == "denied" and r2 == "denied" and r3 == "allowed" and seen in ([], ["hk"])
+        return ok, f"法国信号：{r1}；法国运行：{r2}；香港团队信号列表只含 {seen or '无'}"
+
+    def cross_region_guarded():
+        sid = next((x["id"] for x in _approval_mod().list_all()), None)
+        r1 = _as("uk", lambda: get_portfolio(sample_id, ver))
+        r2 = _as("uk", lambda: approval_evidence(sid)) if sid else "无提交"
+        r3 = _as("uk", lambda: approval_action(sid, ActIn(role="法国合规", action="approve", note="红队"))) if sid else "无提交"
+        r4 = _as("hq", lambda: get_portfolio(sample_id, ver))
+        ok = r1 == "denied" and r2 == "denied" and r3 == "denied" and r4 == "allowed"
+        return ok, f"伦敦团队：多市场组合 {r1}、证据包 {r2}、以法国合规审批 {r3}；总部：多市场组合 {r4}"
+
     def simulated_labelled():
         res = []
         real = set().union(*[set(rule_ctx.universe([m])[m]) for m in MARKETS])
@@ -1221,7 +1346,8 @@ def run_redteam():
 
     ctx = {"sample_spec": spec, "study": study(sample_id, ver), "materials": _materials(sample_id, ver),
            "prepare_lock": lambda sp: _prepare_spec(sp, lock=True), "can_monitor": lambda e: e["state"] in ("active", "paused"),
-           "path_traversal": path_traversal, "simulated_labelled": simulated_labelled}
+           "path_traversal": path_traversal, "simulated_labelled": simulated_labelled,
+           "region_isolated": region_isolated, "cross_region_guarded": cross_region_guarded}
     return AC.redteam(ctx)
 
 
@@ -1235,7 +1361,9 @@ class RunIn(BaseModel):
 def start_runs(research_id: str, version: int, body: RunIn):
     """在所选市场分别运行同一个锁定版本（RS-09）；任务按顺序排队，由后台运行器执行。"""
     spec = get_version(research_id, version)
-    markets = body.markets or spec["markets"]
+    markets = body.markets or [m for m in spec["markets"] if access.can(m)]
+    for m in markets:
+        access.require(m, f"在 {m} 市场发起运行")
     if any(m not in spec["markets"] for m in markets):
         raise HTTPException(422, f"版本 v{version} 只包含市场 {spec['markets']}")
     kind = "text" if spec.get("signal_source") == "text" else None     # 文本信号研究（第 14.17 节）
@@ -1244,7 +1372,7 @@ def start_runs(research_id: str, version: int, body: RunIn):
 
 @app.get("/api/jobs")
 def list_jobs(batch: str | None = None):
-    return [_job_public(j) for j in store.list_jobs() if batch is None or j["batch_id"] == batch]
+    return [_job_public(j) for j in store.list_jobs() if (batch is None or j["batch_id"] == batch) and access.can(j["market"])]
 
 
 JOB_ID = re.compile(r"^\d{14}_[0-9a-f]{4}_\d+_[a-z]{2}$")
@@ -1254,9 +1382,11 @@ def _load_job(job_id: str) -> dict:
     if not JOB_ID.match(job_id):
         raise HTTPException(404, "任务不存在")
     try:
-        return store.load_job(job_id)
+        job = store.load_job(job_id)
     except FileNotFoundError:
         raise HTTPException(404, "任务不存在")
+    access.require(job["market"], f"任务 {job_id}")
+    return job
 
 
 @app.get("/api/jobs/{job_id}")
@@ -1321,6 +1451,7 @@ def market_context(market: str, lang: str = Query("zh", pattern="^(zh|en)$")):
     """团队审核过的市场介绍（configs/rdagent/context）。"""
     if market not in MARKETS:
         raise HTTPException(404, "市场不存在")
+    access.require(market, f"{market} 市场介绍")
     path = CONFIGS / "rdagent" / "context" / f"{market}.{lang}.md"
     return {"market": market, "lang": lang, "markdown": path.read_text(encoding="utf-8")}
 
@@ -1334,7 +1465,13 @@ from factopia.text import search as tsearch            # noqa: E402
 def _text_ds(dataset: str) -> Path:
     if dataset not in tcommon.DATASETS:
         raise HTTPException(404, f"数据集不存在：{dataset}")
+    access.require(tcommon.DATASETS[dataset]["market"], f"公告数据集 {dataset}")
     return tcommon.ds_dir(dataset)
+
+
+def _text_allowed() -> list[str]:
+    """地区视角：当前角色可见的公告数据集。"""
+    return [ds for ds, cfg in tcommon.DATASETS.items() if access.can(cfg["market"])]
 
 
 @app.get("/api/text/overview")
@@ -1342,6 +1479,8 @@ def text_overview():
     """各数据集（法国真实 / 香港、英国模拟）的规模、来源、许可、检验结果与三市场对比。"""
     out = []
     for ds, cfg in tcommon.DATASETS.items():
+        if not access.can(cfg["market"]):                      # 地区视角
+            continue
         d = tcommon.ds_dir(ds)
         s = tcommon.read_json(d / "summary.json") or {}
         out.append({"dataset": ds, "market": cfg["market"], "market_zh": MARKET_ZH[cfg["market"]],
@@ -1353,9 +1492,14 @@ def text_overview():
     g = tcommon.glossary()
     concepts = [{"concept": c, "zh": v["zh_name"], "en": v["en_name"], "fr": v["fr_name"], "terms": v["terms"]}
                 for c, v in g["concepts"].items()]
-    return {"datasets": out, "compare": tcommon.read_json(tcommon.TEXT / "compare.json"),
-            "glossary_version": g["version"], "concepts": concepts,
-            "review_counts": treview.queue(limit=0)["counts"]}
+    cmp = tcommon.read_json(tcommon.TEXT / "compare.json")
+    if cmp and not access.cross_region():
+        cmp = {**cmp, "markets": [r for r in cmp["markets"] if access.can(r["market"])]}
+    counts = {"pending": 0, "done": 0}
+    for ds in _text_allowed():
+        for k, v in treview.queue(ds, limit=0)["counts"].items():
+            counts[k] += v
+    return {"datasets": out, "compare": cmp, "glossary_version": g["version"], "concepts": concepts, "review_counts": counts}
 
 
 @app.get("/api/text/{dataset}/filings")
@@ -1402,7 +1546,7 @@ def text_search(q: str = "", dataset: list[str] | None = Query(None), concept: l
                 limit: int = Query(50, le=200)):
     for ds in dataset or []:
         _text_ds(ds)
-    return tsearch.search(q, dataset, concept, limit)
+    return tsearch.search(q, dataset or _text_allowed(), concept, limit)
 
 
 @app.get("/api/text/review")
@@ -1410,6 +1554,10 @@ def text_review_queue(status: str = Query("pending", pattern="^(pending|done|all
                       limit: int = Query(100, le=500)):
     if dataset:
         _text_ds(dataset)
+    elif not access.cross_region():                           # 地区视角：只看本地区数据集的复核队列
+        res = [treview.queue(ds, status, limit) for ds in _text_allowed()]
+        return {"items": [x for r in res for x in r["items"]][:limit], "actions": treview.ACTIONS,
+                "counts": {k: sum(r["counts"][k] for r in res) for k in ("pending", "done")}}
     return treview.queue(dataset, status, limit)
 
 
@@ -1424,7 +1572,7 @@ def text_summary(body: SummaryIn):
     """对检索结果做 AI 摘要；每句结论带引用编号，无引用的句子被丢弃（BR-10）。"""
     for ds in body.dataset or []:
         _text_ds(ds)
-    hits = tsearch.search(body.q, body.dataset, body.concept, 12)["results"]
+    hits = tsearch.search(body.q, body.dataset or _text_allowed(), body.concept, 12)["results"]
     try:
         return tsearch.summarize(body.q, hits)
     except drafting.DraftError as e:
@@ -1490,7 +1638,9 @@ def refdata_securities(market: str | None = Query(None, pattern="^(hk|uk|fr)$"))
     sec = _ref_parquet("securities")
     rel = _ref_parquet("relations")
     if market:
+        access.require(market, f"{market} 市场的证券主数据")
         sec = sec[sec["market"] == market]
+    sec = sec[sec["market"].isin(access.markets())]           # 地区视角
     multi = sec.groupby("issuer_id")["market"].nunique()
     sec = sec.assign(multi_market=sec["issuer_id"].map(multi).fillna(1) > 1)
     rel = rel[rel["issuer_id"].isin(sec["issuer_id"])]
@@ -1500,6 +1650,8 @@ def refdata_securities(market: str | None = Query(None, pattern="^(hk|uk|fr)$"))
 @app.get("/api/refdata/actions")
 def refdata_actions(symbol: str | None = None, type: str | None = None, limit: int = Query(500, le=5000)):
     df = _ref_parquet("corporate_actions")
+    if "market" in df.columns:
+        df = df[df["market"].isin(access.markets())]           # 地区视角
     if symbol:
         df = df[df["symbol"] == symbol]
     if type:

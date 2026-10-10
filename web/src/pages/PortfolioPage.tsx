@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Badge, ErrorBox, Loading, Notice, Panel, Seg, Stat } from "../components/ui";
 import EChart from "../components/EChart";
 import VersionPicker, { useVersionPick } from "../components/VersionPicker";
-import { api, MARKETS, type FeedbackDecision, type Market, type PerfStats, type PortfolioSeries, type PortfolioSummary, type ReportRef } from "../api";
+import { api, visibleMarkets, type FeedbackDecision, type Market, type PerfStats, type PortfolioSeries, type PortfolioSummary, type ReportRef } from "../api";
 import { cssVar, fix, MARKET_LABEL, marketColor, pct, signed, useAsync, useThemeVersion } from "../lib";
 
 // 组合台（Spec 第 14.13 节；BR-03、14、32、40）：授权组合、多币种回测、汇率拆分、Brinson 归因、反馈闭环、研究报告
@@ -215,7 +215,7 @@ function Detail({ id, version }: { id: string; version: number }) {
 
 // 互补组合（第 14.19 节；BR-28）：同一市场多个采纳信号的冗余与合成，前半段定权重、后半段（样本外）评估
 function ComplementPanel() {
-  const [m, setM] = useState<Market>("hk");
+  const [m, setM] = useState<Market>(visibleMarkets()[0] ?? "hk");
   const [keys, setKeys] = useState<string[] | null>(null);
   const { data, error, loading } = useAsync(() => api.complement(m, keys ?? undefined), [m, (keys ?? []).join(",")]);
   const st = (x?: { rank_ic: number | null; ir: number | null; t: number | null }) =>
@@ -228,7 +228,7 @@ function ComplementPanel() {
   return (
     <Panel eyebrow="同一市场多个采纳信号 · 前半段定权重、后半段评估" title="互补组合">
       <div className="flex flex-wrap items-center gap-3 mb-3">
-        <Seg label="市场" value={m} options={MARKETS.map((x) => ({ value: x, label: MARKET_LABEL[x] }))} onChange={(x) => { setM(x); setKeys(null); }} />
+        <Seg label="市场" value={m} options={visibleMarkets().map((x) => ({ value: x, label: MARKET_LABEL[x] }))} onChange={(x) => { setM(x); setKeys(null); }} />
         {data?.price_source?.simulated && <Badge tone="warn">模拟数据，仅用于流程演示</Badge>}
       </div>
       {loading ? <Loading what="互补组合" /> : error || !data ? <ErrorBox error={error ?? "无数据"} /> : (

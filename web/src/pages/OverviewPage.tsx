@@ -23,7 +23,7 @@ export default function OverviewPage() {
         <span className="ml-auto text-xs text-faint">生成于 {data.generated_at.slice(0, 16).replace("T", " ")} UTC</span>
       </div>
       <div className="grid gap-5 lg:grid-cols-3">
-        {MARKETS.map((m) => {
+        {MARKETS.filter((m) => data.regions[m]).map((m) => {
           const r = data.regions[m], h = data.signal_health[m];
           return (
             <Panel key={m} eyebrow={m.toUpperCase()} title={MARKET_LABEL[m]}>

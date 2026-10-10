@@ -3,6 +3,7 @@ import { NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom"
 import { ResearchDraftProvider } from "./draft";
 import ResearchPage from "./pages/ResearchPage";
 import AuditPage from "./pages/AuditPage";
+import { RegionBanner, RegionSwitch } from "./components/RegionSwitch";
 import RunnerBanner from "./components/RunnerBanner";
 
 /** 按需加载页面。重新部署后旧页面引用的文件名已不存在：加载失败时自动刷新一次，取得新版本。 */
@@ -143,7 +144,7 @@ export default function App() {
                   key={d.to}
                   to={d.to}
                   className={({ isActive }) =>
-                    `flex items-center gap-2 h-9 px-2 rounded border transition-colors whitespace-nowrap ${
+                    `flex items-center gap-2 h-9 px-1.5 rounded border transition-colors whitespace-nowrap ${
                       isActive ? "border-accent/60 bg-accent/10 text-text" : "border-transparent text-muted hover:text-text"
                     }`}
                 >
@@ -152,10 +153,11 @@ export default function App() {
                 </NavLink>
               ))}
             </nav>
-            <div className="ml-auto"><ThemeToggle /></div>
+            <div className="ml-auto flex items-center gap-2"><RegionSwitch /><ThemeToggle /></div>
           </div>
         </header>
         <main className="flex-1 mx-auto w-full max-w-[1680px] px-4 md:px-6 py-6">
+          <RegionBanner />
           <RunnerBanner />
           <Pages />
         </main>

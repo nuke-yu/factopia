@@ -218,7 +218,7 @@ export type Explanation = { sentences: { text: string; cites: string[] }[]; drop
   local_adjustments: string[]; facts: { id: string; market: Market; key: string; text: string }[];
   model: string; prompt_version: string; created_at: string; note: string };
 export type StudyMarket = {
-  market: Market; primary: boolean; state: JobState | "none" | "incomplete"; run_id: string | null; attempts: number; job: Job | null;
+  market: Market; primary: boolean; state: JobState | "none" | "incomplete" | "hidden"; run_id: string | null; attempts: number; job: Job | null;
   cost_usd?: number; duration_s?: number | null; baseline?: Metrics | null;
   kind?: "rdagent" | "text"; insufficient?: string | null; score_direction?: number;
   price_source?: { dataset: string | null; simulated: boolean; label: string; benchmark: string } | null;
@@ -483,6 +483,23 @@ export type Acceptance = {
   };
 };
 
+// ---------------------------------------------------------------- 地区视角（第 14.20 节，演示用，不是登录鉴权）
+export type AccessRole = { code: string; name: string; markets: Market[]; cross_region: boolean };
+export type AccessInfo = { current: AccessRole; roles: AccessRole[]; version: string; status: string; scope: string[];
+  denied_recent: { role: string; role_name: string; denied: string; market: string | null; at: string; hash: string }[] };
+export function setRegion(role: AccessRole) {
+  document.cookie = `factopia_region=${role.code}; path=/; SameSite=Lax`;
+  try { localStorage.setItem("factopia-region-markets", JSON.stringify(role.markets)); } catch { /* 浏览器禁用存储时按全部市场显示 */ }
+}
+/** 当前地区角色可见的市场（页面布局用；数据过滤以后端为准）。 */
+export function visibleMarkets(): Market[] {
+  try {
+    const v = JSON.parse(localStorage.getItem("factopia-region-markets") ?? "null");
+    if (Array.isArray(v) && v.length && document.cookie.includes("factopia_region=")) return MARKETS.filter((m) => v.includes(m));
+  } catch { /* 忽略 */ }
+  return [...MARKETS];
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`/api${path}`, init);
   if (!res.ok) {
@@ -521,6 +538,7 @@ export type Complement = {
 export type InternalEvidence = { kind: string; kind_zh: string; id: string; title: string; score: number; prompt: string; ref: string };
 
 export const api = {
+  access: () => get<AccessInfo>("/access"),
   library: () => get<Library>("/library"),
   complement: (m: Market, keys?: string[]) => get<Complement>(`/complement/${m}${keys && keys.length ? `?keys=${keys.join(",")}` : ""}`),
   knowledge: (q: string, llm = true) => get<KnowledgeSearch>(`/knowledge/search?q=${encodeURIComponent(q)}&llm=${llm}`),

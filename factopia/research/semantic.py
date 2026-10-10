@@ -46,9 +46,12 @@ def corpus() -> list[dict]:
         docs.append({"kind": "factor", "id": f["id"], "title": f"{f['name']}（{library.SOURCE_ZH[f['source']]}）",
                      "text": " ".join(str(x) for x in (f["name"], f.get("group"), f.get("description"), f.get("formulation")) if x),
                      "ref": f["id"], "meta": {"source": f["source"], "status": f["status"], "label": f.get("label")}})
+    from factopia import access
     for rid in store.research_ids():
         for v in store.versions(rid):
             s = store.load_version(rid, v)
+            if not any(access.can(m) for m in s.get("markets") or []):      # 地区视角
+                continue
             docs.append({"kind": "research", "id": f"{rid}.v{v}", "title": f"{s.get('title_zh') or rid} v{v}",
                          "text": " ".join(str(x) for x in (s.get("title_zh"), s.get("hypothesis_original"), s.get("hypothesis"),
                                                            s.get("hypothesis_zh"), (s.get("rationale") or {}).get("note"),
@@ -56,7 +59,7 @@ def corpus() -> list[dict]:
                          "ref": f"{rid}/{v}", "meta": {"markets": s.get("markets"), "signal_source": s.get("signal_source", "price_volume"),
                                                        "locked_at": s.get("locked_at")}})
             exp = store.RESEARCH_DIR / rid / f"explain_v{v}.json"
-            if exp.exists():
+            if exp.exists() and access.cross_region():                    # AI 解释涉及三个地区，只对总部检索
                 e = json.loads(exp.read_text(encoding="utf-8"))
                 sents = [x.get("text") or x.get("sentence") or "" for x in (e.get("sentences") or e.get("kept") or [])]
                 if sents:
@@ -72,7 +75,7 @@ def corpus() -> list[dict]:
     from factopia.text.common import DATASETS, ds_dir
     for ds, cfg in DATASETS.items():
         p = ds_dir(ds) / "aligned.parquet"
-        if cfg["simulated"] or not p.exists():
+        if cfg["simulated"] or not p.exists() or not access.can(cfg["market"]):
             continue
         meta = pd.read_parquet(p, columns=["id", "company", "title", "language", "published_at", "available_at"])
         for r in meta.to_dict("records"):
