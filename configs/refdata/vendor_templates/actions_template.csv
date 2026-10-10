@@ -1,0 +1,4 @@
+symbol,date,type,value,detail
+XXXX.L,2020-05-11,rights_issue,0.25,每 4 股配 1 股（value = 配股比例）
+YYYY.L,2019-06-21,delisting,,被收购后退市
+ZZZZ.PA,2018-03-01,name_change,,旧名称 → 新名称

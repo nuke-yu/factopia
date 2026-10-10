@@ -338,8 +338,10 @@ export type RefSummary = {
     relations: Record<string, number>; multi_market_issuers: number; primary_unresolved: number; built_at: string } | null;
   actions: { total: number; by_type: Record<string, number>; symbols_with_actions: number;
     adjustment_checks: { symbol: string; date: string; ratio: number; adjusted_return: number; raw_jump: number; ok: boolean }[];
-    adjustment_failures: unknown[]; not_covered: string[]; built_at: string } | null;
+    adjustment_failures: unknown[]; not_covered: string[]; vendor_rows?: number; built_at: string } | null;
   pit: PitStatus | null;
+  vendor_imports?: { kind: "membership" | "actions"; vendor: string; market?: string; rows: number; at: string }[];
+  vendor_templates?: string;
 };
 export type DictField = { name: string; zh: string; unit: string; source: string; adjustment: string; available: string; note?: string };
 export type RefDictionary = {

@@ -105,7 +105,7 @@ def check_adjustment(market: str, splits: pd.DataFrame) -> list[dict]:
     out = []
     first = px.groupby("symbol")["date"].min()
     for r in splits.to_dict("records"):
-        if r["value"] in (0, 1) or r["symbol"] not in first.index or pd.Timestamp(r["date"]) <= pd.Timestamp(first[r["symbol"]]):
+        if pd.isna(r["value"]) or r["value"] in (0, 1) or r["symbol"] not in first.index or pd.Timestamp(r["date"]) <= pd.Timestamp(first[r["symbol"]]):
             continue                                    # 行情开始之前的拆股：无法检查
         g = px[(px["symbol"] == r["symbol"]) & (px["date"] >= r["date"])].head(1)
         if g.empty or pd.isna(g["ret"].iloc[0]):
@@ -137,9 +137,18 @@ def build(symbols: list[str] | None = None) -> dict:
     for m in sorted(set(uni["market"])):
         rows += [{**r, "market": m} for r in suspensions(m) if r["symbol"] in mk]
     df = pd.DataFrame(rows, columns=["symbol", "market", "date", "type", "value", "detail"])
-    df["type_zh"] = df["type"].map(TYPE_ZH)
     df["source"] = df["type"].map({"dividend": "Yahoo Finance", "split": "Yahoo Finance", "ticker_change": "AMF",
                                    "suspension": "标准化行情（推断）"})
+    # 数据商公司行动（第 14.21 节）：合并、配股、退市、名称变更等；与免费来源同类型同日期的记录以数据商为准
+    from factopia.refdata import vendor
+    va = vendor.vendor_actions()
+    if va is not None and not va.empty:
+        if symbols:
+            va = va[va["symbol"].isin(symbols)]
+        key = set(zip(va["symbol"], va["date"], va["type"]))
+        df = df[[k not in key for k in zip(df["symbol"], df["date"], df["type"])]]
+        df = pd.concat([df, va[["symbol", "market", "date", "type", "value", "detail", "source"]]], ignore_index=True)
+    df["type_zh"] = df["type"].map(lambda t: TYPE_ZH.get(t) or vendor.ACTION_TYPES.get(t, t))
     df = df.sort_values(["symbol", "date"]).reset_index(drop=True)
     REF.mkdir(parents=True, exist_ok=True)
     df.to_parquet(REF / "corporate_actions.parquet", index=False)
@@ -149,6 +158,8 @@ def build(symbols: list[str] | None = None) -> dict:
     summary = {"built_at": now(), "total": len(df), "by_type": df["type"].value_counts().to_dict(),
                "symbols_with_actions": int(df["symbol"].nunique()), "adjustment_checks": checks,
                "adjustment_failures": [c for c in checks if not c["ok"]],
-               "not_covered": ["合并", "配股", "退市", "名称变更"]}
+               "vendor_rows": int((~df["source"].isin(["Yahoo Finance", "AMF", "标准化行情（推断）"])).sum()),
+               "not_covered": [zh for t, zh in {"merger": "合并", "rights_issue": "配股", "delisting": "退市",
+                                                "name_change": "名称变更"}.items() if t not in set(df["type"])]}
     (REF / "actions_summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=1))
     return summary

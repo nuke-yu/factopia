@@ -171,7 +171,11 @@ function ActionsTab() {
           <Stat label="疑似停牌" value={a.by_type.suspension ?? 0} sub="连续 ≥3 个交易日无成交" />
         </div>
       )}
-      {a && <Notice tone="warn" title="尚未覆盖">{a.not_covered.join("、")}：免费数据源没有可靠记录，需数据商；当前股票池为现有成分股，没有退市样本。</Notice>}
+      {a && a.not_covered.length > 0 && <Notice tone="warn" title="尚未覆盖">{a.not_covered.join("、")}：免费数据源没有可靠记录，需数据商。
+        导入接口已就绪：按 {sum.data?.vendor_templates ?? "configs/refdata/vendor_templates/README.md"} 的格式导出后运行 python -m factopia.refdata import-actions / import-membership。</Notice>}
+      {(sum.data?.vendor_imports ?? []).length > 0 && <Notice tone="accent" title="数据商导入记录">
+        {(sum.data?.vendor_imports ?? []).slice(-5).reverse().map((v, i) => <div key={i}>{v.at.slice(0, 10)} · {v.kind === "membership" ? `历史成分股（${v.market}）` : "公司行动"} · {v.vendor} · {v.rows} 行</div>)}
+      </Notice>}
       <div className="flex flex-wrap gap-3 items-center">
         <Seg label="类型" value={type} onChange={setType} options={[{ value: "", label: "全部" }, { value: "dividend", label: "分红" },
           { value: "split", label: "拆股" }, { value: "ticker_change", label: "代码变更" }, { value: "suspension", label: "疑似停牌" }]} />

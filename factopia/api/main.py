@@ -1629,8 +1629,11 @@ def refdata_summary():
         p = REFDATA / name
         return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
     pit = RESULTS / "pit_status.json"
+    vi = REFDATA / "vendor_imports.jsonl"         # 数据商导入记录（第 14.21 节）
     return {"master": rd("master_summary.json"), "actions": rd("actions_summary.json"),
-            "pit": json.loads(pit.read_text(encoding="utf-8")) if pit.exists() else None}
+            "pit": json.loads(pit.read_text(encoding="utf-8")) if pit.exists() else None,
+            "vendor_imports": [json.loads(x) for x in vi.read_text(encoding="utf-8").splitlines() if x.strip()] if vi.exists() else [],
+            "vendor_templates": "configs/refdata/vendor_templates/README.md"}
 
 
 @app.get("/api/refdata/securities")

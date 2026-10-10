@@ -57,6 +57,10 @@ def main() -> None:
     for market, cfg in MARKETS.items():
         universe = pd.read_csv(UNIVERSE_DIR / f"{market}.csv")
         symbols = universe["symbol"].tolist()
+        # 导入数据商历史成分股后（第 14.21 节），同时下载曾经的成分股（已退市股票以数据源有记录为限）
+        mpath = UNIVERSE_DIR / "membership" / f"{market}.csv"
+        if mpath.exists():
+            symbols += sorted(set(pd.read_csv(mpath)["symbol"]) - set(symbols))
         out = RAW_DIR / market
         out.mkdir(parents=True, exist_ok=True)
 
