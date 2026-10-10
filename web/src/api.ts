@@ -456,6 +456,23 @@ export type Management = {
     handled: { action: string; role: string; at: string; note: string }[] }[];
   generated_at: string };
 
+// 验收（Spec 第 14.16 节；BR-52、53）
+export type Criterion = { no: number; text: string; ok: boolean; evidence: string; link: string };
+export type RedTeam = { ran_at: string; passed: number; total: number; results: { id: string; title: string; attack: string; passed: boolean; evidence: string }[] };
+export type Acceptance = {
+  criteria: Criterion[]; redteam: RedTeam | null;
+  targets: {
+    computed_at: string;
+    cycle: { baseline_hours: number; baseline_stages: Record<string, number>; platform_hours: number | null; reduction: number | null; target: number[];
+      baseline_status: string; versions: { research_id: string; version: number; stages: Record<string, number | null>; total_hours: number | null; complete: boolean }[] };
+    repeated_work: { manual_repeated_hours: number; platform_repeated_hours: number; reduction: number | null; target: number[]; baseline_status: string; note: string;
+      tasks: { task: string; hours_each: number; manual_times: number; platform_human_times: number }[] };
+    citation: { shown: number; cited: number; coverage: number | null; model_dropped: number; model_compliance: number | null; target: number; scope: string };
+    reproducibility: { rate: number | null; target: number; criteria: string;
+      items: { signal: string; ok: boolean; factor_match?: number; range_width?: number | null; reason: string | null }[] };
+  };
+};
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`/api${path}`, init);
   if (!res.ok) {
@@ -472,6 +489,8 @@ const post = <T,>(path: string, body: unknown) =>
 export const api = {
   pit: () => get<PitStatus>("/pit"),
   rulePacks: () => get<RulePacks>("/rules/packs"),
+  acceptance: () => get<Acceptance>("/acceptance"),
+  redteam: () => post<RedTeam>("/acceptance/redteam", {}),
   signals: () => get<{ items: SignalEntry[]; state_zh: Record<string, string> }>("/signals"),
   signal: (sid: string) => get<{ entry: SignalEntry; monitor: MonitorResult | null; job: Job | null }>(`/signals/${sid}`),
   startMonitor: (sid: string) => post<Job>(`/signals/${sid}/monitor`, {}),

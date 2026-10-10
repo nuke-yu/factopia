@@ -124,6 +124,7 @@ $DC run --rm app python -m factopia.export.alpha158
 | `factopia/portfolio/` | 授权组合与研究报告：月度只做多组合（约束逐条注明来源）、多币种回测与汇率拆分、Brinson 归因、反馈闭环；中文主报告 + 英文 / 法文证据附件（Spec 第 14.13 节）；页面「组合台」 |
 | `factopia/approval/` | 跨地区审批与审计：提交前置检查、冻结提交材料与指纹、六类角色按序审批、例外处理、获批锁定、哈希链留痕、审计证据包（Spec 第 14.14 节）；页面「审批台」 |
 | `factopia/signals/` | 信号目录与上线后监控：按研究版本 × 市场分版本、标签、逐市场暂停 / 恢复 / 停用；冻结因子代码重算上线期信号，11 类监控指标与预警（Spec 第 14.15 节）；页面「信号目录」「总览」 |
+| `factopia/acceptance/` | 验收：8 条成功标准自动核对、4 个量化目标度量（人工基线 `configs/acceptance/baseline.yaml`）、17 项红队测试（Spec 第 14.16 节）；页面「验收」 |
 | `configs/refdata/`、`configs/universe/membership/` | 市场规则、数据字典、人工确认；成分股起止日期（目前为当前名单） |
 | `configs/mandates/` | 模拟客户授权（不含真实客户信息） |
 | `factopia/api/` | 后端接口 |

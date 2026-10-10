@@ -141,13 +141,13 @@ def entry(signal_id: str) -> dict:
 
 
 def act(signal_id: str, action: str, role: str, note: str) -> dict:
-    e = entry(signal_id)
+    if role not in ("投资组合经理", "运营 / 技术负责人", "模型风险"):
+        raise CatalogError("只有投资组合经理、运营 / 技术负责人、模型风险可以变更信号状态")
     if action not in ACTION_ZH:
         raise CatalogError("操作无效")
     if not note.strip():
         raise CatalogError("须写明原因")
-    if role not in ("投资组合经理", "运营 / 技术负责人", "模型风险"):
-        raise CatalogError("只有投资组合经理、运营 / 技术负责人、模型风险可以变更信号状态")
+    e = entry(signal_id)
     allowed = {"pause": ("active",), "resume": ("paused",), "retire": ("active", "paused")}[action]
     if e["state"] not in allowed:
         raise CatalogError(f"当前状态为「{e['state_zh']}」，不能{ACTION_ZH[action]}")

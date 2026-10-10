@@ -1,0 +1,22 @@
+# 量化目标的人工基线（BR-53；Spec 第 14.16 节）。
+# 状态：假设值，待业务确认——试点开始前应换成香港、伦敦、巴黎团队真实项目的记录（同一类研究，三个市场）。
+# 平台侧的数字由系统按实际时间戳与操作记录计算，不用估计。
+version: baseline-v0.1
+status: 假设值，待业务确认
+note: 传统流程中三个地区团队各自完成一遍；周期为日历时间（含等待），工作量为人工小时
+# 研究周期（日历小时，含等待）：一个研究假设在三个市场从立项到获批
+cycle_hours:
+  spec: 40          # 立项：三地分别写研究方案、对齐假设（约 1 周，含会议）
+  data_code_backtest: 160   # 数据准备、写代码、三地回测（约 4 周）
+  comparison: 40    # 三市场比较与解释
+  compliance: 40    # 三地合规预检（邮件往返）
+  portfolio_report: 40      # 组合、汇率拆分、报告与翻译
+  approval: 120     # 跨地区审批（邮件与会议，约 3 周）
+# 重复工作（人工小时）：同一任务因市场不同由不同团队再做一遍的部分
+repeated_tasks:
+  - {task: 研究方案与假设表述, hours_each: 8, manual_times: 3, platform_human_times: 1}
+  - {task: 数据清洗与标准化, hours_each: 16, manual_times: 3, platform_human_times: 0}
+  - {task: 因子代码与回测, hours_each: 24, manual_times: 3, platform_human_times: 0}
+  - {task: 规则与合规预检整理, hours_each: 4, manual_times: 3, platform_human_times: 0}
+  - {task: 报告撰写与翻译, hours_each: 12, manual_times: 3, platform_human_times: 0}
+  - {task: 审批材料汇编, hours_each: 6, manual_times: 3, platform_human_times: 0}

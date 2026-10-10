@@ -84,6 +84,19 @@ def _notes(markets: list[str]) -> str:
     return "\n".join(out)
 
 
+def filter_sentences(raw: dict, ids: set[str]) -> tuple[list[dict], int]:
+    """只保留引用了事实清单中编号的句子；引用不存在的编号或没有引用的句子丢弃（红队用例 RT-06）。"""
+    kept, dropped = [], 0
+    for s in raw.get("sentences") or []:
+        cites = [c for c in (s.get("cites") or []) if c in ids]
+        body = re.sub(r"\s*\[F\d+[^\]]*\]", "", str(s.get("text") or "")).strip()     # 引用统一显示在句末
+        if cites and body:
+            kept.append({"text": body, "cites": cites})
+        else:
+            dropped += 1
+    return kept, dropped
+
+
 def explain(study: dict, diags: dict) -> dict:
     fs = facts(study, diags)
     if not fs:
@@ -94,15 +107,7 @@ def explain(study: dict, diags: dict) -> dict:
         facts="\n".join(f"[{f['id']}] {f['text']}" for f in fs), notes=_notes(list(study["markets"])))
     text, usage = draft._chat(prompt, cfg)
     raw = json.loads(text)
-    ids = {f["id"] for f in fs}
-    kept, dropped = [], 0
-    for s in raw.get("sentences") or []:
-        cites = [c for c in (s.get("cites") or []) if c in ids]
-        body = re.sub(r"\s*\[F\d+[^\]]*\]", "", str(s.get("text") or "")).strip()     # 引用统一显示在句末
-        if cites and body:
-            kept.append({"text": body, "cites": cites})
-        else:
-            dropped += 1
+    kept, dropped = filter_sentences(raw, {f["id"] for f in fs})
     return {"sentences": kept, "dropped": dropped, "transfer_view": str(raw.get("transfer_view") or ""),
             "local_adjustments": [str(x) for x in raw.get("local_adjustments") or []][:6], "facts": fs,
             "model": cfg["model"], "prompt_version": PROMPT_VERSION, "usage": usage,

@@ -241,7 +241,7 @@ def run_monitor(job: dict) -> None:
 def init_dirs() -> None:
     """研究规格、任务、组合、报告与审批目录由后端写入：交给 api 的用户，运行器以 root 运行仍可读写。"""
     for d in (store.RESEARCH_DIR, store.JOBS_DIR, store.RUNTIME / "portfolio", store.RUNTIME / "reports",
-              store.RUNTIME / "approvals", store.RUNTIME / "signals"):
+              store.RUNTIME / "approvals", store.RUNTIME / "signals", store.RUNTIME / "acceptance"):
         d.mkdir(parents=True, exist_ok=True)
         os.chown(d, API_UID, API_UID)
         d.chmod(0o775)

@@ -347,6 +347,15 @@ EDITABLE = ("hypothesis", "rationale", "directions", "exclusions", "falsificatio
 LOCKED_BY = "研究员（演示，未登录）"
 
 
+TEST_YEAR = re.compile(r"20(2[2-9]|[3-9]\d)\s*年?")
+
+
+def test_period_mentions(spec: dict) -> list[str]:
+    text = " ".join(str(x) for x in (spec.get("hypothesis"), spec.get("directions"), spec.get("exclusions"),
+                                     spec.get("hypothesis_original"), spec.get("direction_original")))
+    return sorted({m.group(0).strip() for m in TEST_YEAR.finditer(text)})
+
+
 def _prepare_spec(raw: dict, lock: bool) -> dict:
     """整理研究规格：校验必填字段；以往运行只取假设方向与是否采纳（第 16.6 节）。"""
     spec = {k: raw.get(k) for k in (
@@ -371,6 +380,10 @@ def _prepare_spec(raw: dict, lock: bool) -> dict:
         problems.append("经济逻辑为必填")
     if any(not q.get("confirmed") for q in spec.get("questions") or []):
         problems.append("还有待确认事项未处理")
+    # MINE-11：与页面相同的防泄漏检查在后端再做一次（直接调用接口也不能绕过）；可证伪测试按规定写明测试期，不算
+    mentions = test_period_mentions(spec)
+    if mentions and not any(q.get("confirmed") and "测试期年份" in str(q.get("text")) for q in spec.get("questions") or []):
+        problems.append(f"规格中出现测试期年份（{'、'.join(mentions)}）：须确认已知悉泄漏风险")
     if problems:
         raise HTTPException(422, "；".join(problems))
     original = (spec.get("ai_draft") or {}).get("original") or {}
@@ -1048,6 +1061,122 @@ def management_overview():
     return {"regions": regions, "approvals": {"total": len(subs), "by_status": {k: sum(1 for s in subs if s["status"] == k) for k in A.STATUS_ZH},
                                               "status_zh": A.STATUS_ZH, "pending": pending, "bottleneck": bottleneck},
             "signal_health": health, "incidents": incidents, "generated_at": store.now()}
+
+
+# ---------------------------------------------------------------- 验收：成功标准、量化目标、红队测试（第 14.16 节）
+
+def _criteria() -> list[dict]:
+    """业务 spec 的 8 条 POC 成功标准：按平台上的实际记录自动核对，并给出证据位置。"""
+    from factopia import approval as A
+    S = _signals_mod()
+    P = _portfolio_mod()
+    out = []
+    runs = [_json(p) for p in (RESULTS / "runs").glob("*/run.json")]
+    by_ver: dict = {}
+    for r in runs:
+        k = ((r.get("research") or {}).get("id"), (r.get("research") or {}).get("version"))
+        if k[0] and r.get("status") == "done":
+            by_ver.setdefault(k, set()).add(r["market"])
+    three = [f"{k[0]} v{k[1]}" for k, v in by_ver.items() if len(v) == 3]
+    out.append({"no": 1, "text": "同一投资假设能够在香港、英国和法国按统一方法独立验证", "ok": bool(three),
+                "evidence": f"三个市场都完成运行的锁定版本：{'、'.join(three) or '无'}（结果页研究结论）", "link": "/results"})
+    ds = {d: bool(tcommon.read_json(tcommon.ds_dir(d) / "summary.json")) for d in tcommon.DATASETS}
+    out.append({"no": 2, "text": "中文、英文和法文资料均可检索，关键结论可以回到原文段落及时间戳", "ok": all(ds.values()),
+                "evidence": "数据集：" + "、".join(f"{k}{'✓' if v else '✗'}" for k, v in ds.items()) + "；检索与摘要逐句引用段落与时间（情报台）", "link": "/intel"})
+    rs = _json(REFDATA / "master_summary.json") if (REFDATA / "master_summary.json").exists() else None
+    acts = (REFDATA / "corporate_actions.parquet").exists()
+    pit = _json(RESULTS / "pit_status.json") if (RESULTS / "pit_status.json").exists() else None
+    out.append({"no": 3, "text": "发行人、证券、币种、时区、交易日历和公司行动能够正确标准化", "ok": bool(rs and acts and pit),
+                "evidence": (f"证券 {rs.get('securities')}、LEI {rs.get('with_lei')}、多市场发行人 {rs.get('multi_market_issuers')}；" if rs else "证券主数据未生成；")
+                + ("公司行动已生成；" if acts else "公司行动未生成；") + (f"时间点一致性：{pit['label']}" if pit else "时间点状态未生成") + "（数据台）", "link": "/data"})
+    pfs = [json.loads(p.read_text(encoding="utf-8")) for p in (P.OUT_DIR.glob("*/summary.json") if P.OUT_DIR.exists() else [])]
+    good = [x for x in pfs if all(v["identity_max_error"] < 1e-10 for v in x["fx_split"].values()) and abs(x["attribution"]["linking_error"]) < 1e-4]
+    reps = list(REPORTS.glob("*.html")) if REPORTS.exists() else []
+    out.append({"no": 4, "text": "报告能够区分本地币种收益、基础币种收益和汇率贡献", "ok": bool(good and reps),
+                "evidence": f"授权组合 {len(pfs)} 个，恒等误差 < 1e-10 且归因误差 < 1bp 的 {len(good)} 个；报告 {len(reps)} 份（组合台）", "link": "/portfolio"})
+    subs = [A.load(x["id"]) for x in A.list_all()]
+    handled = sum(len(x["rule_decisions"]) for x in subs)
+    out.append({"no": 5, "text": "三个地区规则包均能执行，并记录实际使用的版本和人工处理结果", "ok": bool(subs) and handled > 0,
+                "evidence": f"规则包 {', '.join(f'{p} {v}' for p, v in ((k, x['version']) for k, x in rulebook.load_packs().items()))}；"
+                            f"审批中逐条记录的规则处理 {handled} 条（风控台、审批台）", "link": "/rules"})
+    appr = [x for x in subs if x.get("lock")]
+    chain_ok = all(A.verify_chain(x["id"])["ok"] for x in subs) if subs else False
+    out.append({"no": 6, "text": "候选信号完成跨地区审批，所有修改、意见和例外进入审计轨迹", "ok": bool(appr) and chain_ok,
+                "evidence": f"完成审批 {len(appr)} 次；全部提交的哈希链校验{'通过' if chain_ok else '未通过'}；审计证据包可导出（审批台）", "link": "/approvals"})
+    cat = S.catalog()
+    by_res: dict = {}
+    for e in cat:
+        if e["monitor"]:
+            by_res.setdefault((e["research_id"], e["version"]), []).append(e)
+    single = [k for k, es in by_res.items() if any(e["monitor"]["suggestion"] == "pause" for e in es) and any(e["monitor"]["suggestion"] != "pause" for e in es)]
+    out.append({"no": 7, "text": "监控页面能够识别只发生在某一个市场的信号恶化", "ok": bool(single),
+                "evidence": ("只在部分市场建议暂停的研究版本：" + "、".join(f"{k[0]} v{k[1]}" for k in single)) if single else "还没有只在单一市场恶化的监控结果（信号目录）", "link": "/signals"})
+    out.append({"no": 8, "text": "全程不使用真实客户身份信息，不作自动法律结论，也不提交真实交易", "ok": True,
+                "evidence": "授权均为模拟（configs/mandates）；规则包标注\"待本地合规确认\"且平台只发现、解释和路由；系统没有任何交易接口", "link": "/rules"})
+    return out
+
+
+def _versions_cycle() -> list[dict]:
+    from factopia import acceptance as AC
+    from factopia import approval as A
+    P = _portfolio_mod()
+    jobs = store.list_jobs()
+    out = []
+    for rid in store.research_ids():
+        for v in store.versions(rid):
+            spec = store.load_version(rid, v)
+            reps = [p.name for p in REPORTS.glob(f"{rid}_v{v}_*.html")] if REPORTS.exists() else []
+            subs = [A.load(x["id"]) for x in A.list_all(rid) if x["version"] == v]
+            out.append(AC.cycle(rid, v, spec, jobs, P.load(rid, v), reps, subs))
+    return out
+
+
+@app.get("/api/acceptance")
+def acceptance():
+    from factopia import acceptance as AC
+    return {"criteria": _criteria(), "targets": AC.targets(_versions_cycle()), "redteam": AC.load_redteam()}
+
+
+@app.post("/api/acceptance/redteam")
+def run_redteam():
+    """红队测试（约数秒）：审批与目录用例在临时目录中进行，不影响真实记录。"""
+    from factopia import acceptance as AC
+    from factopia import approval as A
+    sample_id = next((x["research_id"] for x in A.list_all() if x["status"] in ("approved", "approved_restricted")), None)
+    if sample_id is None:
+        raise HTTPException(422, "需要至少一个完成审批的研究版本作为样本")
+    ver = next(x["version"] for x in A.list_all(sample_id) if x["status"] in ("approved", "approved_restricted"))
+    spec = get_version(sample_id, ver)
+
+    def path_traversal():
+        bad = ["../../etc/passwd", "..%2F..%2Fetc%2Fpasswd", "x_v1_20260101000000.html/../../a"]
+        r1 = all(not REPORT_NAME.match(b) for b in bad)
+        try:
+            A._dir("../../etc")
+            r2 = False
+        except A.ApprovalError:
+            r2 = True
+        return r1 and r2, f"报告名校验拒绝 {len(bad)} 个；提交编号校验{'拒绝' if r2 else '未拒绝'}"
+
+    def simulated_labelled():
+        res = []
+        real = set().union(*[set(rule_ctx.universe([m])[m]) for m in MARKETS])
+        for ds, cfg in tcommon.DATASETS.items():
+            if not cfg["simulated"]:
+                continue
+            fil = pd.read_parquet(tcommon.ds_dir(ds) / "filings.parquet")
+            flagged = int(((fil["simulated"] == True) & (fil["source"] == tcommon.SIMULATED_LABEL)).sum())  # noqa: E712
+            named = int(fil["company"].astype(str).str.contains("模拟|simulated").sum()) if "company" in fil else 0
+            clash = sorted(set(fil["instrument"]) & real)
+            res.append((ds, len(fil), flagged, named, clash))
+        ok = bool(res) and all(n > 0 and f == n and c == n and not cl for _, n, f, c, cl in res)
+        return ok, "；".join(f"{ds}：{f}/{n} 条记录 simulated=True 且来源为\"{tcommon.SIMULATED_LABEL}\"，公司名带模拟标记 {c}/{n}，"
+                            f"与真实股票代码重合 {len(cl)}" for ds, n, f, c, cl in res)
+
+    ctx = {"sample_spec": spec, "study": study(sample_id, ver), "materials": _materials(sample_id, ver),
+           "prepare_lock": lambda sp: _prepare_spec(sp, lock=True), "can_monitor": lambda e: e["state"] in ("active", "paused"),
+           "path_traversal": path_traversal, "simulated_labelled": simulated_labelled}
+    return AC.redteam(ctx)
 
 
 class RunIn(BaseModel):

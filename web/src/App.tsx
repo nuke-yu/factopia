@@ -32,6 +32,7 @@ const PortfolioPage = lazyPage(() => import("./pages/PortfolioPage"));
 const ApprovalsPage = lazyPage(() => import("./pages/ApprovalsPage"));
 const SignalsPage = lazyPage(() => import("./pages/SignalsPage"));
 const OverviewPage = lazyPage(() => import("./pages/OverviewPage"));
+const AcceptancePage = lazyPage(() => import("./pages/AcceptancePage"));
 
 /** 页面出错时显示原因与刷新按钮，而不是空白页。切换页面后自动恢复。 */
 class PageBoundary extends Component<{ children: ReactNode; resetKey: string }, { error: Error | null }> {
@@ -72,6 +73,7 @@ function Pages() {
           <Route path="/approvals" element={<ApprovalsPage />} />
           <Route path="/signals" element={<SignalsPage />} />
           <Route path="/overview" element={<OverviewPage />} />
+          <Route path="/acceptance" element={<AcceptancePage />} />
           <Route path="*" element={<Navigate to="/projects" replace />} />
         </Routes>
       </Suspense>
@@ -134,7 +136,7 @@ export default function App() {
               ))}
               <span className="mx-2 h-5 border-l border-line" aria-hidden />
               {[{ to: "/intel", name: "情报台", hint: "多语言公告" }, { to: "/data", name: "数据台", hint: "主数据与时间点" }, { to: "/rules", name: "风控台", hint: "规则包与预检" }, { to: "/portfolio", name: "组合台", hint: "授权组合与报告" }, { to: "/approvals", name: "审批台", hint: "跨地区审批与审计" },
-                { to: "/signals", name: "信号目录", hint: "分市场版本与监控" }, { to: "/overview", name: "总览", hint: "管理总览" }].map((d) => (
+                { to: "/signals", name: "信号目录", hint: "分市场版本与监控" }, { to: "/overview", name: "总览", hint: "管理总览" }, { to: "/acceptance", name: "验收", hint: "成功标准与红队" }].map((d) => (
                 <NavLink
                   key={d.to}
                   to={d.to}
