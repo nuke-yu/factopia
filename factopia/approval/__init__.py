@@ -5,7 +5,8 @@
 - 提交（submit）：前置条件——版本已锁定；各市场有采纳轮次；已构建授权组合；组合预检无阻断；已生成报告；
   使用文本数据时情报台没有待复核的低置信度翻译（BR-47）。提交时冻结提交材料（第 12.2.3 节）：假设与经济逻辑、
   因子代码、数据快照指纹、参数、三市场结果与迁移标签、两次预检、组合摘要、报告文件、提示词与模型版本、规则包与
-  数据来源登记表全文、平台代码指纹；整体计算 sha256 作为提交指纹。
+  数据来源登记表全文、平台代码指纹；使用文本数据时冻结翻译（生效译文、概念、复核记录、术语表与翻译模型 / 提示词 /
+  术语表版本，materials/translations/）；整体计算 sha256 作为提交指纹。
 - 审批路线（第 12.2.1 节）：各市场本地研究员（香港 → 英国 → 法国）→ 数据负责人 → 有命中警告的地区合规 → 模型风险
   → 投资组合经理 → 运营 / 技术负责人。每一步只能由当前角色操作（演示时切换角色）。
 - 操作（第 12.2.2 节）：批准（可附条件）、退回（须写原因，提交结束，修改后重新提交）、拒绝（合规、模型风险、组合经理；
@@ -13,7 +14,7 @@
   合规与模型风险在批准前须处理本人负责的全部警告命中（例外或确认，BR-47 重大规则命中人工复核）；
   模型风险须处理"模型例外"（可信度检查存疑的市场）。阻断规则不能例外（提交前即被拦截）。
 - 运营 / 技术负责人：核对提交指纹与当前材料一致、部署范围等于获批市场，填写监控阈值，完成后生成获批锁定记录
-  （地区适用性标签：适用 / 不适用，BR-29）。
+  （地区适用性标签：总标签"通用 / 仅适用于 …"，各市场"适用 / 需调整参数 / 待合规确认 / 不适用"，BR-29、30）。
 - 留痕（BR-23）：events.jsonl 只追加，每条记录包含上一条的哈希（哈希链），可校验是否被改动。
 - 审计证据包：zip，含提交材料、全部事件、报告、规则包与数据来源登记表、因子代码、文件清单（sha256）与说明，
   回答"当时使用了什么数据、规则、模型，由谁批准"。
@@ -234,6 +235,11 @@ def submit(m: dict, by: str, note: str = "") -> dict:
         "code_fingerprint": code_fingerprint(), "git_commit": os.environ.get("FACTOPIA_GIT_COMMIT"),
         "translations": m.get("translations"),
     }
+    tr_files = {}
+    if (m.get("translations") or {}).get("datasets"):         # 冻结翻译：生效译文、概念、复核记录、术语表（第 14.22 节）
+        from factopia.text import review as treview
+        frozen, tr_files = treview.snapshot(m["translations"]["datasets"])
+        materials["translations"] = {**m["translations"], "frozen": frozen}
     fp = _sha(_dump(materials))
     sid = f"{spec['id']}_v{spec['version']}_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
     d = _dir(sid)
@@ -241,6 +247,9 @@ def submit(m: dict, by: str, note: str = "") -> dict:
     (d / "materials" / m["report"]["name"]).write_bytes(report_bytes)
     (d / "materials" / "spec.yaml").write_text(yaml.safe_dump(spec, allow_unicode=True, sort_keys=False), encoding="utf-8")
     (d / "materials" / "factors.json").write_text(json.dumps(factors, ensure_ascii=False, indent=1), encoding="utf-8")
+    for k, v in tr_files.items():
+        (d / "materials" / "translations").mkdir(exist_ok=True)
+        (d / "materials" / "translations" / k).write_bytes(v)
     for k, v in packs.items():
         (d / "materials" / "rules").mkdir(exist_ok=True)
         (d / "materials" / "rules" / k).write_bytes(v)
@@ -251,6 +260,55 @@ def submit(m: dict, by: str, note: str = "") -> dict:
     _save(sub)
     _append(sid, {"action": "submit", "role": "发起研究员", "by": by, "note": note, "fingerprint": fp})
     return sub
+
+
+# ---------------------------------------------------------------- 地区适用性标签
+
+def labels(s: dict) -> dict:
+    """获批信号的地区适用性标签（BR-29、30；业务 spec 示例："香港 / 英国 / 法国通用""仅适用于香港"
+    "法国市场需调整参数""英国市场待合规确认"；第 14.22 节）。
+
+    - 总标签：获批且非模拟数据的市场 = 三个市场 → "香港 / 英国 / 法国通用"；否则 "仅适用于 …"；没有 → "不适用于生产"。
+    - 每个市场：模拟数据 → 不适用（仅演示）；不在获批市场 → 不适用（限定地区）；获批市场再加限定：
+      需调整参数：该市场采纳轮次的 t 值（方向对齐）只达到迁移门槛的一半到门槛之间（迁移标签的"需调参"区间）；
+      待合规确认：提交时冻结的该市场规则包状态不是"已确认"（POC 规则包均为"待本地合规确认"），
+      或该市场合规对规则命中做了例外处理、或批准时附加了条件。
+    """
+    mt = s["materials"]
+    approved = s.get("approved_markets") or []
+    per_t = ((mt.get("transfer") or {}).get("markets") or {})
+    thr = (mt.get("transfer") or {}).get("threshold") or 2.0
+    d = _dir(s["id"]) / "materials" / "rules"
+    out, prod = {}, []
+    for m in s["markets"]:
+        res = mt["results"].get(m) or {}
+        if res.get("simulated"):
+            out[m] = {"label": "不适用（模拟数据，仅用于流程演示）", "tags": ["模拟数据"], "reasons": ["行情为模拟数据，不得用于生产"]}
+            continue
+        if m not in approved:
+            out[m] = {"label": "不适用（投资组合经理限定地区）" if s.get("approved_markets") is not None else "未获批",
+                      "tags": [], "reasons": []}
+            continue
+        tags, why = [], []
+        t = (per_t.get(m) or {}).get("t_aligned")
+        if t is not None and thr / 2 < t <= thr:
+            tags.append("需调整参数")
+            why.append(f"t 值 {t:.2f} 介于迁移门槛的一半与门槛（{thr}）之间")
+        pack = yaml.safe_load((d / f"{m}.yaml").read_text(encoding="utf-8")) if (d / f"{m}.yaml").exists() else {}
+        comp = f"{MARKET_ZH[m]}合规"
+        exc = [v["rule"] for k, v in s.get("rule_decisions", {}).items() if k.startswith(comp + "|") and v["action"] == "exception"]
+        cond = [c["note"] for c in s.get("conditions") or [] if c["role"] == comp]
+        if (pack.get("status") or "") != "已确认" or exc or cond:
+            tags.append("待合规确认")
+            why += ([f"规则包 {pack.get('version', '')} 状态：{pack.get('status')}"] if (pack.get("status") or "") != "已确认" else []) \
+                + ([f"合规例外：{'、'.join(exc)}"] if exc else []) + ([f"合规附加条件：{'；'.join(cond)}"] if cond else [])
+        prod.append(m)
+        out[m] = {"label": "适用" + ("（" + "、".join(f"{MARKET_ZH[m]}市场{x}" for x in tags) + "）" if tags else ""),
+                  "tags": tags, "reasons": why}
+    names = [MARKET_ZH[m] for m in ORDER if m in prod]
+    head = ("香港 / 英国 / 法国通用" if len(prod) == 3 else "仅适用于" + "、".join(names) if prod else "不适用于生产")
+    flags = [f"{MARKET_ZH[m]}市场{x}" for m in ORDER if m in prod for x in out[m]["tags"]]
+    return {"headline": head, "flags": flags, "display": "；".join([head] + flags), "markets": out}
 
 
 # ---------------------------------------------------------------- 审批操作
@@ -311,10 +369,13 @@ def act(sid: str, role: str, by: str, action: str, note: str = "", rule: str | N
         s["lock"] = {"locked_at": now(), "fingerprint": s["fingerprint"], "report": s["materials"]["report"],
                      "code_fingerprint": s["materials"]["code_fingerprint"], "rule_packs": s["materials"]["rule_packs"],
                      "data_snapshot": s["materials"]["data_snapshot"], "deployment": s["approved_markets"], "thresholds": thresholds,
-                     "applicability": {m: ("不适用（模拟数据，仅用于流程演示）" if (s["materials"]["results"].get(m) or {}).get("simulated")
-                                          else "适用" if m in s["approved_markets"] else "不适用") for m in s["markets"]},
+                     "translations": {ds: {k: v[k] for k in ("labels_sha256", "reviews_sha256", "model", "prompt_version", "glossary_version")}
+                                      for ds, v in ((s["materials"].get("translations") or {}).get("frozen") or {}).items() if isinstance(v, dict)},
+                     "applicability": None, "labels": None,
                      "conditions": s["conditions"], "by": by}
-        ev |= {"markets": s["approved_markets"], "thresholds": thresholds}
+        lab = labels(s)
+        s["lock"] |= {"applicability": {m: v["label"] for m, v in lab["markets"].items()}, "labels": lab}
+        ev |= {"markets": s["approved_markets"], "thresholds": thresholds, "labels": lab["display"]}
     s["updated_at"] = now()
     _save(s)
     _append(sid, ev)
@@ -356,6 +417,10 @@ def evidence_zip(sid: str) -> tuple[str, bytes]:
         "## 当时使用了什么模型与代码",
         f"- 起草：{mt['models']['draft']}（提示词 {mt['models']['draft_prompt']}）；AI 解释：" + (f"{mt['models']['explain']}（{mt['models']['explain_prompt']}）" if mt['models']['explain'] else "未生成"),
         "- 因子代码：materials/factors.json；研究规格：materials/spec.yaml",
+        *([f"- 翻译（{ds}{'，模拟数据' if v.get('simulated') else ''}）：{v['paragraphs']} 段，已复核 {v['reviewed']}、待复核 {v['pending']}；"
+           f"模型 {'/'.join(v['model']) or '—'}，提示词 {'/'.join(v['prompt_version']) or '—'}，术语表 {'/'.join(v['glossary_version']) or '—'}；"
+           f"materials/translations/{ds}.labels.jsonl.gz（sha256 {v['labels_sha256'][:16]}…）"
+           for ds, v in ((mt.get("translations") or {}).get("frozen") or {}).items() if isinstance(v, dict)]),
         f"- 平台代码指纹：{mt['code_fingerprint']}" + (f"；Git 提交 {mt['git_commit']}" if mt.get("git_commit") else ""), "",
         "## 由谁批准",
         *who, "",

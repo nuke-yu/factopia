@@ -153,12 +153,14 @@ def _period_stats(score: pd.DataFrame, close: pd.DataFrame, adv: pd.DataFrame, s
     if not held:
         return {"rank_ic": None}
     keys = sorted(held)
-    daily_top, daily_top_lag, turn = [], [], []
+    daily_top, daily_top_lag, turn, daily_abs, daily_univ = [], [], [], [], []
     for i, d in enumerate(keys):
         nxt = keys[i + 1] if i + 1 < len(keys) else ret.loc[start:end].index[-1]
         span = ret.loc[d:nxt].iloc[1:]
         names = list(held[d])
         daily_top.append(span[names].mean(axis=1) - span.mean(axis=1))
+        daily_abs.append(span[names].mean(axis=1))                      # 本地币种绝对收益（用于基础币种换算）
+        daily_univ.append(span.mean(axis=1))
         lag = ret.loc[d:nxt].iloc[2:]                                  # 推迟一天执行
         daily_top_lag.append(lag[names].mean(axis=1) - lag.mean(axis=1))
         if i > 0:
@@ -223,7 +225,30 @@ def _period_stats(score: pd.DataFrame, close: pd.DataFrame, adv: pd.DataFrame, s
         "capacity_local": _r(np.median(cap), 0) if cap else None,
         "regime": {"high_vol": _r(hi), "low_vol": _r(lo), "up_months": _r(up), "down_months": _r(dn)},
         "_ric": ric, "_monthly": monthly_ic,
+        "_top_abs": pd.concat(daily_abs).sort_index(), "_univ": pd.concat(daily_univ).sort_index(),
     }
+
+
+def _ann(x: pd.Series) -> float | None:
+    return _r(float((1 + x).prod() ** (252 / len(x)) - 1)) if len(x) else None
+
+
+def currency_view(p: dict, fx: pd.Series) -> dict:
+    """授权基础币种视角（试点交付物"按市场、币种和客户授权展示信号表现"；第 14.22 节）：
+    前 20% 与股票池的绝对收益分别按本地币种与基础币种（逐日 (1+本地)(1+汇率)−1）年化，拆出汇率贡献；容量换算为基础币种。
+    相对股票池的超额收益两种币种下几乎相同（同一市场的股票承受同一汇率），所以监控预警仍按本地币种计算。"""
+    if p.get("rank_ic") is None or "_top_abs" not in p:
+        return {}
+    top, univ = p["_top_abs"], p["_univ"]
+    rate = fx.reindex(fx.index.union(top.index)).sort_index().ffill()
+    fxr = rate.pct_change(fill_method=None).reindex(top.index).fillna(0.0)
+    rate = rate.reindex(top.index)
+    return {"top_local_ann": _ann(top), "top_base_ann": _ann((1 + top) * (1 + fxr) - 1), "fx_ann": _ann(fxr),
+            "universe_local_ann": _ann(univ), "universe_base_ann": _ann((1 + univ) * (1 + fxr) - 1),
+            "excess_local_ann": _r(_ann(top) - _ann(univ)),           # 两种币种同一口径：年化绝对收益之差
+            "excess_base_ann": _r(_ann((1 + top) * (1 + fxr) - 1) - _ann((1 + univ) * (1 + fxr) - 1)),
+            "fx_rate_start": _r(float(rate.iloc[0]), 6), "fx_rate_end": _r(float(rate.iloc[-1]), 6),
+            "capacity_base": _r(p["capacity_local"] * float(rate.iloc[-1]), 0) if p.get("capacity_local") is not None else None}
 
 
 def _decay(score, close, start, end) -> dict:
@@ -346,6 +371,12 @@ def run(entry: dict, log=print) -> dict:
     roll = ls["_ric"].rolling(60, min_periods=40).mean()
     roll_ref = rs["_ric"].rolling(60, min_periods=40).mean()
     series = pd.concat([roll_ref, roll]).dropna()
+    ccy = None
+    if entry.get("base_currency"):
+        from factopia.portfolio import LOCAL, fx_to_base
+        fx = fx_to_base(entry["base_currency"])[m]
+        ccy = {"local": LOCAL[m], "base": entry["base_currency"], "mandate": entry.get("mandate"),
+               "mandate_name": entry.get("mandate_name"), "reference": currency_view(rs, fx), "live": currency_view(ls, fx)}
     result = {
         "signal_id": sid, "market": m, "computed_at": now(), "horizon": entry["horizon"], "factors": finfo,
         "reference": {k: v for k, v in rs.items() if not k.startswith("_")}, "live": {k: v for k, v in ls.items() if not k.startswith("_")},
@@ -358,7 +389,7 @@ def run(entry: dict, log=print) -> dict:
         "note": "上线期为测试期之后的数据（2024 年起），用于演示上线后的监控；" + (
             "信号为情报台的文本信号（风险表述变化，按公告可获取时间生效）" + ("；行情与公告均为模拟数据，仅用于流程演示" if ds else "")
             if all(f.get("kind") == "text" for f in entry["factors"]) else "信号为冻结因子的等权合成，不含模型重新训练"),
-        "price_source": sources.describe(ds),
+        "price_source": sources.describe(ds), "currency": ccy,
     }
     score.stack().rename("score").reset_index().rename(columns={"level_0": "date", "level_1": "symbol"}).to_parquet(out_dir / "score.parquet", index=False)
     tmp = out_dir / "monitor.json.tmp"

@@ -134,3 +134,49 @@ def queue(dataset: str | None = None, status: str = "pending", limit: int = 100)
                     "decision": dec.get(k), "history": history(k) if done else [],
                 })
     return {"items": items, "counts": counts, "actions": ACTIONS}
+
+
+def snapshot(datasets: list[str]) -> tuple[dict, dict[str, bytes]]:
+    """审批提交时冻结翻译（BR-23"锁定获批的翻译"；第 14.22 节）。
+
+    每个数据集导出复核后生效的全部段落标注（原文段落指纹、译文、概念、置信度、复核状态与复核人），
+    以及该数据集的全部复核记录和术语表全文；返回（摘要，{文件名: gzip 字节}）。摘要含各文件 sha256、
+    翻译模型 / 提示词 / 术语表版本，计入提交指纹，获批后锁定。
+    """
+    import gzip
+    import hashlib
+    from factopia.text.common import CONFIGS
+    dec = decisions()
+    summary, files = {}, {}
+    gl = CONFIGS / "text" / "glossary.yaml"
+    if gl.exists():
+        files["glossary.yaml.gz"] = gzip.compress(gl.read_bytes(), mtime=0)
+    for ds in datasets:
+        d = ds_dir(ds)
+        rows, versions = [], {"model": set(), "prompt_version": set(), "glossary_version": set()}
+        for p in sorted((d / "labels").glob("*.json")) if (d / "labels").exists() else []:
+            lab = read_json(p) or {}
+            for v in versions:
+                if lab.get(v):
+                    versions[v].add(lab[v])
+            doc_id = lab.get("id") or p.stem
+            for x in lab.get("labels") or []:
+                eff = apply(x, dec.get(key(ds, doc_id, x["i"])))
+                rows.append({"doc_id": doc_id, "i": x["i"], "sha": x.get("sha"), "language": lab.get("language"),
+                             "translation": eff.get("translation"), "translation_confidence": x.get("translation_confidence"),
+                             "concepts": eff.get("concepts"), "flags": x.get("flags") or [], "review_status": eff["review_status"],
+                             "reviewer": eff.get("reviewer"), "reviewed_at": eff.get("reviewed_at")})
+        reviews = [r for r in dec.values() if r["dataset"] == ds]
+        body = "\n".join(json.dumps(r, ensure_ascii=False, sort_keys=True) for r in rows).encode("utf-8")
+        rev = "\n".join(json.dumps(r, ensure_ascii=False, sort_keys=True) for r in reviews).encode("utf-8")
+        files[f"{ds}.labels.jsonl.gz"] = gzip.compress(body, mtime=0)
+        files[f"{ds}.reviews.jsonl.gz"] = gzip.compress(rev, mtime=0)
+        summary[ds] = {"paragraphs": len(rows), "documents": len({r["doc_id"] for r in rows}),
+                       "reviewed": sum(1 for r in rows if r["review_status"] not in ("pending", "not_required")),
+                       "pending": sum(1 for r in rows if r["review_status"] == "pending"),
+                       "simulated": bool(DATASETS[ds]["simulated"]),
+                       **{k: sorted(v) for k, v in versions.items()},
+                       "labels_sha256": hashlib.sha256(body).hexdigest(), "reviews_sha256": hashlib.sha256(rev).hexdigest()}
+    if gl.exists():
+        summary["glossary_sha256"] = hashlib.sha256(gl.read_bytes()).hexdigest()
+    return summary, files

@@ -86,6 +86,7 @@ def catalog() -> list[dict]:
         spec = yaml.safe_load(spec_p.read_text(encoding="utf-8")) if spec_p.exists() else {}
         mandate = _mandate(mt.get("mandate"))
         lock = sub.get("lock")
+        reg = (lock.get("labels") or approval.labels(sub)) if lock else None    # 早期锁定记录没有存标签：按冻结材料补算
         packs = [f"{p['pack']} {p['version']}" for p in mt["prechecks"]["setup"]["packs"]]
         cats = sorted({d.get("category") for d in spec.get("data_needs") or []} | {"price_volume", "benchmark"})
         for m in sub["markets"]:
@@ -121,11 +122,15 @@ def catalog() -> list[dict]:
                 "title": mt["title"], "submission": sub["id"], "state": state,
                 "state_zh": STATE_ZH[state] + ("（模拟数据，仅演示）" if sim and state in ("active", "paused") else ""), "reason": reason,
                 "production": state == "active" and not sim, "simulated": sim, "kind": res.get("kind", "rdagent"),
+                "mandate": mt.get("mandate"), "base_currency": (mt.get("portfolio") or {}).get("base_currency"),
                 "labels": {"languages": _languages(spec, mandate), "mandate": f"{mandate.get('name', mt.get('mandate'))}（{mandate.get('service_region', '')}）",
                            "data_scope": {"categories": cats, "universe": {"hk": "恒生指数成分股", "uk": "富时 100 成分股", "fr": "CAC 40 成分股"}[m],
                                           "snapshot": (mt["data_snapshot"].get(m) or "")[:16]},
                            "rule_versions": packs, "last_validated": (validated or "")[:10] or None, "next_review": due,
-                           "applicability": (lock or {}).get("applicability", {}).get(m)},
+                           "applicability": ((reg or {}).get("markets", {}).get(m) or {}).get("label") or (lock or {}).get("applicability", {}).get(m),
+                           "regional": {"headline": reg["headline"], "display": reg["display"],
+                                        "tags": reg["markets"].get(m, {}).get("tags", []),
+                                        "reasons": reg["markets"].get(m, {}).get("reasons", [])} if reg else None},
                 "run": {"run_id": res.get("run_id"), "loop": res.get("loop"), "rank_ic": res.get("rank_ic"), "rank_ic_t": res.get("rank_ic_t"),
                         "credibility": res.get("credibility")},
                 "thresholds": (lock or {}).get("thresholds") or {},
@@ -170,4 +175,6 @@ def monitor_entry(signal_id: str) -> dict:
     run = json.loads(run_p.read_text(encoding="utf-8")) if run_p.exists() else {}
     return {"signal_id": signal_id, "market": e["market"], "factors": factors, "horizon": sub["materials"]["parameters"]["horizon"],
             "price_dataset": sources.of_run(run),
+            "base_currency": (sub["materials"].get("portfolio") or {}).get("base_currency"), "mandate": sub["materials"].get("mandate"),
+            "mandate_name": _mandate(sub["materials"].get("mandate")).get("name"),
             "ref_start": periods.get("test_start"), "ref_end": periods.get("test_end"), "thresholds": e["thresholds"]}

@@ -181,7 +181,7 @@ function Detail({ sid, roles }: { sid: string; roles: string[] }) {
           </div>
           {sub.lock && (
             <Notice tone="accent" title={`获批锁定 · ${sub.lock.locked_at.slice(0, 16).replace("T", " ")} UTC`}>
-              地区适用性：{Object.entries(sub.lock.applicability).map(([m, v]) => `${MARKET_LABEL[m as Market]} ${v}`).join("、")}；
+              地区适用性：{sub.lock.labels ? `${sub.lock.labels.display}；` : ""}{Object.entries(sub.lock.applicability).map(([m, v]) => `${MARKET_LABEL[m as Market]} ${v}`).join("、")}；
               监控阈值：{Object.entries(sub.lock.thresholds).map(([k, v]) => `${k} = ${v}`).join("、")}
               {sub.lock.conditions.length > 0 && `；批准条件：${sub.lock.conditions.map((c) => `${c.role}：${c.note}`).join("；")}`}
             </Notice>

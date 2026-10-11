@@ -141,6 +141,15 @@ def languages(mandate: dict | None) -> dict:
     return {"main": main, "appendices": apps, "term": term or None, "internal_zh": main != "zh"}
 
 
+def _ai_meta(spec: dict, ex: dict | None) -> str:
+    """BR-46：报告中所有 AI 生成内容的模型与提示词版本。"""
+    dr = spec.get("ai_draft") or {}
+    parts = ([f"研究规格起草 {e(dr.get('model'))}（提示词 {e(dr.get('prompt_version'))}）"] if dr.get("model") else []) \
+        + ([f"市场差异解释 {e(ex.get('model'))}（提示词 {e(ex.get('prompt_version'))}）"] if ex and ex.get("model") else []) \
+        + ["自动挖掘轮次假设与因子：RD-Agent（模型见审批材料）"]
+    return f'<div class="meta">AI 生成内容：{" · ".join(parts)}；人工复核、意见与审批记录见情报台与审批台的只追加留痕</div>'
+
+
 def render(d: dict) -> str:
     """d：spec、study、rules（两次预检）、portfolio（summary）、daily、pit、quality、explanation、feedback。"""
     spec, st, pf, rl = d["spec"], d["study"], d.get("portfolio"), d["rules"]
@@ -171,7 +180,7 @@ blockquote{{margin:6px 0;padding:6px 12px;border-left:3px solid var(--line);colo
 <main>
 <div class="meta">Factopia 跨境量化研究平台 · 最小 POC · 生成于 {gen}</div>
 <h1>{e(spec.get('title_zh') or spec['id'])}</h1>
-<div class="meta">研究编号 <span class="mono">{e(spec['id'])}</span> · 版本 v{spec['version']} · 授权 {e((pf or {}).get('mandate_name') or spec.get('mandate'))} · 基础币种 {e(base)} · 报告币种 {e((pf or {}).get('report_currency') or base)}</div>
+<div class="meta">研究编号 <span class="mono">{e(spec['id'])}</span> · 版本 v{spec['version']} · 授权 {e((pf or {}).get('mandate_name') or spec.get('mandate'))} · 基础币种 {e(base)} · 报告币种 {e((pf or {}).get('report_currency') or base)}</div>{_ai_meta(spec, d.get("explanation"))}
 {head_alt}
 {"".join(f'<p class="note bad">{e(SIM_NOTE["zh"].format(m=MARKET["zh"][m]))}</p>' for m in _simulated(d["study"], spec["markets"]))}
 <p class="note">{e(lang_note)}平台只发现、解释和路由，不作投资建议或法律结论；规则内容待各地区合规确认。</p>
@@ -215,7 +224,9 @@ blockquote{{margin:6px 0;padding:6px 12px;border-left:3px solid var(--line);colo
     ex = d.get("explanation")
     if ex:
         sents = "".join(f"<li>{e(s.get('text'))} <span class='meta mono'>{e(' '.join(s.get('cites') or []))}</span></li>" for s in ex.get("sentences") or [])
-        out.append(f"<h3>AI 解释市场差异（每句引用平台事实编号；需研究员确认）</h3><ul>{sents}</ul>")
+        out.append(f"<h3>AI 解释市场差异（每句引用平台事实编号；需研究员确认）</h3><ul>{sents}</ul>"
+                   f"<p class='meta'>生成：模型 {e(ex.get('model'))} · 提示词 {e(ex.get('prompt_version'))} · {e((ex.get('created_at') or '')[:16].replace('T', ' '))} UTC"
+                   f"{' · 丢弃无引用句子 ' + str(ex.get('dropped')) + ' 句' if ex.get('dropped') else ''}（BR-46）</p>")
     # ④ 自动挖掘与验证
     out.append("<h2>④ 自动挖掘结果与验证记录</h2>")
     for m in ms:

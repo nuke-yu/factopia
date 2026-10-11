@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Badge, ErrorBox, Loading, Notice, Panel, Stat } from "../components/ui";
+import { Badge, ErrorBox, Loading, Notice, Panel, Seg, Stat } from "../components/ui";
 import EChart from "../components/EChart";
-import { api, type MonitorPeriod, type MonitorResult, type SignalEntry } from "../api";
+import { api, visibleMarkets, type CurrencyView, type MonitorPeriod, type MonitorResult, type SignalEntry } from "../api";
 import { cssVar, fix, MARKET_LABEL, marketColor, pct, signed, useAsync, useThemeVersion } from "../lib";
 
 // 信号目录与监控（Spec 第 14.15 节；BR-24、30、31、41、42）
@@ -51,11 +51,43 @@ const ROWS: [string, (p: MonitorPeriod) => string][] = [
   ["市场状态：指数涨 / 跌月份", (p) => `${fix(p.regime.up_months, 3)} / ${fix(p.regime.down_months, 3)}`],
 ];
 
+// 授权基础币种视角（第 14.22 节）：绝对收益按本地币种与基础币种分别年化，拆出汇率贡献；容量换算为基础币种
+function CurrencyTable({ m, ccy }: { m: MonitorResult; ccy: "local" | "base" }) {
+  const c = m.currency;
+  if (!c) return <p className="text-sm text-muted">该监控结果计算于基础币种视角上线之前，请点击"重新计算监控"。</p>;
+  const mil = (x: number | null | undefined) => (x == null ? "—" : `${(x / 1e6).toFixed(0)} 百万`);
+  const rows: [string, (v: CurrencyView, p: MonitorPeriod) => string][] = ccy === "base" ? [
+    [`前 20% 绝对收益（${c.base}，年化）`, (v) => signed(v.top_base_ann, 1)],
+    [`股票池绝对收益（${c.base}，年化）`, (v) => signed(v.universe_base_ann, 1)],
+    [`前 20% 超额（${c.base}，扣成本前，年化收益之差）`, (v) => signed(v.excess_base_ann, 1)],
+    [`汇率贡献：${c.local} → ${c.base}（年化）`, (v) => signed(v.fx_ann, 1)],
+    [`汇率 期初 → 期末（1 ${c.local} = x ${c.base}）`, (v) => `${fix(v.fx_rate_start, 4)} → ${fix(v.fx_rate_end, 4)}`],
+    [`容量（${c.base}，10% 成交额）`, (v) => mil(v.capacity_base)],
+  ] : [
+    [`前 20% 绝对收益（${c.local}，年化）`, (v) => signed(v.top_local_ann, 1)],
+    [`股票池绝对收益（${c.local}，年化）`, (v) => signed(v.universe_local_ann, 1)],
+    [`前 20% 超额（${c.local}，扣成本前，年化收益之差）`, (v) => signed(v.excess_local_ann, 1)],
+    [`容量（${c.local}，10% 成交额）`, (_, p) => mil(p.capacity_local)],
+  ];
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm num">
+        <thead className="label text-left"><tr><th className="py-1 pr-3">指标</th><th className="pr-3">参照期</th><th>上线期</th></tr></thead>
+        <tbody>{rows.map(([label, f]) => (
+          <tr key={label} className="border-t border-line"><td className="py-1.5 pr-3 font-sans">{label}</td>
+            <td className="pr-3">{f(c.reference, m.reference)}</td><td>{f(c.live, m.live)}</td></tr>))}</tbody>
+      </table>
+      <p className="text-xs text-faint mt-2">授权：{c.mandate_name ?? c.mandate ?? "—"} · 基础币种 {c.base}。同一市场的股票承受同一汇率，相对股票池的超额在两种币种下几乎相同；汇率主要影响绝对收益与容量。本表超额为年化收益之差，与上方"监控指标"表的逐日超额复利口径不同。预警按本地币种计算。</p>
+    </div>
+  );
+}
+
 function Detail({ sid, onChanged }: { sid: string; onChanged: () => void }) {
   const [data, setData] = useState<Awaited<ReturnType<typeof api.signal>> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [role, setRole] = useState(ROLES[0]);
   const [note, setNote] = useState("");
+  const [ccy, setCcy] = useState<"local" | "base">("base");
   const load = () => api.signal(sid).then(setData, (e) => setError((e as Error).message));
   useEffect(() => { setData(null); load(); }, [sid]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {                                   // 监控任务进行中：每 5 秒刷新
@@ -76,6 +108,10 @@ function Detail({ sid, onChanged }: { sid: string; onChanged: () => void }) {
       <Panel eyebrow={`${e.signal_id} · 来自审批 ${e.submission}`} title={`${e.title} · ${e.market_zh}`}
         actions={<Badge tone={STATE_TONE[e.state]}>{e.state_zh}</Badge>}>
         <div className="grid gap-x-6 gap-y-1.5 text-sm sm:grid-cols-2">
+          {e.labels.regional && <div className="sm:col-span-2"><span className="label mr-2">地区适用性</span>
+            <Badge tone={e.labels.regional.tags.length ? "warn" : "good"}>{e.labels.applicability}</Badge>
+            <span className="ml-2 text-muted">{e.labels.regional.display}</span>
+            {e.labels.regional.reasons.length > 0 && <div className="text-xs text-faint mt-0.5">{e.labels.regional.reasons.join("；")}</div>}</div>}
           <div><span className="label mr-2">授权类型</span>{e.labels.mandate}</div>
           <div><span className="label mr-2">适用语言</span>{e.labels.languages.join("、")}</div>
           <div><span className="label mr-2">数据范围</span>{e.labels.data_scope.universe} · {e.labels.data_scope.categories.join("、")} · 快照 <span className="num text-xs">{e.labels.data_scope.snapshot}…</span></div>
@@ -146,6 +182,10 @@ function Detail({ sid, onChanged }: { sid: string; onChanged: () => void }) {
             </div>
             <p className="text-xs text-faint mt-2">因子（冻结代码）：{m.factors.map((f) => `${f.name}（方向 ${f.sign > 0 ? "+" : "−"}，覆盖 ${pct(f.coverage_ref, 0)} → ${pct(f.coverage_live, 0)}）`).join("；")}</p>
           </Panel>
+          <Panel eyebrow="试点交付物：按市场、币种和客户授权展示信号表现" title="币种视角"
+            actions={<Seg label="币种" value={ccy} onChange={setCcy} options={[{ value: "base", label: `基础币种${m.currency ? ` ${m.currency.base}` : ""}` }, { value: "local", label: `本地币种${m.currency ? ` ${m.currency.local}` : ""}` }]} />}>
+            <CurrencyTable m={m} ccy={ccy} />
+          </Panel>
         </>
       )}
       {e.events.length > 0 && (
@@ -163,7 +203,11 @@ export default function SignalsPage() {
   const list = useAsync(() => api.signals(), []);
   if (list.loading) return <Loading what="信号目录" />;
   if (list.error || !list.data) return <ErrorBox error={list.error ?? "无数据"} />;
-  const items = list.data.items;
+  const all = list.data.items;
+  const fm = params.get("market") ?? "all", fd = params.get("mandate") ?? "all";
+  const mandates = [...new Map(all.filter((x) => x.mandate).map((x) => [x.mandate!, x.labels.mandate])).entries()];
+  const items = all.filter((x) => (fm === "all" || x.market === fm) && (fd === "all" || x.mandate === fd));
+  const setFilter = (k: string, v: string) => { const p = new URLSearchParams(params); if (v === "all") p.delete(k); else p.set(k, v); p.delete("sid"); setParams(p); };
   const sid = params.get("sid") ?? items.find((x) => x.production)?.signal_id ?? items[0]?.signal_id ?? "";
   const groups = items.reduce<Record<string, SignalEntry[]>>((g, x) => { (g[`${x.research_id} v${x.version}`] ??= []).push(x); return g; }, {});
   return (
@@ -175,13 +219,23 @@ export default function SignalsPage() {
         </div>
         <span className="text-sm text-muted">获批版本进入监控层 · 只暂停受影响地区 · 未获批版本保留原因</span>
       </div>
-      {items.length === 0 ? <Notice tone="accent" title="目录为空">研究版本提交审批后出现在这里；获批的市场版本才能上线监控。</Notice> : (
+      {all.length === 0 ? <Notice tone="accent" title="目录为空">研究版本提交审批后出现在这里；获批的市场版本才能上线监控。</Notice> : (
         <div className="grid gap-5 xl:grid-cols-[minmax(0,4fr)_minmax(0,8fr)]">
           <Panel eyebrow="研究版本 × 市场" title={`目录（${items.length}）`}>
+            <div className="flex flex-col gap-2 mb-3">
+              <Seg label="市场" value={fm} onChange={(v) => setFilter("market", v)}
+                options={[{ value: "all", label: "全部" }, ...visibleMarkets().map((m) => ({ value: m, label: MARKET_LABEL[m] }))]} />
+              {mandates.length > 0 && <select id="sig-mandate" aria-label="按授权筛选" className="field text-sm" value={fd} onChange={(x) => setFilter("mandate", x.target.value)}>
+                <option value="all">全部授权</option>
+                {mandates.map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+              </select>}
+            </div>
+            {items.length === 0 && <p className="text-sm text-muted">没有符合筛选条件的信号。</p>}
             <div className="flex flex-col gap-4">
               {Object.entries(groups).map(([k, xs]) => (
                 <div key={k}>
-                  <div className="text-xs text-faint mb-1 truncate">{k} · {xs[0].title}</div>
+                  <div className="text-xs text-faint mb-1 truncate">{k} · {xs[0].title}{xs[0].base_currency ? ` · ${xs[0].base_currency}` : ""}</div>
+                  {xs[0].labels.regional && <div className="text-xs mb-1"><Badge tone="accent">{xs[0].labels.regional.headline}</Badge></div>}
                   <ul className="flex flex-col">
                     {xs.map((x) => (
                       <li key={x.signal_id}>

@@ -429,6 +429,7 @@ export type Submission = {
     results: Record<string, { run_id: string | null; loop: number | string | null; rank_ic: number | null; rank_ic_t: number | null; credibility: string | null }>;
     prechecks: { setup: Precheck; portfolio: Precheck }; transfer: { label: string } | null };
   lock: null | { locked_at: string; deployment: Market[]; thresholds: Record<string, number>; applicability: Record<string, string>; by: string;
+    labels?: { headline: string; flags: string[]; display: string; markets: Record<string, { label: string; tags: string[]; reasons: string[] }> };
     conditions: { role: string; note: string }[] };
 };
 export type ApprovalDetail = { submission: Submission; summary: ApprovalSummary; events: ApprovalEvent[];
@@ -441,7 +442,9 @@ export type SignalEntry = {
   signal_id: string; research_id: string; version: number; market: Market; market_zh: string; title: string; submission: string;
   state: string; state_zh: string; reason: string | null; production: boolean;
   labels: { languages: string[]; mandate: string; data_scope: { categories: string[]; universe: string; snapshot: string };
-    rule_versions: string[]; last_validated: string | null; next_review: string | null; applicability?: string | null };
+    rule_versions: string[]; last_validated: string | null; next_review: string | null; applicability?: string | null;
+    regional?: { headline: string; display: string; tags: string[]; reasons: string[] } | null };
+  mandate?: string | null; base_currency?: string | null; simulated?: boolean;
   run: { run_id: string | null; loop: number | string | null; rank_ic: number | null; rank_ic_t: number | null; credibility: string | null };
   thresholds: Record<string, number>; monitor: { computed_at: string; suggestion: string; suggestion_zh: string; alerts: number } | null;
   events: { action: string; role: string; note: string; at: string; hash: string }[]; monitor_job?: Job | null;
@@ -457,7 +460,12 @@ export type MonitorResult = { signal_id: string; market: Market; computed_at: st
   reference: MonitorPeriod; live: MonitorPeriod; decay: { reference: Record<string, number | null>; live: Record<string, number | null> };
   data_drift: { psi: number | null; missing_live: number | null }; alerts: { kind: string; level: string; title: string; detail: string }[];
   suggestion: string; suggestion_zh: string; diagnosis: string[]; thresholds: Record<string, number>;
-  rolling: { dates: string[]; values: (number | null)[]; live_start: string }; note: string };
+  rolling: { dates: string[]; values: (number | null)[]; live_start: string }; note: string;
+  currency?: { local: string; base: string; mandate: string | null; mandate_name: string | null;
+    reference: CurrencyView; live: CurrencyView } | null };
+export type CurrencyView = { top_local_ann?: number | null; top_base_ann?: number | null; fx_ann?: number | null;
+  universe_local_ann?: number | null; universe_base_ann?: number | null; excess_local_ann?: number | null; excess_base_ann?: number | null;
+  fx_rate_start?: number | null; fx_rate_end?: number | null; capacity_base?: number | null };
 export type Management = {
   regions: Record<string, { runs: number; runs_done: number; adopted_rounds: number; cost_usd: number; avg_duration_min: number;
     jobs_failed: number; jobs_queued: number; validations: number }>;
