@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Badge, ErrorBox, Loading, Notice, Panel, Seg } from "../components/ui";
-import { api, visibleMarkets, type Idea, type IdeaChannel, type IdeaDetail, type IdeaInput, type IdeaList, type Market } from "../api";
+import { api, visibleMarkets, type Idea, type IdeaChannel, type IdeaDetail, type IdeaInput, type IdeaList, type IdeaSuggestion, type Market } from "../api";
 import { useDraft } from "../draft";
 import { MARKET_LABEL, useAsync } from "../lib";
 
@@ -43,12 +43,31 @@ function Submit({ meta, actor, setActor, onCreated }: { meta: IdeaList; actor: s
   const [confirm, setConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // AI 默认假设（Spec 第 17.11 节）：论文以外的渠道打开即预填，每次不同；"换一个"重新生成
+  const [sug, setSug] = useState<IdeaSuggestion | null>(null);
+  const [sugBusy, setSugBusy] = useState(false);
+  const [sugErr, setSugErr] = useState<string | null>(null);
+  const [seen, setSeen] = useState<string[]>([]);
+  async function suggest(channel: IdeaChannel) {
+    if (channel === "paper") { setSug(null); return; }
+    setSugBusy(true); setSugErr(null);
+    try {
+      const r = await api.ideaSuggest(channel, markets.length ? markets : visibleMarkets(), seen.slice(-20));
+      setSug(r); setSeen((xs) => [...xs, r.title]);
+      setTitle(r.title); setBody(r.body);
+      setExtra((e) => ({ ...e, direction: r.direction, period: r.period, feedback_role: r.feedback_role }));
+      if (r.markets.length) setMarkets(r.markets.filter((m) => visibleMarkets().includes(m)));
+    } catch (e) { setSugErr((e as Error).message); } finally { setSugBusy(false); }
+  }
+  useEffect(() => { suggest(ch); }, [ch]); // eslint-disable-line react-hooks/exhaustive-deps
+  const edited = !!sug && (sug.title !== title.trim() || sug.body !== body.trim());
   const x = (k: string) => extra[k] ?? "";
   const setX = (k: string, v: string) => setExtra((e) => ({ ...e, [k]: v }));
   async function submit() {
     setBusy(true); setError(null);
     try {
-      const input: IdeaInput = { channel: ch, title: title.trim(), body: body.trim(), markets, submitted_by: actor.trim(), confirm_no_client_data: confirm };
+      const input: IdeaInput = { channel: ch, title: title.trim(), body: body.trim(), markets, submitted_by: actor.trim(), confirm_no_client_data: confirm,
+        ai_suggestion: ch !== "paper" ? sug : null };
       if (ch === "hypothesis") input.direction = x("direction");
       if (ch === "experience") input.period = x("period");
       if (ch === "feedback") input.feedback_role = x("feedback_role") || meta.feedback_roles[0];
@@ -60,15 +79,33 @@ function Submit({ meta, actor, setActor, onCreated }: { meta: IdeaList; actor: s
       }
       saveActor(actor.trim());
       const idea = await api.createIdea(input);
-      setTitle(""); setBody(""); setExtra({}); setFile(null); setConfirm(false);
+      setTitle(""); setBody(""); setExtra({}); setFile(null); setConfirm(false); setSug(null);
       onCreated(idea);
+      suggest(ch);                                   // 提交后给出下一条不同的建议
     } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   }
   const [bodyLabel, placeholder] = BODY_LABEL[ch];
   return (
     <Panel eyebrow="人工渠道：提交后进入线索列表，由研究员挑选转为研究立项" title="提交线索">
       <div className="flex flex-col gap-3">
-        <Seg label="渠道" value={ch} options={MANUAL} onChange={(v) => { setCh(v); setError(null); }} />
+        <Seg label="渠道" value={ch} options={MANUAL} onChange={(v) => { setCh(v); setError(null); setTitle(""); setBody(""); setExtra({}); }} />
+        {ch !== "paper" && (
+          <div className="border border-accent/40 bg-accent/5 rounded p-3 text-sm flex flex-col gap-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge tone="accent">AI 默认假设</Badge>
+              {sug && <span className="text-xs text-faint">研究角度：{sug.angle} · {sug.model} · 提示词 {sug.prompt_version}{edited ? " · 已修改" : ""}</span>}
+              <button type="button" className="btn h-7 px-2 text-xs ml-auto" disabled={sugBusy} onClick={() => suggest(ch)}>{sugBusy ? "AI 生成中…" : "换一个"}</button>
+            </div>
+            {sugBusy && !sug && <p className="text-muted">AI 正在根据平台数据、市场差异和因子库生成建议（约 5–20 秒）…</p>}
+            {sugErr && <p className="text-xs text-bad">{sugErr}</p>}
+            {sug && <>
+              <p className="text-muted">{sug.why_zh}</p>
+              {sug.grounds.length > 0 && <details className="text-xs text-faint"><summary className="cursor-pointer">AI 参考的平台知识（{sug.grounds.length} 条，只含名称与说明）</summary>
+                <ul className="list-disc pl-4 mt-1">{sug.grounds.map((g) => <li key={g}>{g.length > 140 ? `${g.slice(0, 140)}…` : g}</li>)}</ul></details>}
+              <p className="text-xs text-faint">已预填到下方，可直接修改；{ch === "experience" ? "经验请改成你自己的观察。" : ch === "feedback" ? "反馈请改成真实收到的内容。" : "提交后研究员仍须挑选、立项并通过检验。"}</p>
+            </>}
+          </div>
+        )}
         <label className="text-sm">标题
           <input id="idea-title" className="field mt-1" value={title} maxLength={200} onChange={(e) => setTitle(e.target.value)} placeholder="一句话概括" />
         </label>
@@ -160,6 +197,15 @@ function Detail({ id, actor, onChanged }: { id: string; actor: string; onChanged
   const [err, setErr] = useState<string | null>(null);
   const { update } = useDraft();
   const navigate = useNavigate();
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiErr, setAiErr] = useState<string | null>(null);
+  const genAi = async () => {                        // 自动回流线索：AI 改写为研究假设（只生成一次，存入线索）
+    setAiBusy(true); setAiErr(null);
+    try { await api.ideaAiHypothesis(id); reload(); } catch (e) { setAiErr((e as Error).message); } finally { setAiBusy(false); }
+  };
+  useEffect(() => {
+    if (data && AUTO.has(data.channel) && !data.ai_hypothesis && !aiBusy && !aiErr) genAi();
+  }, [data]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     setPicked((data?.extraction?.factors ?? []).filter((f) => f.availability.ok).map((f) => f.key));
     setTarget(data?.similar?.ideas[0]?.id ?? data?.similar?.research[0]?.ref ?? "");
@@ -188,6 +234,22 @@ function Detail({ id, actor, onChanged }: { id: string; actor: string; onChanged
           {Object.keys(d.fields).length > 0 && <div className="text-sm text-muted">{Object.entries(d.fields).map(([k, v]) =>
             `${({ direction: "方向", period: "经验时间段", feedback_role: "反馈来源" } as Record<string, string>)[k] ?? k}：${v}`).join("；")}</div>}
           {d.source_ref && <div className="text-sm">来源：<SourceLink ref_={d.source_ref} /></div>}
+          {AUTO.has(d.channel) && (
+            <div className="border border-accent/40 bg-accent/5 rounded p-3 text-sm flex flex-col gap-1">
+              <div className="flex items-center gap-2"><Badge tone="accent">AI 研究假设</Badge>
+                {d.ai_hypothesis && <span className="text-xs text-faint">{d.ai_hypothesis.model} · 提示词 {d.ai_hypothesis.prompt_version} · {d.ai_hypothesis.at.slice(0, 16).replace("T", " ")} UTC</span>}</div>
+              {aiBusy && <p className="text-muted">AI 正在把这条平台记录改写为可检验的研究假设…</p>}
+              {aiErr && <p className="text-xs text-bad">{aiErr} <button type="button" className="btn h-6 px-2 text-xs" onClick={genAi}>重试</button></p>}
+              {d.ai_hypothesis && <>
+                <div className="font-medium">{d.ai_hypothesis.title}</div>
+                <p className="leading-relaxed">{d.ai_hypothesis.hypothesis}</p>
+                {d.ai_hypothesis.direction && <p className="text-xs text-muted">方向：{d.ai_hypothesis.direction}</p>}
+                <p className="text-xs text-muted">{d.ai_hypothesis.why_zh}</p>
+                <p className="text-xs text-faint">转为研究立项时使用这条假设，可在研究立项页修改。</p>
+              </>}
+            </div>
+          )}
+          {d.ai_suggested && <div className="text-xs text-faint">采用 AI 默认假设（{d.ai_suggested.model} · {d.ai_suggested.prompt_version} · 研究角度：{d.ai_suggested.angle}）{d.ai_suggested.edited ? "，提交人已修改" : "，未修改"}</div>}
           {d.document && (
             <div className="text-sm border border-line rounded p-3 flex flex-col gap-1">
               <div className="label">文档</div>
@@ -247,7 +309,7 @@ function Detail({ id, actor, onChanged }: { id: string; actor: string; onChanged
           {d.links.duplicate_of && <div className="text-sm text-muted">重复，指向：<span className="num text-xs">{d.links.duplicate_of}</span></div>}
           <div className="flex flex-col gap-2 border border-line rounded p-3">
             <div className="label">处理（处理人：{who || "请先在左侧填写提交人 / 处理人"}）</div>
-            {open && <button className="btn btn-primary self-start" disabled={busy || (d.channel === "paper" && picked.length === 0)} onClick={convert}>
+            {open && <button className="btn btn-primary self-start" disabled={busy || (d.channel === "paper" && picked.length === 0) || (AUTO.has(d.channel) && !d.ai_hypothesis)} onClick={convert}>
               转为研究立项{d.channel === "paper" ? `（${picked.length} 个因子）` : ""}</button>}
             <input id="idea-note" className="field" value={note} onChange={(e) => setNote(e.target.value)} placeholder="原因或意见" />
             <div className="flex flex-wrap gap-2">

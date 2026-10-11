@@ -542,6 +542,8 @@ export type Idea = {
   similar?: { research: { kind: string; kind_zh: string; title: string; ref: string; score: number }[];
     ideas: { id: string; title: string; channel_zh: string; overlap: number }[]; note: string };
   extract_error?: string;
+  ai_suggested?: { id: string; title: string; body: string; model: string; prompt_version: string; angle: string; why_zh: string; grounds: string[]; edited: boolean };
+  ai_hypothesis?: IdeaAiHypothesis;
 };
 export type IdeaDetail = Idea & { events: { action: string; by: string; note?: string; at: string; hash: string; target?: string; research?: string }[];
   chain: { ok: boolean; events?: number }; action_zh: Record<string, string>; status_zh: Record<string, string>; paragraph_count: number };
@@ -551,7 +553,11 @@ export type IdeaList = { items: Idea[]; counts: { channel: Record<string, number
 export type IdeaInput = { channel: IdeaChannel; title: string; body: string; markets: Market[]; submitted_by: string; role?: string;
   confirm_no_client_data: boolean; direction?: string; period?: string; feedback_role?: string;
   document?: { name?: string; content_base64?: string; source: string; licence: string; licence_note?: string; published?: string;
-    sample_start?: string; sample_end?: string } };
+    sample_start?: string; sample_end?: string };
+  ai_suggestion?: IdeaSuggestion | null };
+export type IdeaSuggestion = { id: string; channel: IdeaChannel; title: string; body: string; direction: string; period: string; feedback_role: string;
+  markets: Market[]; why_zh: string; grounds: string[]; angle: string; model: string; prompt_version: string; at: string };
+export type IdeaAiHypothesis = { title: string; hypothesis: string; direction: string; why_zh: string; model: string; prompt_version: string; at: string };
 export type IdeaPrefill = { idea_id: string; hypothesis: string; direction: string; markets: Market[]; questions: string[]; channel_zh: string; title: string };
 
 // ---------------------------------------------------------------- 因子库与语义检索（BR-25、35）
@@ -677,4 +683,6 @@ export const api = {
   extractIdea: (id: string, by: string) => post<Idea>(`/ideas/${id}/extract?by=${encodeURIComponent(by)}`, {}),
   ideaAct: (id: string, body: { action: string; by: string; note?: string; target?: string }) => post<Idea>(`/ideas/${id}/act`, body),
   ideaPrefill: (id: string, factors: string[]) => post<IdeaPrefill>(`/ideas/${id}/convert`, { factors }),
+  ideaSuggest: (channel: IdeaChannel, markets: Market[], avoid: string[]) => post<IdeaSuggestion>("/ideas/suggest", { channel, markets, avoid }),
+  ideaAiHypothesis: (id: string) => post<Idea>(`/ideas/${id}/ai-hypothesis`, {}),
 };

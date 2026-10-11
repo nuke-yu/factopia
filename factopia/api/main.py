@@ -515,6 +515,7 @@ class IdeaIn(BaseModel):
     period: str | None = None
     feedback_role: str | None = None
     document: dict | None = None
+    ai_suggestion: dict | None = None
 
 
 @app.post("/api/ideas")
@@ -530,6 +531,34 @@ def ideas_create(body: IdeaIn):
         except (I.IdeaError, drafting.DraftError) as e:
             idea = {**idea, "extract_error": str(e)}
     return idea
+
+
+class IdeaSuggestIn(BaseModel):
+    channel: str
+    markets: list[str] = []
+    avoid: list[str] = []
+
+
+@app.post("/api/ideas/suggest")
+def ideas_suggest(body: IdeaSuggestIn):
+    """AI 默认假设（第 17.11 节）：投资假设 / 研究员经验 / 人工反馈渠道，每次不同。约 10–30 秒。"""
+    from factopia.ideas import suggest
+    ms = [m for m in body.markets if access.can(m)] or access.markets()
+    try:
+        return suggest.suggest(body.channel, ms, body.avoid[:20])
+    except (_ideas().IdeaError, drafting.DraftError) as e:
+        raise HTTPException(502 if isinstance(e, drafting.DraftError) else 422, str(e))
+
+
+@app.post("/api/ideas/{iid}/ai-hypothesis")
+def ideas_ai_hypothesis(iid: str):
+    """自动回流线索：AI 改写为可检验的研究假设（只生成一次，存入线索并留痕）。"""
+    _idea_check(iid)
+    from factopia.ideas import suggest
+    try:
+        return suggest.auto_hypothesis(iid)
+    except (_ideas().IdeaError, drafting.DraftError) as e:
+        raise HTTPException(502 if isinstance(e, drafting.DraftError) else 422, str(e))
 
 
 @app.post("/api/ideas/{iid}/extract")

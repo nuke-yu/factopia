@@ -42,7 +42,7 @@ CHANNELS = {
     "approval": {"zh": "审批退回 / 拒绝", "manual": False},
 }
 STATUS_ZH = {"new": "待处理", "converted": "已转立项", "duplicate": "重复", "dismissed": "不跟进"}
-ACTION_ZH = {"create": "创建", "extract": "抽取候选因子", "convert": "转为研究立项", "duplicate": "标为重复",
+ACTION_ZH = {"create": "创建", "extract": "抽取候选因子", "ai_hypothesis": "AI 改写为研究假设", "convert": "转为研究立项", "duplicate": "标为重复",
              "dismiss": "不跟进", "comment": "意见", "reopen": "重新打开"}
 LICENCES = {"internal": "团队内部资料", "open": "公开许可", "purchased": "已购买授权"}
 FEEDBACK_ROLES = ("投资组合经理", "客户团队", "本地研究员（香港）", "本地研究员（英国）", "本地研究员（法国）", "合规", "模型风险", "其他")
@@ -287,9 +287,14 @@ def create(body: dict) -> dict:
             (d / name).write_bytes(raw)
         (d / "paragraphs.json").write_text(json.dumps(paras, ensure_ascii=False, indent=0), encoding="utf-8")
         idea["leakage"] = leakage(idea["document"])
+    sg = body.get("ai_suggestion") or None                 # 采用了 AI 默认假设（第 17.11 节）：记录原稿与是否经人修改（BR-46）
+    if sg and ch != "paper":
+        idea["ai_suggested"] = {k: sg.get(k) for k in ("id", "title", "body", "model", "prompt_version", "angle", "why_zh", "grounds")} | {
+            "edited": str(sg.get("title") or "").strip() != title or str(sg.get("body") or "").strip() != text}
     idea["similar"] = similar(idea)
     _save(idea)
-    _append(iid, {"action": "create", "by": by, "channel": ch, "sha256": idea.get("document", {}).get("sha256") if ch == "paper" else None})
+    _append(iid, {"action": "create", "by": by, "channel": ch, "sha256": idea.get("document", {}).get("sha256") if ch == "paper" else None,
+                  "ai_suggestion": (idea.get("ai_suggested") or {}).get("id"), "ai_edited": (idea.get("ai_suggested") or {}).get("edited")})
     return idea
 
 
@@ -419,6 +424,9 @@ def prefill(iid: str, factor_keys: list[str] | None = None) -> dict:
         hyp = (f"依据《{idea['title']}》（来源：{doc['source']}；{doc['licence_zh']}）中的候选因子，检验其在所选市场是否预测未来收益：\n"
                + "\n".join(f"- {f['name']}：{f['description_zh']}（计算：{f['formula']}；经济逻辑：{f['logic_zh']}；原文段落 P{'、P'.join(map(str, f['cites']))}）" for f in fs))
         direction = direction or "；".join(f["name"] for f in fs)
+    elif idea.get("ai_hypothesis"):                       # 自动回流线索：使用 AI 改写的研究假设（第 17.11 节）
+        hyp = idea["ai_hypothesis"]["hypothesis"]
+        direction = direction or idea["ai_hypothesis"].get("direction", "")
     else:
         hyp = idea["body"]
     return {"idea_id": iid, "hypothesis": hyp[:3900], "direction": direction[:900], "markets": idea["markets"] or list(MARKETS),
