@@ -212,11 +212,14 @@ def make_draft(inputs: dict) -> dict:
             retry_note = f"\n\nYour previous answer was rejected: {e}. Fix it and answer again with the full JSON object."
     draft["region_diff"] = regions.differences(inputs["markets"], mandates.load(inputs["mandate"]), draft["data_needs"])
     draft["system_questions"] = _system_questions(draft, inputs)
+    if inputs.get("idea_id"):                                  # 来自研究线索池（第 17 章）：防泄漏与文档许可须确认
+        from factopia import ideas
+        draft["system_questions"] += ideas.confirm_questions(inputs["idea_id"])
     draft["constraints"] = mandate["constraints"] + [t["constraint_en"] for t in draft["mandate_interpretations"] if t["constraint_en"]] + PLATFORM_CONSTRAINTS
     return {
         "draft": draft,
         "evidence": {"alpha158": alpha, "past_runs": past, "groups": inputs.get("groups") or [], "internal": internal},
         "mandate": mandate,
-        "meta": {"model": cfg["model"], "prompt_version": PROMPT_VERSION, **tokens,
+        "meta": {"model": cfg["model"], "prompt_version": PROMPT_VERSION, **tokens, "idea_id": inputs.get("idea_id"),
                  "seconds": round(time.time() - t0, 1), "at": datetime.now(timezone.utc).isoformat(timespec="seconds")},
     }

@@ -21,7 +21,7 @@ export default function RunPage() {
     <div className="flex flex-col gap-5">
       <div className="flex flex-wrap items-end gap-4">
         <div>
-          <div className="label">03 · 运行中</div>
+          <div className="label">04 · 运行中</div>
           <h1 className="font-display text-2xl font-semibold tracking-wide mt-1">AI 研究过程</h1>
           <p className="text-muted text-sm mt-1 max-w-[80ch]">每一轮：AI 提出假设 → 写代码并自检修错 → Qlib 回测 → AI 评审并决定下一步。运行中每 5 秒刷新；已完成的运行可按真实时间戳加速回放。</p>
         </div>

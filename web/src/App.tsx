@@ -35,6 +35,7 @@ const SignalsPage = lazyPage(() => import("./pages/SignalsPage"));
 const OverviewPage = lazyPage(() => import("./pages/OverviewPage"));
 const AcceptancePage = lazyPage(() => import("./pages/AcceptancePage"));
 const LibraryPage = lazyPage(() => import("./pages/LibraryPage"));
+const IdeasPage = lazyPage(() => import("./pages/IdeasPage"));
 
 /** 页面出错时显示原因与刷新按钮，而不是空白页。切换页面后自动恢复。 */
 class PageBoundary extends Component<{ children: ReactNode; resetKey: string }, { error: Error | null }> {
@@ -62,7 +63,8 @@ function Pages() {
     <PageBoundary resetKey={location.pathname}>
       <Suspense fallback={<div className="label">加载中…</div>}>
         <Routes>
-          <Route path="/" element={<Navigate to="/projects" replace />} />
+          <Route path="/" element={<Navigate to="/ideas" replace />} />
+          <Route path="/ideas" element={<IdeasPage />} />
           <Route path="/projects" element={<ProjectsPage />} />
           <Route path="/run" element={<RunPage />} />
           <Route path="/research" element={<ResearchPage />} />
@@ -77,7 +79,7 @@ function Pages() {
           <Route path="/signals" element={<SignalsPage />} />
           <Route path="/overview" element={<OverviewPage />} />
           <Route path="/acceptance" element={<AcceptancePage />} />
-          <Route path="*" element={<Navigate to="/projects" replace />} />
+          <Route path="*" element={<Navigate to="/ideas" replace />} />
         </Routes>
       </Suspense>
     </PageBoundary>
@@ -85,11 +87,12 @@ function Pages() {
 }
 
 const STEPS = [
-  { to: "/projects", no: "00", name: "研究项目", hint: "选择或新建" },
-  { to: "/research", no: "01", name: "研究立项", hint: "范围与假设" },
-  { to: "/audit", no: "02", name: "审核", hint: "确认研究规格" },
-  { to: "/run", no: "03", name: "运行中", hint: "AI 研究过程" },
-  { to: "/results", no: "04", name: "结果", hint: "挖掘与验证" },
+  { to: "/ideas", no: "00", name: "线索池", hint: "信息输入" },
+  { to: "/projects", no: "01", name: "研究项目", hint: "选择或新建" },
+  { to: "/research", no: "02", name: "研究立项", hint: "范围与假设" },
+  { to: "/audit", no: "03", name: "审核", hint: "确认研究规格" },
+  { to: "/run", no: "04", name: "运行中", hint: "AI 研究过程" },
+  { to: "/results", no: "05", name: "结果", hint: "挖掘与验证" },
 ];
 
 function ThemeToggle() {
@@ -123,7 +126,7 @@ export default function App() {
             <nav className="flex items-center gap-1 overflow-x-auto" aria-label="研究流程">
               {STEPS.map((s, i) => (
                 <div key={s.to} className="flex items-center">
-                  {i > 0 && <span className="mx-0.5 text-faint" aria-hidden>→</span>}
+                  {i > 0 && <span className="hidden 2xl:inline mx-0.5 text-faint" aria-hidden>→</span>}
                   <NavLink
                     to={s.to}
                     className={({ isActive }) =>

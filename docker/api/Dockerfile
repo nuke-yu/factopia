@@ -21,6 +21,7 @@ COPY factopia/portfolio factopia/portfolio
 COPY factopia/approval factopia/approval
 COPY factopia/signals factopia/signals
 COPY factopia/acceptance factopia/acceptance
+COPY factopia/ideas factopia/ideas
 COPY factopia/sources.py factopia/access.py factopia/
 COPY factopia/factors/__init__.py factopia/factors/stats.py factopia/factors/families.py factopia/factors/
 COPY factopia/validate/__init__.py factopia/validate/metrics.py factopia/validate/

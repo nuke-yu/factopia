@@ -234,7 +234,11 @@ def submit(m: dict, by: str, note: str = "") -> dict:
         "rule_packs": {k: _sha(v) for k, v in packs.items()},
         "code_fingerprint": code_fingerprint(), "git_commit": os.environ.get("FACTOPIA_GIT_COMMIT"),
         "translations": m.get("translations"),
+        "idea": None,
     }
+    if (spec.get("ai_draft") or {}).get("idea_id"):           # 研究线索来源（第 17.6 节）
+        from factopia import ideas
+        materials["idea"] = ideas.lineage(spec["ai_draft"]["idea_id"])
     tr_files = {}
     if (m.get("translations") or {}).get("datasets"):         # 冻结翻译：生效译文、概念、复核记录、术语表（第 14.22 节）
         from factopia.text import review as treview
@@ -407,6 +411,9 @@ def evidence_zip(sid: str) -> tuple[str, bytes]:
         f"# 审计证据包 · {s['id']}", "",
         f"研究：{mt['title']}（{s['research_id']} v{s['version']}）；状态：{STATUS_ZH[s['status']]}；获批市场：{'、'.join(MARKET_ZH[m] for m in s.get('approved_markets') or []) or '—'}",
         f"提交指纹（材料整体 sha256）：{s['fingerprint']}", "",
+        *([f"研究线索：{mt['idea']['id']}（{mt['idea']['channel_zh']}，{mt['idea']['submitted_by']} 提交于 {mt['idea']['created_at'][:10]}：{mt['idea']['title']}）"
+           + (f"；文档 {mt['idea']['document']['source']}（{mt['idea']['document']['licence_zh']}），sha256 {(mt['idea']['document']['sha256'] or '')[:16]}…" if mt['idea'].get('document') else ""), ""]
+          if mt.get("idea") else []),
         "## 当时使用了什么数据",
         *[f"- {MARKET_ZH[m]} 标准化行情 sha256：{v}" for m, v in mt["data_snapshot"].items()],
         "- 数据来源与许可：materials/rules/data_sources.yaml", "",

@@ -119,6 +119,7 @@ $DC run --rm app python -m factopia.export.alpha158
 | `factopia/text/` | 多语言公告与文本信号：法国 AMF 真实公告、香港 / 英国模拟数据，概念标签 / 译文 / 置信度、语言专家复核、按实际可获取时间生成信号、三市场检验、带引用的检索与 AI 摘要（Spec 第 14.9 节）；`python -m factopia.text all`，页面「情报台」；`text/research.py` 为文本信号研究（研究规格信号来源选"文本"后由后台运行器执行，输出与 RD-Agent 相同格式的结果，第 14.17 节） |
 | `factopia/research/regions.py`、`library.py`、`semantic.py` | 地区差异清单；内部因子库（Alpha158、获批信号、团队专有因子接入口 `configs/factor_library/`）；知识检索（大模型三语改写 + BM25）（Spec 第 14.18 节）；页面「因子库」 |
 | `factopia/access.py` | 演示用地区视角（不是登录鉴权）：按 `configs/access/regions.yaml` 过滤数据与信号，越权留痕（Spec 第 14.20 节）；页面顶部"地区视角" |
+| `factopia/ideas/` | 研究线索池（首页"00 线索池"）：投资假设、论文 / 研报、研究员经验、人工反馈，以及监控预警、组合归因、审批退回自动回流；敏感信息拦截、论文许可与候选因子抽取、防泄漏提示、转研究立项并可追溯（Spec 第 17 章） |
 | `factopia/refdata/vendor.py` | 数据商参考数据导入：历史成分股与合并 / 配股 / 退市等公司行动，统一 CSV 模板（`configs/refdata/vendor_templates/`），逐行校验，`python -m factopia.refdata import-membership / import-actions`（Spec 第 14.21 节） |
 | `factopia/sources.py` | 行情来源：真实标准化行情与指数，或模拟文本数据集的模拟行情（等权基准）；运行结果记录来源，诊断、组合、监控按运行读取 |
 | `configs/text/glossary.yaml` | 四类风险概念与中 / 英 / 法术语表（带版本） |

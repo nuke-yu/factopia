@@ -126,10 +126,11 @@ export type DraftResult = {
   };
   evidence: { groups: string[]; alpha158: EvidenceAlpha[]; internal?: InternalEvidence[]; past_runs: { run_id: string; market: Market; loop: number; hypothesis: string; adopted: boolean }[] };
   mandate: Mandate;
-  meta: { model: string; prompt_version: string; prompt_tokens: number; completion_tokens: number; seconds: number; at: string };
+  meta: { model: string; prompt_version: string; prompt_tokens: number; completion_tokens: number; seconds: number; at: string; idea_id?: string | null };
 };
 export type DraftInput = {
   hypothesis: string; direction: string; markets: Market[]; horizon: number; mandate: string; groups: string[]; include_past_runs: boolean;
+  idea_id?: string | null;
 };
 export type RegionDiff = {
   markets: Market[]; markets_version: string; rule_packs: Partial<Record<Market, string>>; differs: number; note: string;
@@ -523,6 +524,36 @@ const get = <T,>(path: string) => request<T>(path);
 const post = <T,>(path: string, body: unknown) =>
   request<T>(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
+// ---------------------------------------------------------------- 研究线索池（Spec 第 17 章）
+export type IdeaChannel = "hypothesis" | "paper" | "experience" | "feedback" | "monitor" | "portfolio" | "approval";
+export type IdeaStatus = "new" | "converted" | "duplicate" | "dismissed";
+export type IdeaFactor = { key: string; name: string; description_zh: string; formula: string; logic_zh: string; data_needs: string[];
+  availability: { ok: boolean; missing: string[]; needs_zh: string[] }; cites: number[]; quotes: { p: number; text: string }[] };
+export type IdeaDocument = { name: string | null; sha256: string | null; bytes: number | null; pages: number | null; paragraphs: number;
+  source: string; licence: string; licence_zh: string; licence_note: string; published: string | null; sample_start: string | null;
+  sample_end: string | null; ai_filled?: string[] };
+export type Idea = {
+  id: string; channel: IdeaChannel; channel_zh: string; title: string; body: string; excerpt?: string; language: "zh" | "en" | "fr";
+  markets: Market[]; submitted_by: string; role: string | null; source_ref: Record<string, string> | null; created_at: string;
+  status: IdeaStatus; links: { research?: string[]; duplicate_of?: string }; fields: Record<string, string>;
+  document?: IdeaDocument; leakage?: { overlap: boolean; known: boolean; note: string };
+  extraction?: { factors: IdeaFactor[]; dropped_no_cite: number; paragraphs_used: number; paragraphs_total: number; summary_zh: string;
+    model: string; prompt_version: string; at: string };
+  similar?: { research: { kind: string; kind_zh: string; title: string; ref: string; score: number }[];
+    ideas: { id: string; title: string; channel_zh: string; overlap: number }[]; note: string };
+  extract_error?: string;
+};
+export type IdeaDetail = Idea & { events: { action: string; by: string; note?: string; at: string; hash: string; target?: string; research?: string }[];
+  chain: { ok: boolean; events?: number }; action_zh: Record<string, string>; status_zh: Record<string, string>; paragraph_count: number };
+export type IdeaList = { items: Idea[]; counts: { channel: Record<string, number>; status: Record<string, number> }; synced: number;
+  channels: Record<IdeaChannel, string>; manual: IdeaChannel[]; status_zh: Record<IdeaStatus, string>; licences: Record<string, string>;
+  feedback_roles: string[] };
+export type IdeaInput = { channel: IdeaChannel; title: string; body: string; markets: Market[]; submitted_by: string; role?: string;
+  confirm_no_client_data: boolean; direction?: string; period?: string; feedback_role?: string;
+  document?: { name?: string; content_base64?: string; source: string; licence: string; licence_note?: string; published?: string;
+    sample_start?: string; sample_end?: string } };
+export type IdeaPrefill = { idea_id: string; hypothesis: string; direction: string; markets: Market[]; questions: string[]; channel_zh: string; title: string };
+
 // ---------------------------------------------------------------- 因子库与语义检索（BR-25、35）
 export type LibraryItem = {
   id: string; name: string; source: "alpha158" | "approved" | "proprietary"; status: string; group: string | null;
@@ -639,4 +670,11 @@ export const api = {
   runner: () => get<RunnerStatus>("/runner"),
   resumeRunner: () => post<RunnerStatus>("/runner/resume", {}),
   context: (m: Market, lang: "zh" | "en" = "zh") => get<{ markdown: string }>(`/context/${m}?lang=${lang}`),
+  ideas: (q: { channel?: string; status?: string; market?: string } = {}) =>
+    get<IdeaList>(`/ideas?${new URLSearchParams(Object.entries(q).filter(([, v]) => v) as [string, string][]).toString()}`),
+  idea: (id: string) => get<IdeaDetail>(`/ideas/${id}`),
+  createIdea: (body: IdeaInput) => post<Idea>("/ideas", body),
+  extractIdea: (id: string, by: string) => post<Idea>(`/ideas/${id}/extract?by=${encodeURIComponent(by)}`, {}),
+  ideaAct: (id: string, body: { action: string; by: string; note?: string; target?: string }) => post<Idea>(`/ideas/${id}/act`, body),
+  ideaPrefill: (id: string, factors: string[]) => post<IdeaPrefill>(`/ideas/${id}/convert`, { factors }),
 };

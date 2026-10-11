@@ -335,6 +335,7 @@ class DraftIn(BaseModel):
     mandate: str
     groups: list[str] = []
     include_past_runs: bool = True
+    idea_id: str | None = None          # 来自研究线索池（第 17 章）
 
 
 def _check_markets(markets: list[str]) -> None:
@@ -465,7 +466,100 @@ def lock_version(body: dict):
         hits = [f"{h['rule_id']} {h['title']}（{h['reason']}）" for h in pre["hits"] if h["severity"] == "block"]
         raise HTTPException(422, "立项预检命中阻断规则，不能锁定：" + "；".join(hits))
     spec["precheck_setup"] = pre
-    return store.save_version(spec)
+    saved = store.save_version(spec)
+    if (spec.get("ai_draft") or {}).get("idea_id"):          # 研究线索转立项（第 17.6 节）
+        from factopia import ideas
+        ideas.mark_converted(spec["ai_draft"]["idea_id"], saved["id"], saved["version"], LOCKED_BY)
+    return saved
+
+
+# ---------------------------------------------------------------- 研究线索池（第 17 章，EXT-01）
+
+def _ideas():
+    from factopia import ideas
+    return ideas
+
+
+def _idea_call(fn, *a, **k):
+    I = _ideas()
+    try:
+        return fn(*a, **k)
+    except I.IdeaError as e:
+        raise HTTPException(404 if "不存在" in str(e) else 422, str(e))
+
+
+def _idea_check(iid: str) -> None:
+    _idea_call(_ideas().detail, iid)                   # 不存在 → 404；地区不可见 → 403（留痕）
+
+
+@app.get("/api/ideas")
+def ideas_list(channel: str | None = None, status: str | None = None, market: str | None = Query(None, pattern="^(hk|uk|fr)$")):
+    """研究线索池：先同步自动回流（监控预警、组合归因、审批退回），按地区视角过滤。"""
+    return _ideas().listing(channel, status, market)
+
+
+@app.get("/api/ideas/{iid}")
+def ideas_detail(iid: str):
+    return _idea_call(_ideas().detail, iid)
+
+
+class IdeaIn(BaseModel):
+    channel: str
+    title: str = Field(max_length=200)
+    body: str = Field("", max_length=20000)
+    markets: list[str] = []
+    submitted_by: str = Field(max_length=60)
+    role: str | None = None
+    confirm_no_client_data: bool = False
+    direction: str | None = None
+    period: str | None = None
+    feedback_role: str | None = None
+    document: dict | None = None
+
+
+@app.post("/api/ideas")
+def ideas_create(body: IdeaIn):
+    """提交线索；论文渠道文件以 base64 传入（≤ 20 MB），提交后自动抽取候选因子（失败不影响提交）。"""
+    for m in body.markets:
+        access.require(m, "在其他地区市场提交线索")
+    I = _ideas()
+    idea = _idea_call(I.create, body.model_dump())
+    if idea["channel"] == "paper":
+        try:
+            idea = I.extract(idea["id"], body.submitted_by)
+        except (I.IdeaError, drafting.DraftError) as e:
+            idea = {**idea, "extract_error": str(e)}
+    return idea
+
+
+@app.post("/api/ideas/{iid}/extract")
+def ideas_extract(iid: str, by: str = Query("研究员（演示，未登录）", max_length=60)):
+    _idea_check(iid)
+    return _idea_call(_ideas().extract, iid, by)
+
+
+class IdeaActIn(BaseModel):
+    action: str
+    by: str = Field(max_length=60)
+    note: str = Field("", max_length=1000)
+    target: str | None = None
+
+
+@app.post("/api/ideas/{iid}/act")
+def ideas_act(iid: str, body: IdeaActIn):
+    _idea_check(iid)
+    return _idea_call(_ideas().act, iid, body.action, body.by, body.note, body.target)
+
+
+class IdeaConvertIn(BaseModel):
+    factors: list[str] = []
+
+
+@app.post("/api/ideas/{iid}/convert")
+def ideas_convert(iid: str, body: IdeaConvertIn):
+    """生成预填到研究立项页的假设文字；锁定研究版本时线索才标记为已转立项。"""
+    _idea_check(iid)
+    return _idea_call(_ideas().prefill, iid, body.factors or None)
 
 
 # ---------------------------------------------------------------- 地区规则包与预检（第 14.12 节）

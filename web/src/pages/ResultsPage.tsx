@@ -25,7 +25,7 @@ export default function ResultsPage() {
     <div className="flex flex-col gap-5">
       <div className="flex flex-wrap items-end gap-4">
         <div>
-          <div className="label">04 · 结果</div>
+          <div className="label">05 · 结果</div>
           <h1 className="font-display text-2xl font-semibold tracking-wide mt-1">挖掘与验证结果</h1>
         </div>
         <div className="ml-auto flex items-center gap-2">

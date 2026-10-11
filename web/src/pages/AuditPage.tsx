@@ -47,7 +47,7 @@ function Header({ locked, mandate }: { locked: Spec | null; mandate?: string }) 
   return (
     <div className="flex flex-wrap items-end gap-3">
       <div>
-        <div className="label">02 · 审核</div>
+        <div className="label">03 · 审核</div>
         <h1 className="font-display text-2xl font-semibold tracking-wide mt-1">审核研究规格</h1>
         <p className="text-muted mt-1 max-w-[72ch]">逐条检查 AI 起草的内容，修改处与 AI 原稿对比留痕；处理完待确认事项后锁定版本，再在所选市场依次运行。</p>
       </div>

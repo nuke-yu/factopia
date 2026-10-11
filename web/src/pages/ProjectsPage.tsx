@@ -25,7 +25,7 @@ export default function ProjectsPage() {
       <div className="grid gap-5 xl:grid-cols-[minmax(0,7fr)_minmax(0,5fr)] items-stretch">
         <section className="panel overflow-hidden min-h-[360px] relative">
           <div className="absolute left-5 top-5 z-10 max-w-[34ch] pointer-events-none">
-            <div className="label">00 · 研究项目</div>
+            <div className="label">01 · 研究项目</div>
             <h1 className="font-display text-2xl font-semibold tracking-wide mt-1">同一个假设，香港、伦敦、巴黎分别验证</h1>
             <p className="text-muted text-sm mt-2">选择一个研究项目继续，或新建研究。每个项目从立项、审核、运行到结果都有记录。</p>
           </div>

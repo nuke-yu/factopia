@@ -35,7 +35,8 @@ export default function ResearchPage() {
     setBusy(true); setError(null);
     try {
       const r = await api.draft({ hypothesis: draft.hypothesis, direction: draft.direction, markets: draft.markets, horizon: draft.horizon,
-        mandate: draft.mandate, groups: draft.groups.length === cube.data?.groups.length ? [] : draft.groups, include_past_runs: draft.includePastRuns });
+        mandate: draft.mandate, groups: draft.groups.length === cube.data?.groups.length ? [] : draft.groups, include_past_runs: draft.includePastRuns,
+        idea_id: draft.ideaId ?? null });
       setResult(r); setLocked(null);
       navigate("/audit");
     } catch (e) {
@@ -48,10 +49,19 @@ export default function ResearchPage() {
   return (
     <div className="flex flex-col gap-5">
       <div>
-        <div className="label">01 · 研究立项</div>
+        <div className="label">02 · 研究立项</div>
         <h1 className="font-display text-2xl font-semibold tracking-wide mt-1">提出假设，选择研究范围</h1>
         <p className="text-muted mt-1 max-w-[70ch]">研究员只需表达想法和范围；AI 会据此起草研究规格（研究计划、候选方向、可证伪测试），在下一步由你审核确认（Spec 第 16 章）。</p>
       </div>
+      {draft.ideaId && (
+        <div className="panel p-3 flex flex-wrap items-center gap-3 text-sm">
+          <span className="label">来自研究线索</span>
+          <span className="num text-xs">{draft.ideaId}</span>
+          <span className="text-muted">{draft.ideaTitle}</span>
+          <span className="text-xs text-faint">锁定版本后，该线索标记为"已转立项"并指向研究版本；防泄漏与文档许可的确认项会出现在审核页</span>
+          <button type="button" className="btn h-7 px-2 text-xs ml-auto" onClick={() => update({ ideaId: null, ideaTitle: null })}>不关联线索</button>
+        </div>
+      )}
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
         <div className="flex flex-col gap-5 min-w-0">
