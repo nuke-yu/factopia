@@ -340,7 +340,7 @@ function EvidenceList({ result }: { result: DraftResult }) {
       ))}
       {result.evidence.internal && result.evidence.internal.length > 0 && (
         <div>
-          <div className="font-medium">内部知识检索（因子库、以往研究、数据字典）</div>
+          <div className="font-medium">内部知识检索（因子库、以往研究、字段口径）</div>
           <ul className="mt-1 flex flex-col gap-1 text-xs">
             {result.evidence.internal.map((x) => (
               <li key={x.id}><Badge tone="muted">{x.kind_zh}</Badge> <span className="text-text">{x.title}</span>

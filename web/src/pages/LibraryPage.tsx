@@ -5,7 +5,7 @@ import { api, visibleMarkets, type KnowledgeSearch, type LibraryItem } from "../
 import { MARKET_LABEL, useAsync } from "../lib";
 
 // 因子库与知识检索（Spec 第 14.18 节；BR-25、35）：内部因子库（Alpha158、获批信号、团队专有因子接口）
-// 与跨中 / 英 / 法的语义检索（因子库、内部研究、数据字典、经批准的外部公告）
+// 与跨中 / 英 / 法的语义检索（因子库、内部研究、字段口径、经批准的外部公告）
 
 type Src = "all" | LibraryItem["source"];
 const SOURCES: { value: Src; label: string }[] = [

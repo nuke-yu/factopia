@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import EChart from "../components/EChart";
 import { Badge, ErrorBox, Loading, Notice, Panel, Seg, Stat } from "../components/ui";
 import {
   api, type ReviewItem, type TextCompareRow, type TextConcept, type TextDataset, type TextDoc, type TextFiling,
   type TextHit, type TextOverview, type TextSummary,
 } from "../api";
-import { cssVar, fix, MARKET_LABEL, marketColor, signed, useAsync, useThemeVersion } from "../lib";
+import { cssVar, fix, MARKET_LABEL, marketColor, SHOW_FORMULAS, signed, useAsync, useThemeVersion } from "../lib";
 
 // 情报台（Spec 第 11 章；BR-08 至 12、15、49）：多语言公告 → 概念标签 / 译文 / 置信度 → 复核 → 文本信号 → 三市场检验
 
@@ -110,6 +110,59 @@ function Sensitivity({ datasets }: { datasets: TextDataset[] }) {
   );
 }
 
+// 开发阶段公式说明（SHOW_FORMULAS）：每个市场一行，代入该市场的实际数值；口径与 factopia/text/signal.py 的 evaluate / judge 一致
+function verdictWhy(r: TextCompareRow): string {
+  const t = r.rank_ic_t, et = r.event_diff_t ?? null;
+  if (!r.n_days || t == null) return `有效交易日 = ${r.n_days}，主口径无法计算 → 数据不足`;
+  const ev = et == null ? "事件 t 未计算" : et < -2 ? `事件 t = ${fix(et, 2)} < −2（同向显著）` : et > 2 ? `事件 t = ${fix(et, 2)} > 2（反向显著）` : `事件 t = ${fix(et, 2)}（不显著）`;
+  const main = t < -2 ? `主口径 t = ${fix(t, 2)} < −2` : t > 2 ? `主口径 t = ${fix(t, 2)} > 2` : `主口径 −2 ≤ t = ${fix(t, 2)} ≤ 2`;
+  return `${main}；${ev} → ${r.verdict}`;
+}
+
+function FormulaRow({ r, horizon }: { r: TextCompareRow; horizon: number }) {
+  const ic = r.rank_ic_mean, t = r.rank_ic_t;
+  const p = r.event_pessimistic, o = r.event_optimistic, et = r.event_diff_t ?? null;
+  const noDays = !r.n_days || ic == null;
+  const items: [string, string][] = [
+    ["公告", `${r.n_filings} 篇 = ${r.n_companies} 家公司在样本期内的公告数（filings.parquet 行数）`],
+    ["Rank IC", noDays ? "有效交易日 = 0（每天有信号的股票都少于 5 只）→ 无法计算"
+      : `IC_d = Spearman(当天信号, 当天起未来 ${horizon} 日收益)，只算 ≥ 5 只股票有信号的交易日；Rank IC = 平均(IC_d) = ${fix(ic, 3)}（共 ${r.n_days} 个交易日）`],
+    ["t 值", noDays || t == null ? "无法计算"
+      : `t = 平均(IC_d) ÷ Newey-West 标准误（滞后 ${horizon} 日）= ${fix(ic, 4)} ÷ ${fix(ic / t, 4)} = ${fix(t, 2)}`],
+    ["三分组收益差", r.tercile_spread_mean == null ? "无法计算（同上）"
+      : `每天按信号排序分三组：差_d = 信号最高 1/3 的平均收益 − 最低 1/3 的平均收益；平均(差_d) = ${signed(r.tercile_spread_mean, 2)}`],
+    ["悲观 / 乐观组超额", `超额 = 个股生效日起 ${horizon} 日收益 − 同市场等权平均；悲观组 = 风险变化 > 0 的 ${p?.n ?? 0} 次公告，平均 ${signed(p?.mean_excess, 2)}；`
+      + `乐观组 = 风险变化 < 0 的 ${o?.n ?? 0} 次公告，平均 ${signed(o?.mean_excess, 2)}`],
+    ["事件 t 值", et == null || p?.mean_excess == null || o?.mean_excess == null
+      ? `事件数不足（总数需 ≥ 10、每组需 > 2；目前悲观 ${p?.n ?? 0}、乐观 ${o?.n ?? 0}）→ 未计算`
+      : `t = (悲观均值 − 乐观均值) ÷ √(s²悲/n悲 + s²乐/n乐) = (${signed(p.mean_excess, 2)} − ${signed(o.mean_excess, 2)}) ÷ ${signed((p.mean_excess - o.mean_excess) / et, 2).replace("+", "")} = ${fix(et, 2)}（Welch）`],
+    ["结论", verdictWhy(r)],
+  ];
+  return (
+    <tr>
+      <td colSpan={10} className="pb-2 pl-3 font-sans">
+        <div className="border-l-2 border-line pl-3 grid gap-0.5 text-xs text-muted" style={{ gridTemplateColumns: "max-content 1fr" }}>
+          {items.map(([k, v]) => <Fragment key={k}><span className="text-faint pr-3">{k}</span><span className="num">{v}</span></Fragment>)}
+        </div>
+      </td>
+    </tr>
+  );
+}
+
+function FormulaDefs({ horizon, datasets }: { horizon: number; datasets: TextDataset[] }) {
+  const hold = datasets.find((d) => d.hold_days)?.hold_days ?? 63;
+  const delay = datasets.find((d) => d.processing_delay_min)?.processing_delay_min ?? 60;
+  return (
+    <div className="mt-2 text-xs text-muted border border-dashed border-line rounded p-2 grid gap-0.5">
+      <div className="text-faint">开发阶段公式说明（进入 MVP 时隐藏）· 各市场下方灰色行为代入实际数值的计算过程</div>
+      <div>风险语气 = Σ(方向 × 置信度) ÷ 公告段落数 × 100（方向：加重 +1 / 缓解 −1；只计入复核后生效的标注）</div>
+      <div>信号 = 本篇风险语气 − 同一系列上一篇（同公司、同类型、同语言）的风险语气；从生效日起沿用，最长 {hold} 个交易日</div>
+      <div>生效日 = 发布时间 + {delay} 分钟（处理延迟）之后的第一个收盘所在交易日</div>
+      <div>未来收益_d = 收盘价(d + 1 + {horizon}) ÷ 收盘价(d + 1) − 1（从信号日的下一个交易日起算 {horizon} 个交易日）</div>
+    </div>
+  );
+}
+
 function CompareTable({ rows, note, horizon, rule, datasets }: { rows: TextCompareRow[]; note: string; horizon: number; rule?: string; datasets: TextDataset[] }) {
   return (
     <Panel title="三个市场分别检验" eyebrow={`演示主线 · 管理层风险表述变化 → 未来 ${horizon} 个交易日相对收益`}>
@@ -121,7 +174,7 @@ function CompareTable({ rows, note, horizon, rule, datasets }: { rows: TextCompa
               <th className="pr-3 text-right">悲观组超额</th><th className="pr-3 text-right">乐观组超额</th><th className="pr-3 text-right">事件 t 值</th><th>结论</th></tr>
           </thead>
           <tbody className="num">
-            {rows.map((r) => (
+            {rows.map((r) => [
               <tr key={r.dataset} className="border-t border-line">
                 <td className="py-1.5 pr-3 font-sans">{MARKET_LABEL[r.market]}</td>
                 <td className="pr-3 font-sans">{r.simulated ? <Badge tone="warn">模拟</Badge> : <Badge tone="good">真实</Badge>}</td>
@@ -133,11 +186,13 @@ function CompareTable({ rows, note, horizon, rule, datasets }: { rows: TextCompa
                 <td className="pr-3 text-right">{signed(r.event_optimistic?.mean_excess, 2)}</td>
                 <td className="pr-3 text-right">{fix(r.event_diff_t, 2)}</td>
                 <td className="font-sans">{r.verdict}</td>
-              </tr>
-            ))}
+              </tr>,
+              SHOW_FORMULAS && <FormulaRow key={r.dataset + "-f"} r={r} horizon={horizon} />,
+            ])}
           </tbody>
         </table>
       </div>
+      {SHOW_FORMULAS && <FormulaDefs horizon={horizon} datasets={datasets} />}
       <p className="text-xs text-faint mt-2">
         假设方向：风险表述越悲观，未来收益越低（Rank IC 与事件 t 值为负）。t 值绝对值大于 2 视为显著。{note}
       </p>
@@ -395,6 +450,7 @@ function ReviewCard({ item, conceptsList, reviewer, onDone }: {
           <button className="btn" disabled={busy || !reviewer} onClick={() => setMode("correct")}>修正</button>
           <button className="btn" disabled={busy || !reviewer} onClick={() => send("reject")}>不涉及风险</button>
           <input aria-label="复核理由" className="field flex-1 min-w-[12rem]" placeholder="理由（可选）" value={note} onChange={(e) => setNote(e.target.value)} />
+          {!reviewer && <span className="text-sm text-warn w-full">请先在上方"复核人"里填写姓名，三个按钮才能使用（复核记录要写明是谁做的）</span>}
         </div>
       )}
       {mode === "correct" && (

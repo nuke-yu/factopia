@@ -1,16 +1,61 @@
-# 数据字典（BR-17）：研究中使用的字段的定义、单位、来源、复权与可用时间规则。
-version: fields-v1
+# 数据口径（BR-17）：研究中使用的字段的定义、单位、来源、复权与可用时间规则；formula 为计算方法（页面在开发阶段显示）。
+# v2：补齐时间字段、质量检查、预测标签、基础币种收益、基准指数、股票池、Alpha158 因子、文本信号字段；增加 group 与 formula。
+version: fields-v2
 fields:
-  - {name: open, zh: 开盘价, unit: 本地币种, source: Yahoo Finance 日线, adjustment: 分红与拆股复权（auto_adjust）, available: 当日收盘后 + eod_delay_min, note: 英股便士已换算为英镑；报价为其他币种的股票按当日汇率换算}
-  - {name: high, zh: 最高价, unit: 本地币种, source: Yahoo Finance 日线, adjustment: 同上, available: 同上}
-  - {name: low, zh: 最低价, unit: 本地币种, source: Yahoo Finance 日线, adjustment: 同上, available: 同上}
-  - {name: close, zh: 收盘价, unit: 本地币种, source: Yahoo Finance 日线, adjustment: 同上（收益为含分红的总收益）, available: 同上}
-  - {name: volume, zh: 成交量, unit: 股, source: Yahoo Finance 日线, adjustment: 拆股复权, available: 同上}
-  - {name: factor, zh: 复权因子, unit: 无, source: 平台, adjustment: 价格已复权，恒为 1, available: —}
-  - {name: fx, zh: 汇率, unit: 报价货币 / 基础货币, source: Yahoo Finance（GBPHKD=X 等）, adjustment: 无, available: 当日伦敦收盘后}
-  - {name: risk_change, zh: 管理层风险表述变化, unit: 每百段净风险表述的变化, source: AMF 公告（法国）/ 模拟数据（香港、英国）, adjustment: —, available: 公告正式发布 + 处理延迟，按收盘时刻顺延（Spec 第 14.9 节）}
-  - {name: sector / industry, zh: 行业分类, unit: —, source: Yahoo Finance（Morningstar 口径）, adjustment: —, available: 当前快照，非时间点一致, note: 不是 GICS / ICB；正式使用需数据商授权的行业分类}
-  - {name: fiscal_year_end, zh: 财务年度结束月, unit: 月, source: Yahoo Finance, adjustment: —, available: 当前快照}
-  - {name: reporting_currency, zh: 财务报告币种, unit: —, source: Yahoo Finance, adjustment: —, available: 当前快照, note: 可能与交易币种不同（如汇丰以美元报告、在香港以港元交易）}
-  - {name: lei, zh: 法律实体识别码, unit: —, source: GLEIF 开放数据（CC0）, adjustment: —, available: 当前快照}
-  - {name: figi / share_class_figi, zh: 金融工具全球识别码 / 股份类别识别码, unit: —, source: OpenFIGI（开放标准）, adjustment: —, available: 当前快照, note: 不同交易所挂牌的同一股份类别有相同的 share_class_figi}
+  # ── 行情 ──
+  - {group: 行情, name: open / high / low, zh: 开盘价 / 最高价 / 最低价, unit: 本地币种, source: Yahoo Finance 日线, adjustment: 分红与拆股复权（auto_adjust）, available: 当日收盘后 + eod_delay_min,
+     formula: "英股便士报价：价格 ÷ 100（GBp → GBP）；以其他币种报价的股票：报价 × 当日收盘汇率（报价货币 → 本地币种，如 CPG.L 的美元价换算为英镑）",
+     note: 英股便士已换算为英镑；报价为其他币种的股票按当日汇率换算}
+  - {group: 行情, name: close, zh: 收盘价, unit: 本地币种, source: Yahoo Finance 日线, adjustment: 分红与拆股复权（收益为含分红的总收益）, available: 当日收盘后 + eod_delay_min,
+     formula: "日收益_t = close_t ÷ close_(t−1) − 1；复权价由数据源按分红与拆股向前调整，拆股日复权价不应出现与比例一致的跳变（公司行动复权检查）"}
+  - {group: 行情, name: volume, zh: 成交量, unit: 股, source: Yahoo Finance 日线, adjustment: 拆股复权, available: 当日收盘后 + eod_delay_min,
+     formula: "成交额（近似）= close × volume；连续零成交计入疑似停牌"}
+  - {group: 行情, name: factor, zh: 复权因子, unit: 无, source: 平台, adjustment: 价格已复权，恒为 1, available: —,
+     formula: "factor = 1（Qlib 要求的字段；价格在下载时已复权，不再二次调整）"}
+  - {group: 行情, name: ts_utc / available_at, zh: 收盘时刻 / 实际可获取时间, unit: UTC 时间, source: 平台（交易所日历 XHKG / XLON / XPAR）, adjustment: —, available: —,
+     formula: "ts_utc = 交易日的收盘时刻换算为 UTC（含夏令时）；available_at = ts_utc + eod_delay_min（市场规则，三个市场均为 60 分钟）",
+     note: 业务日期为交易所本地日期}
+  - {group: 行情, name: quality_excluded, zh: 质量检查排除, unit: 是 / 否, source: 平台（行情标准化）, adjustment: —, available: 标准化完成后,
+     formula: "排除 = 缺失交易日 ÷ 应有交易日 > 5%  或  单日涨跌幅绝对值 > 50% 的天数 > 5  或  存在非正价格；被排除的股票不写入 Qlib 数据",
+     note: 结果见 standardized/quality_report.json（含数据指纹）}
+  - {group: 行情, name: benchmark, zh: 基准指数收盘, unit: 指数点, source: Yahoo Finance（^HSI / ^FTSE / ^FCHI）, adjustment: 价格指数（不含分红）, available: 当日收盘后 + eod_delay_min,
+     formula: "基准收益_t = 指数_t ÷ 指数_(t−1) − 1；Qlib 中命名为 IDX_HSI / IDX_FTSE / IDX_FCHI，单独列在 benchmark.txt，不参与因子横截面排序"}
+  - {group: 行情, name: fx, zh: 汇率, unit: 报价货币 / 基础货币, source: Yahoo Finance（GBPHKD=X、EURHKD=X、EURGBP=X 等）, adjustment: 无, available: 当日伦敦收盘后,
+     formula: "GBPHKD = 1 英镑可兑换的港元数；汇率变化_t = 汇率_t ÷ 汇率_(t−1) − 1（缺失日沿用前一日）"}
+  - {group: 行情, name: return_base, zh: 基础币种收益, unit: 比例, source: 平台（组合层与监控）, adjustment: —, available: 同行情与汇率,
+     formula: "基础币种收益 = (1 + 本地币种收益) × (1 + 汇率变化) − 1；年化 = (1 + 期间累计收益)^(252 ÷ 天数) − 1",
+     note: 信号检验一律用本地币种收益；换算只在组合与监控层}
+  # ── 研究计算 ──
+  - {group: 研究计算, name: label, zh: 预测标签（未来收益）, unit: 比例, source: 平台（Qlib 表达式）, adjustment: 使用复权价, available: 只用于检验，不作为输入,
+     formula: "label = Ref($close, −(N+1)) ÷ Ref($close, −1) − 1，即 close(t+1+N) ÷ close(t+1) − 1；从信号日的下一个交易日起持有 N 日（默认 N = 20）",
+     note: 从次日起算，避免用到信号当天收盘才知道的信息}
+  - {group: 研究计算, name: alpha158_*, zh: Alpha158 公开基准因子, unit: 因因子而异（多为与当前收盘价的比值）, source: Qlib Alpha158（开源）, adjustment: 使用复权价, available: 当日收盘后 + eod_delay_min,
+     formula: "示例：ROC5 = Ref($close, 5) ÷ $close；MA20 = Mean($close, 20) ÷ $close；STD20 = Std($close, 20) ÷ $close；每个因子的完整表达式见因子库",
+     note: 共 158 个，按家族分组}
+  - {group: 研究计算, name: instruments（股票池）, zh: 股票池成分股, unit: 股票 × 起止日期, source: configs/universe/membership/<市场>.csv, adjustment: —, available: 指数公司公告日（取得历史名单后）,
+     formula: "某交易日的股票池 = start ≤ 该日 ≤ end（end 为空表示仍在指数中）的股票；来源含 current_list 时为当前成分股，存在幸存者偏差"}
+  # ── 文本信号 ──
+  - {group: 文本信号, name: published_at / business_date, zh: 正式发布时间 / 业务日期, unit: UTC 时间 / 当地日期, source: AMF 公告（法国）/ 模拟数据（香港、英国）, adjustment: —, available: —,
+     formula: "published_at = 监管机构发往市场的时间（AMF 字段）；business_date = published_at 换算为当地时区后的日期"}
+  - {group: 文本信号, name: available_at（文本）, zh: 文本实际可获取时间, unit: UTC 时间, source: 平台, adjustment: —, available: —,
+     formula: "available_at = published_at + 处理延迟（下载、抽取、翻译、理解，三个数据集均为 60 分钟）"}
+  - {group: 文本信号, name: effective_date, zh: 信号生效日, unit: 交易日, source: 平台（交易所日历）, adjustment: —, available: —,
+     formula: "effective_date = 收盘时刻 ≥ available_at 的第一个交易日；晚于当日收盘的公告顺延到下一个交易日（after_close 标记）"}
+  - {group: 文本信号, name: confidence / translation_confidence, zh: 概念判断置信度 / 翻译置信度, unit: 0–1, source: 大模型（法国）/ 固定值（词典法）, adjustment: —, available: 标注完成后,
+     formula: "大模型逐段给出；人工修正后置信度记为 1.0；概念置信度 < 0.6 或翻译置信度 < 0.7 进入语言专家复核"}
+  - {group: 文本信号, name: tone, zh: 风险语气, unit: 每百段净风险表述, source: 平台, adjustment: 使用复核后生效的标注, available: 同 effective_date,
+     formula: "tone = Σ(方向 × 置信度) ÷ 公告段落总数 × 100；方向：风险加重 +1、缓解 −1；判定不涉及风险的段落记 0"}
+  - {group: 文本信号, name: risk_change, zh: 管理层风险表述变化, unit: 每百段净风险表述的变化, source: AMF 公告（法国）/ 模拟数据（香港、英国）, adjustment: —, available: 公告正式发布 + 处理延迟，按收盘时刻顺延（Spec 第 14.9 节）,
+     formula: "risk_change = 本篇 tone − 同一系列上一篇 tone（同公司、同类型、同语言）；从 effective_date 起沿用，最长 63 个交易日；同日多篇取平均"}
+  # ── 参考数据（当前快照，不用于回测）──
+  - {group: 参考数据, name: sector / industry, zh: 行业分类, unit: —, source: Yahoo Finance（Morningstar 口径）, adjustment: —, available: 当前快照，非时间点一致, note: 不是 GICS / ICB；正式使用需数据商授权的行业分类}
+  - {group: 参考数据, name: fiscal_year_end, zh: 财务年度结束月, unit: 月, source: Yahoo Finance, adjustment: —, available: 当前快照}
+  - {group: 参考数据, name: reporting_currency, zh: 财务报告币种, unit: —, source: Yahoo Finance, adjustment: —, available: 当前快照, note: 可能与交易币种不同（如汇丰以美元报告、在香港以港元交易）}
+  - {group: 参考数据, name: accounting, zh: 会计口径, unit: —, source: 平台（markets.yaml）, adjustment: —, available: 当前快照,
+     formula: "注册地（GLEIF）在 accounting_by_jurisdiction 中 → 按注册地；否则 → 上市市场默认值"}
+  - {group: 参考数据, name: lei, zh: 法律实体识别码, unit: —, source: GLEIF 开放数据（CC0）, adjustment: —, available: 当前快照,
+     formula: "按公司名称检索 GLEIF，规范化后的法定名称与证券名称一致才采用"}
+  - {group: 参考数据, name: figi / share_class_figi, zh: 金融工具全球识别码 / 股份类别识别码, unit: —, source: OpenFIGI（开放标准）, adjustment: —, available: 当前快照, note: 不同交易所挂牌的同一股份类别有相同的 share_class_figi,
+     formula: "发行人 = 有 LEI 时按 LEI 归并，否则按 share_class_figi 归并"}
+  - {group: 参考数据, name: primary_listing, zh: 主要上市地, unit: —, source: 平台, adjustment: —, available: 当前快照,
+     formula: "发行人挂牌的交易所中，与注册地同一国家的唯一一个；不唯一或没有时为\"待确认\"（overrides.yaml 可人工覆盖）"}

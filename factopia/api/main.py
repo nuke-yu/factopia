@@ -365,7 +365,7 @@ def factor_library(source: str | None = Query(None, pattern="^(alpha158|approved
 
 @app.get("/api/knowledge/search")
 def knowledge_search(q: str = Query(..., min_length=1, max_length=300), kinds: str | None = None, llm: bool = True):
-    """语义检索（BR-25）：因子库、内部研究、数据字典、经批准的外部公告；大模型多语言改写 + BM25。"""
+    """语义检索（BR-25）：因子库、内部研究、字段口径、经批准的外部公告；大模型多语言改写 + BM25。"""
     from factopia.research import semantic
     ks = [k for k in (kinds or "").split(",") if k in semantic.KIND_ZH] or None
     return semantic.search(q, ks, use_llm=llm)
@@ -1728,7 +1728,7 @@ def text_review_decide(body: ReviewIn):
         raise HTTPException(422, str(e))
 
 
-# ---------------------------------------------------------------- 数据台：证券主数据、公司行动、数据字典、时间点一致性（Spec 第 14.10 节）
+# ---------------------------------------------------------------- 数据台：证券主数据、公司行动、口径与规则、时间点一致性（Spec 第 14.10 节）
 REFDATA = Path(os.environ.get("FACTOPIA_RUNTIME", "/workspace/runtime")) / "refdata"
 
 
@@ -1800,4 +1800,6 @@ def refdata_dictionary():
             d = pd.read_csv(p, dtype=str).fillna("")
             mem[mk] = {"rows": len(d), "sources": d["source"].value_counts().to_dict(),
                        "point_in_time": bool(len(d)) and not (d["source"] == "current_list").any()}
-    return {"fields": f, "markets": m, "membership": mem}
+    from factopia.text.common import DATASETS as TDS
+    text_delay = {mk: TDS[ds]["processing_delay_min"] for mk, ds in srcs.TEXT_DATASETS.items() if ds in TDS}
+    return {"fields": f, "markets": m, "membership": mem, "text_delay_min": text_delay}

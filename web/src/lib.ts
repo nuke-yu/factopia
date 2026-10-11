@@ -54,3 +54,7 @@ export function labelColor(label: string): string {
   }
   return cssVar("--faint");
 }
+
+/** 开发阶段公式说明：页面数字下方显示计算公式并代入实际数值，便于核对每个数字的来源。
+ *  进入 MVP 时改为 false 即整体隐藏（搜索 SHOW_FORMULAS 可找到全部使用处）。 */
+export const SHOW_FORMULAS = true;

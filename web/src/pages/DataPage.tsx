@@ -1,9 +1,9 @@
 import { Fragment, useMemo, useState } from "react";
 import { Badge, ErrorBox, Loading, Notice, Panel, Seg, Stat } from "../components/ui";
-import { api, visibleMarkets, type Market, type Relation, type Security } from "../api";
-import { MARKET_LABEL, marketColor, useAsync } from "../lib";
+import { api, visibleMarkets, type Market, type MarketRule, type Relation, type Security } from "../api";
+import { MARKET_LABEL, marketColor, SHOW_FORMULAS, useAsync } from "../lib";
 
-// 数据台（Spec 第 14.10 节；BR-13、16、17、18）：证券主数据与跨市场关联、公司行动、数据字典、时间点一致性
+// 数据台（Spec 第 14.10 节；BR-13、16、17、18）：证券主数据与跨市场关联、公司行动、口径与规则、时间点一致性
 
 type Tab = "pit" | "securities" | "relations" | "actions" | "dictionary";
 const VENUE: Record<string, string> = {
@@ -208,49 +208,121 @@ function ActionsTab() {
   );
 }
 
+// 口径与规则（BR-17）：市场规则（markets.yaml）与字段口径（fields.yaml）；开发阶段显示公式行（SHOW_FORMULAS）
+const RULE_ROWS: [keyof MarketRule, string][] = [
+  ["exchange", "交易所"], ["timezone", "时区"], ["currency", "本地币种"], ["benchmark", "基准指数"], ["trading_hours", "交易时段"],
+  ["close_local", "收盘（当地）"], ["eod_delay_min", "日终数据延迟"], ["price_limits", "涨跌停"], ["settlement", "交收"],
+  ["short_selling", "卖空"], ["lot_size", "每手股数"], ["reporting", "报告周期"], ["accounting_default", "会计口径（默认）"],
+  ["disclosure_language", "披露语言"], ["holidays", "假期与日历"],
+];
+
+const addMin = (hhmm: string, min: number) => {
+  const [h, m] = hhmm.split(":").map(Number), t = h * 60 + m + min;
+  return `${String(Math.floor(t / 60) % 24).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}`;
+};
+
+function FormulaLine({ children }: { children: React.ReactNode }) {
+  return <div className="text-xs text-muted border-l-2 border-line pl-2 mt-1 num">{children}</div>;
+}
+
 function DictionaryTab() {
   const { data, error, loading } = useAsync(() => api.dictionary(), []);
-  if (loading) return <Loading what="数据字典" />;
+  if (loading) return <Loading what="口径与规则" />;
   if (error || !data) return <ErrorBox error={error ?? "无数据"} />;
+  const ms = Object.keys(data.markets.markets) as Market[];
+  const groups = [...new Set(data.fields.fields.map((f) => f.group ?? "其他"))];
+  const formulaRow = (key: keyof MarketRule) => {
+    if (!SHOW_FORMULAS) return null;
+    if (key === "eod_delay_min") return ms.map((m) => {
+      const c = data.markets.markets[m];
+      return <FormulaLine key={m}>行情可获取 = {c.close_local} + {c.eod_delay_min} 分钟 = {addMin(c.close_local, c.eod_delay_min)}（当地）</FormulaLine>;
+    });
+    if (key === "close_local") return ms.map((m) => {
+      const c = data.markets.markets[m], d = data.text_delay_min?.[m] ?? 60;
+      return <FormulaLine key={m}>公告当天生效 ⇔ 发布时间 + {d} 分钟 ≤ {c.close_local}，即发布不晚于 {addMin(c.close_local, -d)}；否则顺延到下一个交易日</FormulaLine>;
+    });
+    return null;
+  };
   return (
     <div className="flex flex-col gap-4">
-      <Panel title="市场规则" eyebrow={`版本 ${data.markets.version} · configs/refdata/markets.yaml`}>
+      {SHOW_FORMULAS && <Notice tone="accent" title="开发阶段公式说明">
+        灰色竖线开头的行是计算方法，并代入了实际参数；用于核对每个口径如何得出，进入 MVP 时隐藏。
+      </Notice>}
+      <Panel title="市场规则" eyebrow={`版本 ${data.markets.version} · configs/refdata/markets.yaml · 数据负责人维护`}>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
-            <thead className="label text-left"><tr><th className="py-1 pr-3">市场</th><th className="pr-3">交易所 / 时区</th><th className="pr-3">收盘</th>
-              <th className="pr-3">日终延迟</th><th className="pr-3">报告周期</th><th className="pr-3">会计口径（默认）</th><th>成分股</th></tr></thead>
+            <thead className="label text-left"><tr><th className="py-1 pr-3 w-32">规则</th>
+              {ms.map((m) => <th key={m} className="pr-3" style={{ color: marketColor(m) }}>{data.markets.markets[m].name}</th>)}</tr></thead>
             <tbody>
-              {(Object.keys(data.markets.markets) as Market[]).map((m) => {
-                const c = data.markets.markets[m], mem = data.membership[m];
+              {RULE_ROWS.map(([key, label]) => {
+                const f = formulaRow(key);
                 return (
-                  <tr key={m} className="border-t border-line align-top">
-                    <td className="py-2 pr-3 font-medium" style={{ color: marketColor(m) }}>{c.name}</td>
-                    <td className="pr-3 text-xs">{c.exchange}<div className="text-faint">{c.timezone} · {c.currency}</div></td>
-                    <td className="pr-3 num">{c.close_local}</td>
-                    <td className="pr-3 num">{c.eod_delay_min} 分钟</td>
-                    <td className="pr-3 text-xs text-muted">{c.reporting}</td>
-                    <td className="pr-3 text-xs text-muted">{c.accounting_default}</td>
-                    <td className="text-xs">{mem ? (mem.point_in_time ? <Badge tone="good">历史成分股</Badge> : <Badge tone="warn">当前成分股 {mem.rows}</Badge>) : "—"}</td>
+                  <tr key={key} className="border-t border-line align-top">
+                    <td className="py-2 pr-3 text-xs text-faint whitespace-nowrap">{label}</td>
+                    {ms.map((m, k) => {
+                      const v = data.markets.markets[m][key];
+                      return <td key={m} className="py-2 pr-3 text-xs">
+                        <span className={key === "close_local" || key === "eod_delay_min" ? "num" : ""}>
+                          {v == null || v === "" ? "—" : key === "eod_delay_min" ? `${v} 分钟` : String(v)}</span>
+                        {f && f[k]}
+                      </td>;
+                    })}
                   </tr>
                 );
               })}
+              <tr className="border-t border-line align-top">
+                <td className="py-2 pr-3 text-xs text-faint whitespace-nowrap">股票池成分股</td>
+                {ms.map((m) => {
+                  const mem = data.membership[m];
+                  return <td key={m} className="py-2 pr-3 text-xs">
+                    {mem ? (mem.point_in_time ? <Badge tone="good">历史成分股</Badge> : <Badge tone="warn">当前成分股 {mem.rows}</Badge>) : "—"}
+                    {SHOW_FORMULAS && mem && <FormulaLine>
+                      来源：{Object.entries(mem.sources).map(([k, v]) => `${k} ${v} 行`).join("、")}；时间点一致 ⇔ 没有来源为 current_list 的行 → {mem.point_in_time ? "一致" : "不一致"}
+                    </FormulaLine>}
+                  </td>;
+                })}
+              </tr>
             </tbody>
           </table>
         </div>
+        <div className="grid gap-4 md:grid-cols-2 mt-4">
+          {data.markets.accounting_by_jurisdiction && <div>
+            <div className="label mb-1">按注册地推断会计口径（覆盖市场默认值）</div>
+            <table className="w-full text-xs"><tbody>
+              {Object.entries(data.markets.accounting_by_jurisdiction).map(([k, v]) => (
+                <tr key={k} className="border-t border-line"><td className="py-1 pr-3 num text-faint">{k}</td><td>{v}</td></tr>))}
+            </tbody></table>
+          </div>}
+          {data.markets.cross_listing_venues && <div>
+            <div className="label mb-1">跨市场挂牌只检索这些交易所</div>
+            <div className="flex flex-wrap gap-1">
+              {Object.entries(data.markets.cross_listing_venues).map(([k, v]) => <Badge key={k} tone="muted">{v} {k}</Badge>)}
+            </div>
+            <div className="text-xs text-faint mt-1">德国等二级报价场所不计；名称规范化后一致才采用，标为"自动匹配，待确认"</div>
+          </div>}
+        </div>
       </Panel>
-      <Panel title="字段定义" eyebrow={`版本 ${data.fields.version} · configs/refdata/fields.yaml`}>
+      <Panel title="字段口径" eyebrow={`版本 ${data.fields.version} · configs/refdata/fields.yaml · ${data.fields.fields.length} 个字段`}>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="label text-left"><tr><th className="py-1 pr-3">字段</th><th className="pr-3">单位</th><th className="pr-3">来源</th>
               <th className="pr-3">复权 / 调整</th><th className="pr-3">可用时间</th><th>说明</th></tr></thead>
             <tbody>
-              {data.fields.fields.map((f) => (
-                <tr key={f.name} className="border-t border-line align-top">
-                  <td className="py-2 pr-3 whitespace-nowrap"><span className="num">{f.name}</span><div className="text-xs text-faint">{f.zh}</div></td>
-                  <td className="pr-3 text-xs">{f.unit}</td><td className="pr-3 text-xs text-muted">{f.source}</td>
-                  <td className="pr-3 text-xs text-muted">{f.adjustment}</td><td className="pr-3 text-xs text-muted">{f.available}</td>
-                  <td className="text-xs text-faint">{f.note ?? ""}</td>
-                </tr>
+              {groups.map((g) => (
+                <Fragment key={g}>
+                  <tr><td colSpan={6} className="pt-4 pb-1 label">{g}</td></tr>
+                  {data.fields.fields.filter((f) => (f.group ?? "其他") === g).map((f) => (
+                    <Fragment key={f.name}>
+                      <tr className="border-t border-line align-top">
+                        <td className="py-2 pr-3 whitespace-nowrap"><span className="num">{f.name}</span><div className="text-xs text-faint">{f.zh}</div></td>
+                        <td className="pr-3 text-xs">{f.unit}</td><td className="pr-3 text-xs text-muted">{f.source}</td>
+                        <td className="pr-3 text-xs text-muted">{f.adjustment}</td><td className="pr-3 text-xs text-muted">{f.available}</td>
+                        <td className="text-xs text-faint">{f.note ?? ""}</td>
+                      </tr>
+                      {SHOW_FORMULAS && f.formula && <tr><td colSpan={6} className="pb-2"><FormulaLine>{f.formula}</FormulaLine></td></tr>}
+                    </Fragment>
+                  ))}
+                </Fragment>
               ))}
             </tbody>
           </table>
@@ -273,7 +345,7 @@ export default function DataPage() {
           <div className="label">数据台</div>
           <h1 className="font-display text-xl font-semibold">参考数据与时间点一致性</h1>
         </div>
-        <span className="text-sm text-muted">发行人与证券 · 公司行动 · 数据字典 · 三个时间</span>
+        <span className="text-sm text-muted">发行人与证券 · 公司行动 · 口径与规则 · 三个时间</span>
         {data.pit && <span className="ml-auto"><Badge tone={data.pit.point_in_time ? "good" : "warn"}>{data.pit.label}</Badge></span>}
       </div>
       {m ? (
@@ -288,7 +360,7 @@ export default function DataPage() {
       ) : <Notice tone="warn" title="参考数据尚未生成">运行 python -m factopia.refdata all</Notice>}
       <Seg label="视图" value={tab} onChange={setTab} options={[
         { value: "pit", label: "时间点一致性" }, { value: "securities", label: "证券主数据" }, { value: "relations", label: "跨市场关联" },
-        { value: "actions", label: "公司行动" }, { value: "dictionary", label: "数据字典" },
+        { value: "actions", label: "公司行动" }, { value: "dictionary", label: "口径与规则" },
       ]} />
       {tab === "pit" && <PitPanel />}
       {tab === "securities" && <SecuritiesTab relationsOnly={false} />}

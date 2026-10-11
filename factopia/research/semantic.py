@@ -1,9 +1,9 @@
-"""语义检索：内部研究、因子库、数据字典与经批准的外部内容（业务需求 BR-25、35；Spec 第 14.18 节）。
+"""语义检索：内部研究、因子库、字段口径与经批准的外部内容（业务需求 BR-25、35；Spec 第 14.18 节）。
 
 检索范围（每条结果标注类型与来源，可点回原处）：
 - 因子库（factopia/research/library.py）：Alpha158 公开基准、获批信号、团队专有因子；
 - 内部研究：已锁定的研究规格（标题、假设、经济逻辑、可证伪测试）与 AI 解释的市场差异；
-- 数据字典：configs/refdata/fields.yaml；
+- 字段口径（数据台 → 口径与规则）：configs/refdata/fields.yaml；
 - 经批准的外部内容：数据来源登记表中可用的真实公告（法国 AMF，Licence Ouverte 2.0）的标题；模拟数据不在检索范围内。
 
 做法（不依赖向量模型）：① 大模型把提问改写为中 / 英 / 法三种语言的关键词与同义表述（不可用时退回术语表概念词）；
@@ -23,7 +23,7 @@ from factopia.research import library, store
 
 CONFIGS = Path(os.environ.get("FACTOPIA_CONFIGS_DIR", "/workspace/configs"))
 RUNTIME = Path(os.environ.get("FACTOPIA_RUNTIME", "/workspace/runtime"))
-KIND_ZH = {"factor": "因子库", "research": "内部研究", "field": "数据字典", "filing": "外部公告（已批准来源）"}
+KIND_ZH = {"factor": "因子库", "research": "内部研究", "field": "字段口径", "filing": "外部公告（已批准来源）"}
 K1, B = 1.5, 0.75
 CJK = re.compile(r"[㐀-鿿]+")
 WORD = re.compile(r"[a-z0-9_]+")

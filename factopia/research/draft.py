@@ -15,7 +15,7 @@ from pathlib import Path
 
 from factopia.research import evidence, mandates, regions
 
-PROMPT_VERSION = "rs-draft-v3"   # v3：加入内部知识检索结果（因子库、以往研究、数据字典，只含名称与说明）
+PROMPT_VERSION = "rs-draft-v3"   # v3：加入内部知识检索结果（因子库、以往研究、字段口径，只含名称与说明）
 PROMPT_FILE = Path(__file__).parent / "prompts" / f"{PROMPT_VERSION}.md"
 ID_PATTERN = re.compile(r"^[a-z][a-z0-9_]{2,39}$")
 TEST_YEAR = re.compile(r"20(?:2[2-9]|[3-9]\d)")
@@ -79,7 +79,7 @@ def _evidence_text(items: list[dict]) -> str:
 
 
 def internal_knowledge(query: str, limit: int = 8) -> list[dict]:
-    """检索内部知识（BR-25、35）作为证据：因子库、以往研究规格、数据字典。
+    """检索内部知识（BR-25、35）作为证据：因子库、以往研究规格、字段口径。
     提供给 AI 的只有名称与说明；获批信号与以往研究的结果数值来自测试期，不放入（MINE-11）。AI 解释（含测试期数值）不检索。"""
     from factopia.research import semantic
     try:

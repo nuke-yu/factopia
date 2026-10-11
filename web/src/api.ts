@@ -346,12 +346,18 @@ export type RefSummary = {
   vendor_imports?: { kind: "membership" | "actions"; vendor: string; market?: string; rows: number; at: string }[];
   vendor_templates?: string;
 };
-export type DictField = { name: string; zh: string; unit: string; source: string; adjustment: string; available: string; note?: string };
+export type DictField = { name: string; zh: string; unit: string; source: string; adjustment: string; available: string; note?: string; group?: string; formula?: string };
+export type MarketRule = {
+  name: string; exchange: string; timezone: string; currency: string; close_local: string; eod_delay_min: number;
+  reporting: string; accounting_default: string; trading_hours?: string; price_limits?: string; settlement?: string;
+  short_selling?: string; lot_size?: string; disclosure_language?: string; benchmark?: string; holidays?: string;
+};
 export type RefDictionary = {
   fields: { version: string; fields: DictField[] };
-  markets: { version: string; markets: Record<Market, { name: string; exchange: string; timezone: string; currency: string;
-    close_local: string; eod_delay_min: number; reporting: string; accounting_default: string }> };
+  markets: { version: string; markets: Record<Market, MarketRule>; accounting_by_jurisdiction?: Record<string, string>;
+    cross_listing_venues?: Record<string, string> };
   membership: Record<string, { rows: number; sources: Record<string, number>; point_in_time: boolean }>;
+  text_delay_min?: Record<string, number>;
 };
 export type ReviewDecision = { key: string; action: string; reviewer: string; note: string; at: string; concepts: TextConcept[] | null; translation: Record<string, string> | null };
 export type ReviewItem = {
