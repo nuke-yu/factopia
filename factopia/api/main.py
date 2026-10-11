@@ -1611,17 +1611,20 @@ def text_overview():
                     "processing_delay_min": cfg["processing_delay_min"], "ready": bool(s),
                     "n_filings": s.get("n_filings", 0), "n_companies": s.get("n_companies", 0),
                     "n_changes": s.get("n_changes", 0), "hold_days": s.get("hold_days"),
-                    "evaluation": s.get("evaluation"), "truth": tcommon.read_json(d / "truth.json")})
+                    "evaluation": s.get("evaluation"), "truth": tcommon.read_json(d / "truth.json"),
+                    "sensitivity": tcommon.read_json(d / "sensitivity.json")})
     g = tcommon.glossary()
     concepts = [{"concept": c, "zh": v["zh_name"], "en": v["en_name"], "fr": v["fr_name"], "terms": v["terms"]}
                 for c, v in g["concepts"].items()]
     cmp = tcommon.read_json(tcommon.TEXT / "compare.json")
     if cmp and not access.cross_region():
         cmp = {**cmp, "markets": [r for r in cmp["markets"] if access.can(r["market"])]}
-    counts = {"pending": 0, "done": 0}
+    counts = {"pending": 0, "done": 0, "pending_real": 0, "pending_simulated": 0}
     for ds in _text_allowed():
         for k, v in treview.queue(ds, limit=0)["counts"].items():
             counts[k] += v
+            if k == "pending":                                # 真实数据的待复核才阻止提交审批；模拟数据的复核要求豁免
+                counts["pending_simulated" if tcommon.DATASETS[ds]["simulated"] else "pending_real"] += v
     return {"datasets": out, "compare": cmp, "glossary_version": g["version"], "concepts": concepts, "review_counts": counts}
 
 

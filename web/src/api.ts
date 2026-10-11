@@ -275,6 +275,8 @@ export type TextDataset = {
   processing_delay_min: number; ready: boolean; n_filings: number; n_companies: number; n_changes: number;
   hold_days: number | null; evaluation: TextEval | null;
   truth: { label: string; rule: string; expected: string; companies: number; filings: number } | null;
+  sensitivity?: { rows: { delay_min: number; hold_days: number; rank_ic_mean: number | null; rank_ic_t: number | null; event_diff_t: number | null;
+    n_days: number; verdict: string; baseline: boolean }[]; stable: boolean; verdicts: string[]; note: string } | null;
 };
 export type TextCompareRow = {
   dataset: string; market: Market; simulated: boolean; n_filings: number; n_companies: number;
@@ -283,8 +285,8 @@ export type TextCompareRow = {
   event_diff_t?: number | null; verdict: string;
 };
 export type TextOverview = {
-  datasets: TextDataset[]; compare: { horizon: number; markets: TextCompareRow[]; note: string } | null;
-  glossary_version: string; review_counts: { pending: number; done: number };
+  datasets: TextDataset[]; compare: { horizon: number; markets: TextCompareRow[]; note: string; rule?: string } | null;
+  glossary_version: string; review_counts: { pending: number; done: number; pending_real?: number; pending_simulated?: number };
   concepts: { concept: string; zh: string; en: string; fr: string; terms: Record<string, string[]> }[];
 };
 export type TextCitation = { i: number; concept: string; name: string; value: number; negated: boolean; evidence: string; review: string; text: string };

@@ -75,7 +75,42 @@ function SourceCard({ d }: { d: TextDataset }) {
   );
 }
 
-function CompareTable({ rows, note, horizon }: { rows: TextCompareRow[]; note: string; horizon: number }) {
+// 敏感性检验（第 11.10 节）：处理延迟 × 信号沿用期，结论是否稳定
+function Sensitivity({ datasets }: { datasets: TextDataset[] }) {
+  const ds = datasets.filter((d) => d.sensitivity?.rows.length);
+  if (!ds.length) return null;
+  return (
+    <div className="mt-4">
+      <div className="label mb-1">敏感性检验：处理延迟（分钟）× 信号沿用期（交易日）</div>
+      <div className="grid gap-4 lg:grid-cols-3">
+        {ds.map((d) => {
+          const s = d.sensitivity!;
+          const delays = [...new Set(s.rows.map((r) => r.delay_min))], holds = [...new Set(s.rows.map((r) => r.hold_days))];
+          return (
+            <div key={d.dataset} className="border border-line rounded p-2 overflow-x-auto">
+              <div className="flex items-center gap-2 text-sm mb-1">{d.market_zh}<SimBadge simulated={d.simulated} />
+                <Badge tone={s.stable ? "good" : "warn"}>{s.stable ? "结论稳定" : "结论随参数变化"}</Badge></div>
+              <table className="w-full text-xs num">
+                <thead className="text-faint"><tr><th className="text-left font-normal">延迟 \ 沿用</th>{holds.map((h) => <th key={h} className="text-right font-normal">{h} 天</th>)}</tr></thead>
+                <tbody>{delays.map((dl) => (
+                  <tr key={dl} className="border-t border-line"><td>{dl} 分钟</td>
+                    {holds.map((h) => {
+                      const r = s.rows.find((x) => x.delay_min === dl && x.hold_days === h);
+                      const ok = r?.verdict.startsWith("有效");
+                      return <td key={h} className={`text-right ${r?.baseline ? "font-semibold" : ""}`} title={r?.verdict}>
+                        <span style={{ color: `var(--${ok ? "good" : "muted"})` }}>{fix(r?.rank_ic_t, 2)}</span></td>;
+                    })}</tr>))}</tbody>
+              </table>
+              <div className="text-[11px] text-faint mt-1">数字为 Rank IC 的 t 值；绿色 = 判定有效；粗体 = 当前参数（60 分钟、63 天）</div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function CompareTable({ rows, note, horizon, rule, datasets }: { rows: TextCompareRow[]; note: string; horizon: number; rule?: string; datasets: TextDataset[] }) {
   return (
     <Panel title="三个市场分别检验" eyebrow={`演示主线 · 管理层风险表述变化 → 未来 ${horizon} 个交易日相对收益`}>
       <div className="overflow-x-auto">
@@ -106,6 +141,8 @@ function CompareTable({ rows, note, horizon }: { rows: TextCompareRow[]; note: s
       <p className="text-xs text-faint mt-2">
         假设方向：风险表述越悲观，未来收益越低（Rank IC 与事件 t 值为负）。t 值绝对值大于 2 视为显著。{note}
       </p>
+      {rule && <p className="text-xs text-muted mt-1">判定规则：{rule}</p>}
+      <Sensitivity datasets={datasets} />
     </Panel>
   );
 }
@@ -460,12 +497,15 @@ export default function IntelPage() {
           <h1 className="font-display text-xl font-semibold">多语言公告与文本信号</h1>
         </div>
         <span className="text-sm text-muted">原文优先 · 译文与概念标签另存 · 按实际可获取时间生效</span>
-        <span className="ml-auto"><Badge tone={data.review_counts.pending ? "warn" : "good"}>待复核 {data.review_counts.pending}</Badge></span>
+        <span className="ml-auto flex gap-2" title="真实数据的待复核会阻止研究提交审批；模拟数据只用词典法标注，复核要求豁免">
+          <Badge tone={data.review_counts.pending_real ? "warn" : "good"}>真实数据待复核 {data.review_counts.pending_real ?? data.review_counts.pending}</Badge>
+          {data.review_counts.pending_simulated ? <Badge tone="muted">模拟数据待复核 {data.review_counts.pending_simulated}（豁免）</Badge> : null}
+        </span>
       </div>
       <div className="grid gap-4 md:grid-cols-3">
         {data.datasets.map((d) => <SourceCard key={d.dataset} d={d} />)}
       </div>
-      {data.compare && <CompareTable rows={data.compare.markets} note={data.compare.note} horizon={data.compare.horizon} />}
+      {data.compare && <CompareTable rows={data.compare.markets} note={data.compare.note} horizon={data.compare.horizon} rule={data.compare.rule} datasets={data.datasets} />}
       <Seg label="视图" value={tab} onChange={setTab} options={[
         { value: "filings", label: "公告与打分" }, { value: "search", label: "跨语言检索" },
         { value: "review", label: `语言专家复核` }, { value: "glossary", label: "术语表" },

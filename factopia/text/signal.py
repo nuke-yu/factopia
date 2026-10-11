@@ -81,12 +81,13 @@ def score_filing(dataset: str, filing: dict, dec: dict) -> dict | None:
             "glossary_version": lab["glossary_version"], "prompt_version": lab["prompt_version"]}
 
 
-def scores(dataset: str, realign: bool = True) -> pd.DataFrame:
+def scores(dataset: str, realign: bool = True, save: bool = True) -> pd.DataFrame:
     """realign=False：使用上次对齐的结果（aligned.parquet），供没有交易日历的镜像复现信号（文本信号研究的复现检查）。"""
     d = ds_dir(dataset)
     if realign:
         meta = align(pd.read_parquet(d / "filings.parquet"), dataset)
-        meta.to_parquet(d / "aligned.parquet", index=False)      # 检索与页面直接读取（api 镜像不含交易日历）
+        if save:                                                 # 敏感性检验不覆盖已保存的对齐结果
+            meta.to_parquet(d / "aligned.parquet", index=False)  # 检索与页面直接读取（api 镜像不含交易日历）
     else:
         meta = pd.read_parquet(d / "aligned.parquet")
     dec = review.decisions()
@@ -218,6 +219,57 @@ def run(dataset: str, horizon: int = 20) -> dict:
     return out
 
 
+RULE_NOTE = ("结论以逐日 Rank IC 的 t 值（Newey-West）为主口径：t < −2 且事件检验不反向 → 有效；"
+             "主口径不显著时，事件检验显著只作辅助证据，结论仍为不显著（2026-10-11 收紧，原规则为两个口径任一显著即有效）")
+
+
+def judge(n_days: int, t: float | None, et: float | None) -> str:
+    """三个市场检验的结论（第 11.10 节）。主口径：逐日 Rank IC 的 Newey-West t 值；事件检验（Welch t）只作辅助。
+    原规则"两个口径任一显著即有效"相当于多试一次，偏宽松，已收紧。"""
+    if not n_days or t is None:
+        return "数据不足（每天少于 5 只股票有信号）"
+    ev_neg, ev_pos = et is not None and et < -2, et is not None and et > 2
+    if t < -2:
+        return "结论不一致（事件检验方向相反）" if ev_pos else "有效（方向符合假设）"
+    if t > 2:
+        return "结论不一致（事件检验方向相反）" if ev_neg else "方向相反"
+    if ev_neg:
+        return "不显著（仅事件检验显著，作辅助证据）"
+    if ev_pos:
+        return "不显著（事件检验方向相反）"
+    return "不显著"
+
+
+def sensitivity(dataset: str, delays=(60, 120, 240), holds=(21, 63, 126), horizon: int = 20) -> dict:
+    """敏感性检验（第 11.10 节）：处理延迟与信号沿用期取不同值，看结论是否稳定；不改动已保存的信号与对齐结果。"""
+    global HOLD_DAYS
+    cfg = DATASETS[dataset]
+    base_delay, base_hold = cfg["processing_delay_min"], HOLD_DAYS
+    px = prices(dataset)
+    rows = []
+    try:
+        for dl in delays:
+            cfg["processing_delay_min"] = dl
+            df = scores(dataset, realign=True, save=False)
+            if df.empty:
+                continue
+            for hd in holds:
+                HOLD_DAYS = hd
+                e = evaluate(daily_signal(df, px), px, df, horizon)
+                rows.append({"delay_min": dl, "hold_days": hd, "rank_ic_mean": e["rank_ic_mean"], "rank_ic_t": e["rank_ic_t"],
+                             "event_diff_t": e["events"]["diff_t"], "n_days": e["n_days"],
+                             "verdict": judge(e["n_days"], e["rank_ic_t"], e["events"]["diff_t"]),
+                             "baseline": dl == base_delay and hd == base_hold})
+    finally:
+        cfg["processing_delay_min"], HOLD_DAYS = base_delay, base_hold
+    verdicts = {r["verdict"] for r in rows}
+    out = {"dataset": dataset, "simulated": cfg["simulated"], "horizon": horizon, "rows": rows,
+           "stable": len(verdicts) == 1, "verdicts": sorted(verdicts),
+           "note": "基准为处理延迟 60 分钟、沿用 63 个交易日；结论只在部分参数下成立说明不稳健"}
+    write_json(ds_dir(dataset) / "sensitivity.json", out)
+    return out
+
+
 def compare(horizon: int = 20) -> dict:
     """⑤ 三个市场分别检验后的对比（演示主线第 6 步）；模拟数据的市场明确标注。"""
     rows = []
@@ -227,11 +279,7 @@ def compare(horizon: int = 20) -> dict:
             continue
         e = s["evaluation"]
         t, et = e.get("rank_ic_t"), e["events"].get("diff_t")
-        # 逐日 Rank IC（t 值，Newey-West）与公告后事件研究（悲观组 − 乐观组超额收益的 t 值）两个口径
-        neg = [x for x in (t, et) if x is not None and x < -2]
-        pos = [x for x in (t, et) if x is not None and x > 2]
-        verdict = ("数据不足（每天少于 5 只股票有信号）" if not e["n_days"] else "有效（方向符合假设）" if neg and not pos
-                   else "方向相反" if pos and not neg else "结论不一致" if neg and pos else "不显著")
+        verdict = judge(e["n_days"], t, et)
         rows.append({"dataset": ds, "market": cfg["market"], "simulated": cfg["simulated"], "n_filings": s["n_filings"],
                      "n_companies": s["n_companies"], "rank_ic_mean": e["rank_ic_mean"], "rank_ic_t": t,
                      "tercile_spread_mean": e["tercile_spread_mean"], "n_days": e["n_days"],
@@ -240,6 +288,6 @@ def compare(horizon: int = 20) -> dict:
     real = [r for r in rows if not r["simulated"] and r["n_days"]]
     note = ("只有法国是真实数据；香港、英国为模拟数据（植入已知规律），用于验证流程能否找出规律，不构成研究结论"
             if any(r["simulated"] for r in rows) else "")
-    out = {"horizon": horizon, "markets": rows, "note": note, "real_markets": [r["market"] for r in real]}
+    out = {"horizon": horizon, "markets": rows, "note": note, "real_markets": [r["market"] for r in real], "rule": RULE_NOTE}
     write_json(ds_dir("fr").parent / "compare.json", out)
     return out

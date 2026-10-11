@@ -5,6 +5,7 @@
   python -m factopia.text understand --dataset fr [--lexicon] [--max-docs N]
   python -m factopia.text signal --dataset fr [--horizon 20]
   python -m factopia.text compare
+  python -m factopia.text sensitivity --dataset demo_hk                   # 处理延迟 × 沿用期 敏感性检验
   python -m factopia.text all [--lexicon]                                   # 以上全部
 """
 import argparse
@@ -33,6 +34,9 @@ def main() -> None:
     s = sub.add_parser("signal")
     s.add_argument("--dataset", required=True, choices=DATASETS)
     s.add_argument("--horizon", type=int, default=20)
+    se = sub.add_parser("sensitivity")
+    se.add_argument("--dataset", required=True, choices=DATASETS)
+    se.add_argument("--horizon", type=int, default=20)
     cp = sub.add_parser("compare")
     cp.add_argument("--horizon", type=int, default=20)
     a = sub.add_parser("all")
@@ -52,6 +56,11 @@ def main() -> None:
     elif args.cmd == "signal":
         out = signal.run(args.dataset, args.horizon)
         print(json.dumps({k: out[k] for k in ("n_filings", "n_companies", "n_changes", "evaluation")}, ensure_ascii=False)[:1500])
+    elif args.cmd == "sensitivity":
+        out = signal.sensitivity(args.dataset, horizon=args.horizon)
+        for r in out["rows"]:
+            print(r)
+        print("稳定" if out["stable"] else "不稳定", out["verdicts"])
     elif args.cmd == "compare":
         print(json.dumps(signal.compare(args.horizon), ensure_ascii=False, indent=1))
     elif args.cmd == "all":
