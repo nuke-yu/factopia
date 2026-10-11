@@ -8,7 +8,9 @@
 - 复核（BR-11）：低置信度、翻译置信度低、否定句、监管措辞、关键财务术语、仅词典法 → 进入语言专家复核队列（review 模块）。
 - 缓存：同一段落（按内容哈希）、同一模型与提示词版本不重复调用。
 """
+import http.client
 import json
+import time
 from datetime import datetime, timezone
 
 import pandas as pd
@@ -18,6 +20,7 @@ from factopia.text.common import concept_hits, ds_dir, flag_hits, glossary, read
 
 PROMPT_VERSION = "text-label-v1"
 BATCH = 10
+RETRIES = 3
 LOW_CONFIDENCE = 0.6
 LOW_TRANSLATION = 0.7
 LEXICON_CONFIDENCE = 0.5
@@ -96,8 +99,18 @@ def llm_label(batch: list[dict], lang: str, cfg: dict) -> tuple[dict[int, dict],
     gl = "\n".join(f"- {c}: " + "; ".join(s["terms"].get(lang, [])) for c, s in g["concepts"].items())
     paras = "\n".join(f"[{p['i']}] {p['text']}" for p in batch)
     prompt = PROMPT.format(concepts=concepts, glossary=gl, targets=" and ".join(_targets(lang)), lang=lang, paragraphs=paras)
-    text, usage = draft._chat(prompt, cfg)
-    items = json.loads(text).get("items") or []
+    for attempt in range(RETRIES):      # 网络中断、响应不完整、输出不是 JSON：重试；密钥 / 余额等接口错误直接上报
+        try:
+            text, usage = draft._chat(prompt, cfg)
+            items = json.loads(text).get("items") or []
+            break
+        except draft.DraftError as e:
+            if "接口返回" in str(e) or attempt == RETRIES - 1:
+                raise
+        except (http.client.HTTPException, OSError, json.JSONDecodeError):
+            if attempt == RETRIES - 1:
+                raise
+        time.sleep(5 * (attempt + 1))
     known = set(g["concepts"])
     out = {}
     for raw in items:
@@ -162,7 +175,7 @@ def run(dataset: str, lexicon: bool = False, max_docs: int | None = None, redo: 
             print(f"{e}；改用词典法标注（全部进入复核）")
     cache_path = d / "labels" / "_cache.json"
     cache = read_json(cache_path, {})
-    done = n = 0
+    done = n = skipped = 0
     usage = {"prompt_tokens": 0, "completion_tokens": 0}
     for f in meta.to_dict("records"):
         if max_docs is not None and n >= max_docs:
@@ -175,10 +188,14 @@ def run(dataset: str, lexicon: bool = False, max_docs: int | None = None, redo: 
         except draft.DraftError as e:      # 余额不足、密钥错误等：保存已完成部分后停止
             print(f"大模型调用失败，已停止：{e}")
             break
+        except (http.client.HTTPException, OSError, json.JSONDecodeError) as e:   # 重试后仍失败：跳过本篇，下次运行补做
+            skipped += 1
+            print(f"{f['id']} 跳过（重试 {RETRIES} 次仍失败：{type(e).__name__}），下次运行补做", flush=True)
+            continue
         for u in usage:
             usage[u] += out["usage"][u]
         done += 1
         write_json(cache_path, cache)
         print(f"{f['id']} {f['language']} 段落 {out['paragraphs_total']} 预筛 {out['paragraphs_screened']} "
               f"标注 {sum(bool(x['concepts']) for x in out['labels'])}", flush=True)
-    return {"labelled": done, "usage": usage}
+    return {"labelled": done, "skipped": skipped, "usage": usage}
