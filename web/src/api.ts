@@ -392,7 +392,12 @@ export type RulePacks = {
   sources: { version: string; owner: string; last_review: string; sources: Record<string, DataSource>;
     category_sources: Record<string, Partial<Record<Market, string>>>; always: string[] };
 };
+export type RuleHandling = {
+  submission_id: string; status: string; status_zh: string; created_at: string; frozen: string[]; earlier_submissions: number;
+  items: Record<string, { role: string; action: string | null; action_zh: string | null; note: string | null; at: string | null; by: string | null }[]>;
+};
 export type VersionRules = { research_id: string; version: number; setup: Precheck; portfolio: Precheck | null; portfolio_note: string | null;
+  handling?: RuleHandling | null;
   focus: Record<string, { run_id: string | null; loop: number | string | null }>; overrides: Record<string, unknown>;
   portfolio_source?: Record<string, string> };
 
@@ -572,6 +577,7 @@ export type IdeaPrefill = { idea_id: string; hypothesis: string; direction: stri
 export type LibraryItem = {
   id: string; name: string; source: "alpha158" | "approved" | "proprietary"; status: string; group: string | null;
   description: string | null; formulation: string | null; code: string | null; label: string | null; period_note: string | null; provenance: string;
+  approved_markets?: Market[]; unapproved_markets?: Market[];
   markets: Partial<Record<Market, { rank_ic: number | null; t: number | null; credibility?: string | null; state?: string | null; approved?: boolean; simulated?: boolean }>>;
 };
 export type Library = { summary: { total: number; by_source: Record<string, number>; proprietary_dir: string }; items: LibraryItem[] };

@@ -163,6 +163,27 @@ def summary(s: dict) -> dict:
         "step": s["current"], "steps": len(s["steps"]), "approved_markets": s.get("approved_markets"), "title": s["materials"]["title"]}
 
 
+def handling(research_id: str, version: int) -> dict | None:
+    """风控台显示规则命中的处理状态（第 14.12 节）：取该研究版本最新一次提交，列出每条命中由哪些角色处理、结论与理由。
+    键为 规则编号@市场（与审批步骤的 hits 一致）；提交时冻结的命中（frozen）用于发现提交后材料或规则的变化。"""
+    subs = [x for x in list_all(research_id) if x["version"] == version]
+    if not subs:
+        return None
+    s = load(subs[0]["id"])
+    pre = s["materials"]["prechecks"]
+    frozen = sorted({f"{h['rule_id']}@{h['market']}" for st in ("setup", "portfolio") for h in ((pre.get(st) or {}).get("hits") or [])})
+    items: dict[str, list[dict]] = {}
+    for st in s["steps"]:
+        for k in st["hits"]:
+            d = s["rule_decisions"].get(f"{st['role']}|{k}")
+            items.setdefault(k, []).append({"role": st["role"], "action": d["action"] if d else None,
+                                            "action_zh": ACTION_ZH.get(d["action"]) if d else None,
+                                            "note": d.get("note") if d else None, "at": d.get("at") if d else None,
+                                            "by": d.get("by") if d else None})
+    return {"submission_id": s["id"], "status": s["status"], "status_zh": STATUS_ZH[s["status"]], "created_at": s["created_at"],
+            "items": items, "frozen": frozen, "earlier_submissions": len(subs) - 1}
+
+
 # ---------------------------------------------------------------- 提交
 
 FACTOR_KEYS = ("name", "description", "formulation", "code", "kind", "dataset", "source", "simulated")   # kind = text：文本信号

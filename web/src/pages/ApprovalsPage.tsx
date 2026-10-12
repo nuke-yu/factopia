@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { Badge, ErrorBox, Loading, Notice, Panel } from "../components/ui";
 import VersionPicker, { useVersionPick } from "../components/VersionPicker";
 import { api, type ApprovalAct, type ApprovalDetail, type ApprovalStep, type Market, type RuleHit, type Submission } from "../api";
@@ -80,6 +80,8 @@ function StepCard({ s, i, sub, actor, onAct }: { s: ApprovalStep; i: number; sub
                   {d ? <Badge tone={d.action === "exception" ? "warn" : "good"}>{d.action === "exception" ? "例外" : "已确认"}</Badge> : <Badge tone="muted">待处理</Badge>}
                   <span className="text-xs">{label}</span>
                   {h && <span className="text-xs text-faint">{h.market_zh} · {h.reason}</span>}
+                  {h && <Link className="text-xs text-accent whitespace-nowrap" to={`/rules?id=${encodeURIComponent(sub.research_id)}&v=${sub.version}&hit=${encodeURIComponent(k)}`}>
+                    在风控台查看证据与规则原文 →</Link>}
                 </div>
                 {d && d.note && <div className="text-xs text-muted pl-1">理由：{d.note}</div>}
                 {mine && !d && (

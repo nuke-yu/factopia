@@ -634,7 +634,9 @@ def _version_rules(research_id: str, version: int, overrides: dict) -> dict:
             "portfolio_source": {m: v["source"] for m, v in (pctx or {}).get("portfolio", {}).items()},
             "portfolio_note": None if has_pf else "还没有完成的运行：组合生成后才能做组合预检",
             "focus": {m: {"run_id": e.get("run_id"), "loop": (e.get("focus") or {}).get("loop")} for m, e in st["markets"].items()},
-            "overrides": overrides}
+            "overrides": overrides,
+            # 规则命中的处理状态（审批台的确认 / 例外）；合成违规演示时不显示
+            "handling": None if overrides else _approval_mod().handling(research_id, version)}
 
 
 @app.get("/api/research/{research_id}/versions/{version}/rules")

@@ -76,10 +76,15 @@ function CheckTab({ packs }: { packs: RulePacks }) {
       )}
       {res.loading && <Loading what="预检" />}
       {res.error && <ErrorBox error={res.error} />}
+      {d && !demo && <Notice tone="accent" title="规则命中的处理">
+        {d.handling ? <>本页显示最新一次审批提交（{d.handling.status_zh}，{d.handling.created_at.slice(0, 16).replace("T", " ")} UTC）中每条命中的处理状态
+          {d.handling.earlier_submissions > 0 && `；此前另有 ${d.handling.earlier_submissions} 次提交`}。确认与例外在审批台由负责角色操作，记入该提交的留痕。</>
+          : "该版本尚未提交审批。提交后，警告命中由所列审批人在审批台逐条确认或例外处理，处理状态显示在这里。"}
+      </Notice>}
       {d && (
         <div className="grid gap-5 xl:grid-cols-2">
           <Panel eyebrow={`立项锁定前 · ${d.setup.checked_at.slice(0, 16).replace("T", " ")} UTC`} title="立项预检">
-            <PrecheckView pre={d.setup} />
+            <PrecheckView pre={d.setup} handling={d.handling ?? null} highlight={params.get("hit")} />
           </Panel>
           <Panel eyebrow="组合生成后 · 各市场采纳轮次的持仓与诊断" title="组合预检">
             {d.portfolio ? (
@@ -87,7 +92,7 @@ function CheckTab({ packs }: { packs: RulePacks }) {
                 <div className="text-xs text-faint num mb-2">
                   {Object.entries(d.focus).map(([m, f]) => `${MARKET_LABEL[m as Market]} ${f.run_id ?? "未运行"}${f.loop != null ? ` 第 ${f.loop} 轮` : ""}`).join(" · ")}
                 </div>
-                <PrecheckView pre={d.portfolio} />
+                <PrecheckView pre={d.portfolio} handling={d.handling ?? null} highlight={params.get("hit")} />
               </>
             ) : <p className="text-sm text-muted">{d.portfolio_note}</p>}
           </Panel>
