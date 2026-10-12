@@ -456,6 +456,7 @@ export type SignalEntry = {
   signal_id: string; research_id: string; version: number; market: Market; market_zh: string; title: string; submission: string;
   state: string; state_zh: string; reason: string | null; production: boolean;
   labels: { languages: string[]; mandate: string; data_scope: { categories: string[]; universe: string; snapshot: string };
+  resubmission?: { submission: string; status: string; status_zh: string; current_role: string | null; created_at: string; note: string } | null;
     rule_versions: string[]; last_validated: string | null; next_review: string | null; applicability?: string | null;
     regional?: { headline: string; display: string; tags: string[]; reasons: string[] } | null };
   mandate?: string | null; base_currency?: string | null; simulated?: boolean;

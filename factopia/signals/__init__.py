@@ -71,15 +71,25 @@ def _languages(spec: dict, mandate: dict) -> list[str]:
 
 
 def catalog() -> list[dict]:
-    """由全部审批提交生成目录；同一研究版本以最新一次提交为准。"""
-    latest: dict[tuple, dict] = {}
-    for s in approval.list_all():
-        k = (s["research_id"], s["version"])
-        if k not in latest:                                    # list_all 按时间倒序
-            latest[k] = s
+    """由全部审批提交生成目录。同一研究版本：有获批的提交时以最近一次获批为准（重新提交审批期间，已获批版本继续运行，
+    新提交获批后才替换；被退回或拒绝不影响已获批版本），没有获批的提交时以最新一次提交为准。"""
+    by_ver: dict[tuple, list[dict]] = {}
+    for s in approval.list_all():                              # list_all 按时间倒序
+        by_ver.setdefault((s["research_id"], s["version"]), []).append(s)
     evs = events()
     out = []
-    for (rid, ver), summ in latest.items():
+    for (rid, ver), subs in by_ver.items():
+        approved = [x for x in subs if x["status"] in ("approved", "approved_restricted")]
+        summ = approved[0] if approved else subs[0]
+        newer = subs[0] if subs[0]["id"] != summ["id"] else None
+        resub = None
+        if newer:                                              # 获批之后的重新提交
+            last = next((e for e in reversed(approval.events(newer["id"])) if e["action"] in ("return", "reject")), None)
+            resub = {"submission": newer["id"], "status": newer["status"], "status_zh": newer["status_zh"],
+                     "current_role": newer.get("current_role"), "created_at": newer["created_at"],
+                     "note": (f"重新审批中，当前等待「{newer['current_role']}」；获批前继续使用已获批版本" if newer["status"] == "in_review"
+                              else f"重新提交{newer['status_zh']}" + (f"（{last['role']}：{last['note']}）" if last else "") + "；不影响已获批版本"
+                              if newer["status"] in ("returned", "rejected") else f"重新提交{newer['status_zh']}")}
         sub = approval.load(summ["id"])
         mt = sub["materials"]
         spec_p = approval._dir(sub["id"]) / "materials" / "spec.yaml"
@@ -135,7 +145,7 @@ def catalog() -> list[dict]:
                         "credibility": res.get("credibility")},
                 "thresholds": (lock or {}).get("thresholds") or {},
                 "monitor": {k: mon[k] for k in ("computed_at", "suggestion", "suggestion_zh")} | {"alerts": len(mon["alerts"])} if mon else None,
-                "events": mine,
+                "events": mine, "resubmission": resub,
             })
     return out
 

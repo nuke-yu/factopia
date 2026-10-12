@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { Badge, ErrorBox, Loading, Notice, Panel, Seg, Stat } from "../components/ui";
 import EChart from "../components/EChart";
 import { api, visibleMarkets, type CurrencyView, type MonitorPeriod, type MonitorResult, type SignalEntry } from "../api";
@@ -122,6 +122,10 @@ function Detail({ sid, onChanged }: { sid: string; onChanged: () => void }) {
           <div><span className="label mr-2">获批阈值</span><span className="num text-xs">{Object.entries(e.thresholds).map(([k, v]) => `${k} = ${v}`).join("、") || "—"}</span></div>
         </div>
         {e.reason && <p className="text-sm mt-2 text-muted">原因：{e.reason}</p>}
+        {e.resubmission && <Notice tone={e.resubmission.status === "in_review" ? "accent" : "warn"} title="该版本之后又提交了审批">
+          {e.resubmission.note}。新提交 <Link className="text-accent num" to={`/approvals?sid=${encodeURIComponent(e.resubmission.submission)}`}>{e.resubmission.submission}</Link>
+          ，本页状态与监控以已获批的提交 <span className="num">{e.submission}</span> 为准。
+        </Notice>}
         {(e.state === "active" || e.state === "paused") && (
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <button className="btn btn-primary" disabled={!!running} onClick={async () => { await api.startMonitor(sid); await load(); onChanged(); }}>
@@ -243,6 +247,7 @@ export default function SignalsPage() {
                           className={`w-full text-left flex items-center gap-2 py-1.5 px-2 rounded ${x.signal_id === sid ? "bg-bg-3" : ""}`}>
                           <span className="w-10 text-sm" style={{ color: marketColor(x.market) }}>{MARKET_LABEL[x.market]}</span>
                           <Badge tone={STATE_TONE[x.state]}>{x.state_zh}</Badge>
+                          {x.resubmission?.status === "in_review" && <span className="text-xs text-accent">重新审批中</span>}
                           {x.monitor && <Badge tone={SUG_TONE[x.monitor.suggestion]}>{x.monitor.suggestion === "ok" ? "正常" : x.monitor.suggestion === "watch" ? "观察" : "建议暂停"}</Badge>}
                           {x.monitor_job && ["queued", "running"].includes(x.monitor_job.state) && <span className="text-xs text-accent">计算中</span>}
                         </button>
