@@ -14,7 +14,8 @@
 并列敏感性（第 8 章 #21）：模型打分大量并列时，在并列股票中买哪几只会明显影响收益。回测镜像已让并列股票按股票代码
 确定排序（docker/qlib/sitecustomize.py），结果可复现；这里另用 K 个"并列排序种子"（FACTOPIA_TIE_SEED = 1…K）
 对并列顺序做固定的随机排列，衡量收益对并列顺序有多敏感。收益类指标报告默认排序的结果、全部结果的中位数与范围；
-rank IC 与分组收益只取决于打分，不受影响。
+rank IC 与分组收益只取决于打分，不受影响。训练固定随机种子并使用确定性模式（deterministic），因此各次之间的差异只来自
+并列排序；同时记录持股分数线上的并列股票数（ties）。
 结果写入 results/runs/<运行编号>/validation/<轮次>.json。
 """
 import copy
@@ -126,6 +127,20 @@ def _plain(x):
     return x
 
 
+SEED = 42
+
+
+def deterministic(model: dict) -> dict:
+    """固定训练的随机性（第 14.7 节）：LightGBM 用固定种子 + 确定性模式，PyTorch 模型固定 numpy / torch 种子。
+    这样同一配置重新训练得到相同的打分，多次回测之间的差异只来自并列股票的排序。"""
+    kw = model.setdefault("kwargs", {})
+    if model.get("class") == "LGBModel":
+        kw.update(seed=SEED, deterministic=True, force_row_wise=True)
+    elif "pytorch" in str(model.get("module_path", "")):
+        kw["seed"] = SEED
+    return model
+
+
 def make_config(base: dict, static: Path | None, test: tuple[str, str]) -> dict:
     """按该轮的配置生成 qrun 配置：只改数据路径、因子文件与测试期；static 为空时去掉 AI 因子（起点）。"""
     h = copy.deepcopy(_plain(base["data_handler_config"]))
@@ -140,6 +155,7 @@ def make_config(base: dict, static: Path | None, test: tuple[str, str]) -> dict:
     pa = copy.deepcopy(_plain(base["port_analysis_config"]))
     pa["backtest"]["end_time"] = test[1]
     task = _plain({k: v for k, v in base["task"].items() if k in ("model",)})
+    deterministic(task["model"])
     hd = base["task"]["dataset"]["kwargs"]["handler"]
     seg = _plain(base["task"]["dataset"]["kwargs"]["segments"])
     seg["test"] = list(test)
@@ -190,9 +206,11 @@ SEED_DEPENDENT = ("annual_return_with_cost", "information_ratio_with_cost", "max
 def repeated(conf: dict, name: str, work: Path, periods: dict, horizon: int, seeds: int) -> tuple[dict, list]:
     """默认排序跑一次，再用 seeds 个并列排序种子各跑一次：收益类指标给默认值、中位数、范围与全部取值；
     rank IC 等只取决于打分，取默认那次。"""
-    runs = []
+    runs, first_art = [], None
     for k in range(0, seeds + 1):            # 0 = 默认（按股票代码）
-        m, report = evaluate(qrun(conf, work / f"qrun_{name}_{k}", k or None), periods, horizon)
+        art = qrun(conf, work / f"qrun_{name}_{k}", k or None)
+        first_art = first_art or art
+        m, report = evaluate(art, periods, horizon)
         runs.append((m, report))
         log(f"{name} {'默认排序' if k == 0 else f'并列种子 {k}'}：" + "，".join(f"{p} {m[p]['annual_return_with_cost']:.1%}" for p in periods))
     out = {}
@@ -205,6 +223,11 @@ def repeated(conf: dict, name: str, work: Path, periods: dict, horizon: int, see
             first[f"{key}_range"] = [min(vals), max(vals)] if vals else None
             first[f"{key}_all"] = vals
         out[p] = first
+    # 打分并列（只取决于打分，各次相同）：按时间段统计持股分数线上的并列
+    score = _load(first_art / "pred.pkl")["score"]
+    days = score.index.get_level_values("datetime")
+    for p, (start, end) in periods.items():
+        out[p]["ties"] = metrics.ties(score[(days >= pd.Timestamp(start)) & (days <= pd.Timestamp(end))])
     curves = [(r[1]["return"] - r[1]["bench"] - r[1]["cost"]).cumsum() for r in runs]
     return out, curves
 
@@ -253,6 +276,7 @@ def main(spec_path: str) -> None:
     log("训练并回测（起点：20 个基础因子）")
     bl_m, bl_curves = repeated(make_config(base, None, (test_start, holdout_end)), "baseline", work, periods, horizon, seeds)
     result["ai"], result["baseline"], result["seeds"] = ai_m, bl_m, seeds
+    result["deterministic"] = True                # 训练固定种子与确定性模式（2026-10-13 起）
     dates = ai_curves[0].index[::5].append(ai_curves[0].index[-1:]).unique()   # 每 5 个交易日一个点
     pts = lambda cs: [[round(float(v), 5) for v in c.reindex(dates).ffill()] for c in cs]
     result["curve"] = {"dates": [d.strftime("%Y-%m-%d") for d in dates], "ai": pts(ai_curves), "baseline": pts(bl_curves)}

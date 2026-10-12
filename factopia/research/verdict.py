@@ -107,24 +107,37 @@ PLACEBO_MAX_SHARE = 0.10   # 随机因子达到同样收益的比例不超过 10
 REPRO_MIN_SHARE = 0.99     # 重新计算的因子值与 RD-Agent 当时的值一致的比例
 
 
-def credibility(validation: dict | None, sig: dict | None, rule: dict) -> dict:
-    """采纳轮次的可信度：显著性（测试期）、未见数据、安慰剂、复现；回测随机性作为说明，不计入通过与否。
+def credibility(validation: dict | None, sig: dict | None, rule: dict, ties: dict | None = None) -> dict:
+    """采纳轮次的可信度：显著性（测试期）、打分区分度、测试期与未见数据的多次回测成对比较、安慰剂、复现。
 
-    validation 为 worker 的输出（可能为空或尚未完成）；sig 为测试期逐日 rank IC 的显著性（导出的 signal 文件）。
+    validation 为 worker 的输出（可能为空或尚未完成）；sig 为测试期逐日 rank IC 的显著性（导出的 signal 文件）；
+    ties 为测试期打分的并列情况（导出的 score 文件）。
+    收益类判断不看单次回测：同一组并列排序种子下 AI 与起点各回测多次，要求 AI 的中位数高于起点且多数次数胜出
+    （单次回测的收益在打分大量并列、信号较弱时主要取决于买到哪几只，见第 14.7 节"可复现与并列"）。
     """
+    from factopia.validate import metrics as vm
     s = rule["ric_sign"]
     items = []
     t = (sig or {}).get("t")
     items.append({"key": "significance", "label": "测试期 rank IC 显著（|t| > 2 且方向一致）",
                   "value": t, "ok": None if t is None else (t * s > 2)})
     v = validation if validation and validation.get("status") in ("placebo", "done") else None
+    tie = ((v or {}).get("ai", {}).get("test", {}) or {}).get("ties") or ties
+    items.append({"key": "ties", "label": f"打分区分度：持股分数线上并列不超过 {vm.TIE_MAX} 只（中位数）",
+                  "value": tie, "ok": None if not tie else bool(tie["ok"])})
     if v:
+        tp = vm.paired(v["ai"]["test"].get("annual_return_with_cost_all"), v["baseline"]["test"].get("annual_return_with_cost_all"))
+        items.append({"key": "robust_test", "label": "测试期多次回测：AI 扣成本收益中位数高于起点，且多数次数胜出",
+                      "value": tp, "ok": None if not tp else tp["ok"]})
         ai, bl = v["ai"]["holdout"], v["baseline"]["holdout"]
-        ric, r, br = ai.get("rank_ic"), ai.get("annual_return_with_cost"), bl.get("annual_return_with_cost")
-        items.append({"key": "holdout", "label": "2024 年以后（AI 未见过）rank IC 方向一致且收益高于起点",
-                      "value": {"rank_ic": ric, "rank_ic_t": ai.get("rank_ic_t"), "ai": r, "baseline": br,
+        ric = ai.get("rank_ic")
+        hp = vm.paired(ai.get("annual_return_with_cost_all"), bl.get("annual_return_with_cost_all"))
+        r, br = ai.get("annual_return_with_cost"), bl.get("annual_return_with_cost")
+        ok_ret = hp["ok"] if hp else (None if r is None or br is None else r > br)
+        items.append({"key": "holdout", "label": "2024 年以后（AI 未见过）rank IC 方向一致，且多次回测中位数高于起点、多数次数胜出",
+                      "value": {"rank_ic": ric, "rank_ic_t": ai.get("rank_ic_t"), "ai": r, "baseline": br, "paired": hp,
                                 "ai_range": ai.get("annual_return_with_cost_range"), "baseline_range": bl.get("annual_return_with_cost_range")},
-                      "ok": None if ric is None or r is None or br is None else (ric * s > 0 and r > br)})
+                      "ok": None if ric is None or ok_ret is None else (ric * s > 0 and ok_ret)})
         rep = [f["match_share"] for f in v.get("factors", [])]
         items.append({"key": "reproduce", "label": "因子可复现（重新计算的值与 RD-Agent 当时一致）",
                       "value": min(rep) if rep else None, "ok": None if not rep else min(rep) >= REPRO_MIN_SHARE})
@@ -135,8 +148,10 @@ def credibility(validation: dict | None, sig: dict | None, rule: dict) -> dict:
                       "ok": pl["share_ge_ai"] <= PLACEBO_MAX_SHARE})
     noise = None
     if v:
-        rng = v["ai"]["test"].get("annual_return_with_cost_range")
-        noise = {"range": rng, "seeds": v.get("seeds"), "reported": ((v.get("original") or {}).get("ai") or {}).get("annual_return_with_cost")}
+        t = v["ai"]["test"]
+        noise = {"range": t.get("annual_return_with_cost_range"), "median": t.get("annual_return_with_cost"),
+                 "seeds": v.get("seeds"), "reported": ((v.get("original") or {}).get("ai") or {}).get("annual_return_with_cost"),
+                 "deterministic": bool(v.get("deterministic"))}
     done = validation is not None and validation.get("status") == "done"
     oks = [i["ok"] for i in items]
     state = ("unchecked" if not v else "pending" if not done or None in oks else "credible" if all(oks) else "doubtful")

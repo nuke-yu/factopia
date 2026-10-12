@@ -243,6 +243,11 @@ def submit(m: dict, by: str, note: str = "") -> dict:
                          "rank_ic": ((e.get("focus") or {}).get("metrics") or {}).get("rank_ic"),
                          "rank_ic_t": ((e.get("focus") or {}).get("significance") or {}).get("t"),
                          "credibility": ((e.get("focus") or {}).get("credibility") or {}).get("label"),
+                         # 收益：单次回测与多次回测（并列排序种子）的中位数和区间；打分并列（第 14.7 节）
+                         "return_single": ((e.get("focus") or {}).get("metrics") or {}).get("annual_return_with_cost"),
+                         "return_median": (((e.get("focus") or {}).get("credibility") or {}).get("noise") or {}).get("median"),
+                         "return_range": (((e.get("focus") or {}).get("credibility") or {}).get("noise") or {}).get("range"),
+                         "ties": ((e.get("focus") or {}).get("ties") or {}).get("cutoff_tied_median"),
                          "kind": e.get("kind", "rdagent"), "simulated": bool((e.get("price_source") or {}).get("simulated")),
                          "insufficient": e.get("insufficient")} for mk, e in st["markets"].items()},
         "transfer": st.get("transfer"), "overall": st.get("overall"),

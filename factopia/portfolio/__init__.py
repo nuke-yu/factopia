@@ -129,7 +129,7 @@ def _sleeve_target(score: pd.Series, universe: list[str], hist: pd.DataFrame, be
     n = min(t["holdings_per_market"], len(sc))
     cap = t["max_stock_weight"]
     n = max(n, math.ceil(1 / cap))                      # 等权时单只不超过上限
-    top = sc.sort_values(ascending=False).index[:n]
+    top = sc.sort_index().sort_values(ascending=False, kind="mergesort").index[:n]   # 并列时按股票代码，结果可复现
     sig = pd.Series(1.0 / len(top), index=top)
     r = hist[elig].fillna(0.0)
     best = None

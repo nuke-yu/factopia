@@ -190,10 +190,10 @@ export type Validation = {
   placebo?: { n: number; runs: { seed: number; annual_return_with_cost: number | null; max_drawdown_with_cost: number | null; rank_ic: number | null }[];
     share_ge_ai: number | null; share_ge_baseline: number | null; median: number | null };
 };
-export type CredCheck = { key: "significance" | "holdout" | "reproduce" | "placebo"; label: string; ok: boolean | null; value: any };
+export type CredCheck = { key: "significance" | "ties" | "robust_test" | "holdout" | "reproduce" | "placebo"; label: string; ok: boolean | null; value: any };
 export type Credibility = {
   state: "unchecked" | "pending" | "credible" | "doubtful"; label: string; checks: CredCheck[];
-  noise: { range: [number, number] | null; seeds: number | null; reported: number | null } | null;
+  noise: { range: [number, number] | null; median?: number | null; seeds: number | null; reported: number | null; deterministic?: boolean } | null;
 };
 export type Diagnostics = {
   run_id: string; round: string; market: Market; horizon: number; base_currency: string; backtest_note: string;
@@ -440,7 +440,8 @@ export type Submission = {
   rule_decisions: Record<string, { rule: string; action: string; by: string; role: string; note: string; at: string }>;
   materials: { title: string; hypothesis: string; report: { name: string; sha256: string }; code_fingerprint: string;
     data_snapshot: Record<string, string | null>; rule_packs: Record<string, string>;
-    results: Record<string, { run_id: string | null; loop: number | string | null; rank_ic: number | null; rank_ic_t: number | null; credibility: string | null }>;
+    results: Record<string, { run_id: string | null; loop: number | string | null; rank_ic: number | null; rank_ic_t: number | null; credibility: string | null;
+      return_single?: number | null; return_median?: number | null; return_range?: [number, number] | null; ties?: number | null }>;
     prechecks: { setup: Precheck; portfolio: Precheck }; transfer: { label: string } | null };
   lock: null | { locked_at: string; deployment: Market[]; thresholds: Record<string, number>; applicability: Record<string, string>; by: string;
     labels?: { headline: string; flags: string[]; display: string; markets: Record<string, { label: string; tags: string[]; reasons: string[] }> };
@@ -455,8 +456,8 @@ export type ApprovalAct = { role: string; action: string; note?: string; rule?: 
 export type SignalEntry = {
   signal_id: string; research_id: string; version: number; market: Market; market_zh: string; title: string; submission: string;
   state: string; state_zh: string; reason: string | null; production: boolean;
-  labels: { languages: string[]; mandate: string; data_scope: { categories: string[]; universe: string; snapshot: string };
   resubmission?: { submission: string; status: string; status_zh: string; current_role: string | null; created_at: string; note: string } | null;
+  labels: { languages: string[]; mandate: string; data_scope: { categories: string[]; universe: string; snapshot: string };
     rule_versions: string[]; last_validated: string | null; next_review: string | null; applicability?: string | null;
     regional?: { headline: string; display: string; tags: string[]; reasons: string[] } | null };
   mandate?: string | null; base_currency?: string | null; simulated?: boolean;
@@ -504,7 +505,8 @@ export type Acceptance = {
       tasks: { task: string; hours_each: number; manual_times: number; platform_human_times: number }[] };
     citation: { shown: number; cited: number; coverage: number | null; model_dropped: number; model_compliance: number | null; target: number; scope: string };
     reproducibility: { rate: number | null; target: number; criteria: string;
-      items: { signal: string; ok: boolean; factor_match?: number; range_width?: number | null; reason: string | null }[] };
+      items: { signal: string; ok: boolean; factor_match?: number; rank_ic?: (number | null)[]; return?: (number | null)[];
+        deterministic?: boolean; tie_range?: (number | null)[]; tie_range_width?: number | null; reason: string | null }[] };
   };
 };
 

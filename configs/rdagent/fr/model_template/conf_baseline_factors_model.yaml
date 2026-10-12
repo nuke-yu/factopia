@@ -74,6 +74,7 @@ task:
             loss: mse
             n_jobs: 20
             GPU: 0
+            seed: 42                # 可复现：固定 numpy / torch 随机种子
             pt_model_uri: "model.model_cls"
             pt_model_kwargs: {
                 "num_features": 20,

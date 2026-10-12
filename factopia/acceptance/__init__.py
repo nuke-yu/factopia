@@ -6,7 +6,9 @@
 - 重复工作：按任务清单，人工流程中三地各做一遍的小时数 vs 平台上仍须人工重复的小时数，目标减少 20%–40%。
 - 关键结论来源引用覆盖率：页面与报告中展示的 AI 结论句，引用了平台事实编号的比例（目标 100%）；
   同时报告模型原始输出的合规率（未带引用而被丢弃的句子）。
-- 获批实验可复现率：获批的市场版本中，因子重算与 RD-Agent 当时一致（≥ 99%）且多种子回测收益区间 ≤ 1 个百分点的比例（目标 ≥ 95%）。
+- 获批实验可复现率：获批的市场版本中，重新运行能得到与获批时相同结果的比例（目标 ≥ 95%）：因子重算一致（≥ 99%），
+  且按相同配置重新训练、默认排序回测的 rank IC 与获批时相差 ≤ 0.002、扣成本年化收益相差 ≤ 1 个百分点。
+  并列敏感性（多个并列排序种子的收益区间）是稳健性指标，单独报告，计入可信度检查而不计入可复现率（第 14.7 节）。
 
 红队测试：用对抗输入检查平台的防线是否成立（提示注入、测试期泄漏、禁用数据源、卖空、受限证券、越级审批、篡改留痕、
 提交后改材料、未获批版本上线、伪造引用、路径穿越、无理由例外、越权拒绝、模拟数据标注）。
@@ -24,7 +26,7 @@ import yaml
 RUNTIME = Path(os.environ.get("FACTOPIA_RUNTIME", "/workspace/runtime"))
 CONFIGS = Path(os.environ.get("FACTOPIA_CONFIGS_DIR", "/workspace/configs"))
 OUT = RUNTIME / "acceptance"
-REPRO_MATCH, REPRO_RANGE = 0.99, 0.01
+REPRO_MATCH, REPRO_RIC, REPRO_RET = 0.99, 0.002, 0.01
 
 
 def now() -> str:
@@ -114,14 +116,30 @@ def targets(versions: list[dict]) -> dict:
                 items.append({"signal": f"{s['research_id']}.v{s['version']}.{m}", "ok": False, "reason": "没有完成的可信度检查"})
                 continue
             match = min((f.get("match_share") or 0) for f in v.get("factors") or [{}])
-            rng = (v.get("ai", {}).get("test", {}) or {}).get("annual_return_with_cost_range") or [None, None]
-            width = (rng[1] - rng[0]) if None not in rng else None
-            ok = match >= REPRO_MATCH and width is not None and width <= REPRO_RANGE
+            t, orig = (v.get("ai", {}).get("test") or {}), ((v.get("original") or {}).get("ai") or {})
+            ric, ric0 = t.get("rank_ic"), orig.get("rank_ic")
+            ret = t.get("annual_return_with_cost_default", t.get("annual_return_with_cost"))
+            ret0 = orig.get("annual_return_with_cost")
+            d_ric = None if ric is None or ric0 is None else abs(ric - ric0)
+            d_ret = None if ret is None or ret0 is None else abs(ret - ret0)
+            rng = t.get("annual_return_with_cost_range") or [None, None]
+            why = []
+            if match < REPRO_MATCH:
+                why.append(f"因子重算一致 {match:.1%} < {REPRO_MATCH:.0%}")
+            if d_ric is None or d_ric > REPRO_RIC:
+                why.append("重新训练的 rank IC 与获批时不同" + (f"（{ric:.4f} vs {ric0:.4f}）" if d_ric is not None else "（缺少数据）"))
+            if d_ret is None or d_ret > REPRO_RET:
+                why.append("默认排序回测收益与获批时不同" + (f"（{ret:.1%} vs {ret0:.1%}）" if d_ret is not None else "（缺少数据）"))
+            if not v.get("deterministic"):
+                why.append("该次检查在固定训练随机性之前运行，需重新检查")
+            ok = not why
             items.append({"signal": f"{s['research_id']}.v{s['version']}.{m}", "ok": ok, "factor_match": match,
-                          "return_range": rng, "range_width": round(width, 4) if width is not None else None,
-                          "reason": None if ok else ("因子重算不一致" if match < REPRO_MATCH else f"多种子回测收益区间 {width:.1%} > 1 个百分点")})
+                          "rank_ic": [ric, ric0], "return": [ret, ret0], "deterministic": bool(v.get("deterministic")),
+                          "tie_range": rng, "tie_range_width": round(rng[1] - rng[0], 4) if None not in rng else None,
+                          "reason": None if ok else "；".join(why)})
     rp = {"items": items, "rate": round(sum(i["ok"] for i in items) / len(items), 3) if items else None, "target": 0.95,
-          "criteria": f"因子重算一致 ≥ {REPRO_MATCH:.0%} 且多种子回测扣成本年化收益区间 ≤ {REPRO_RANGE:.0%}"}
+          "criteria": f"因子重算一致 ≥ {REPRO_MATCH:.0%}，重新训练的 rank IC 相差 ≤ {REPRO_RIC}，默认排序回测收益相差 ≤ {REPRO_RET:.0%}；"
+                      "并列敏感性（多种子收益区间）单独报告，计入可信度检查"}
     return {"computed_at": now(), "cycle": cyc, "repeated_work": rep, "citation": cit, "reproducibility": rp}
 
 

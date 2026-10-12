@@ -52,3 +52,41 @@ def period(report: pd.DataFrame, ric: pd.Series, start, end, horizon: int, quant
     if quantiles:
         out |= {k: quantiles.get(k) for k in ("spread_mean", "spread_positive_share", "tie_share")}
     return out
+
+
+# ── 打分并列（第 14.7 节）────────────────────────────────────
+
+TIE_MAX = 5          # 持股分数线上并列的股票超过 5 只（中位数）：买哪几只基本靠排序，回测收益不可靠
+TOPK_RATIO, MIN_TOPK = 0.20, 8   # 与 factopia/mining/topk.py 的持股规则一致（股票池的 20%，至少 8 只）
+
+
+def ties(score: pd.Series) -> dict | None:
+    """逐日统计打分并列：score 为 (datetime, instrument) 索引或带 date 列的打分。
+    cutoff_tied = 与第 topk 名打分相同的股票数（含自己）；1 表示没有并列。"""
+    if score is None or len(score) == 0:
+        return None
+    s = score.dropna()
+    day = s.index.get_level_values(0)
+    n = s.groupby(day).size()
+    topk = max(MIN_TOPK, round(float(n.median()) * TOPK_RATIO))
+
+    def cut(v: pd.Series) -> int:
+        v = v.round(10).sort_values(ascending=False)
+        return int((v == v.iloc[min(topk, len(v)) - 1]).sum())
+    tied = s.groupby(day).apply(cut)
+    distinct = s.round(10).groupby(day).nunique()
+    return {"topk": int(topk), "stocks_median": int(n.median()), "distinct_median": int(distinct.median()),
+            "cutoff_tied_median": float(tied.median()), "cutoff_tied_p90": float(tied.quantile(0.9)),
+            "ok": float(tied.median()) <= TIE_MAX, "threshold": TIE_MAX}
+
+
+def paired(ai: list | None, base: list | None) -> dict | None:
+    """多次回测（同一组并列排序种子）下 AI 与起点的成对比较：中位数、区间、AI 胜出的次数。"""
+    if not ai or not base or len(ai) != len(base):
+        return None
+    a, b = np.array(ai, float), np.array(base, float)
+    wins = int((a > b).sum())
+    return {"ai_median": _r(np.median(a)), "baseline_median": _r(np.median(b)),
+            "ai_range": [_r(a.min()), _r(a.max())], "baseline_range": [_r(b.min()), _r(b.max())],
+            "wins": wins, "n": int(len(a)), "win_share": _r(wins / len(a), 4),
+            "ok": bool(np.median(a) > np.median(b) and wins > len(a) / 2)}

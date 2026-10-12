@@ -86,11 +86,14 @@ export default function AcceptancePage() {
               <ul className="text-sm flex flex-col gap-1">
                 {t.reproducibility.items.map((i) => (
                   <li key={i.signal} className="flex flex-wrap gap-2 items-baseline"><Badge tone={i.ok ? "good" : "bad"}>{i.ok ? "可复现" : "不满足"}</Badge>
-                    <span className="num text-xs">{i.signal}</span><span className="text-xs text-muted">因子一致 {pct(i.factor_match, 1)}{i.reason ? ` · ${i.reason}` : ""}</span></li>
+                    <span className="num text-xs">{i.signal}</span><span className="text-xs text-muted">因子一致 {pct(i.factor_match, 1)}{i.reason ? ` · ${i.reason}` : ""}</span>
+                    {i.tie_range && i.tie_range[0] != null && <span className="text-xs text-faint w-full pl-1">并列敏感性（稳健性，不计入可复现率）：
+                      多个并列排序下扣成本年化 {pct(i.tie_range[0], 1)} ～ {pct(i.tie_range[1], 1)}</span>}</li>
                 ))}
               </ul>
             )}
-            <p className="text-xs text-faint mt-2">并列顺序修正（第 14.8 节）之前的运行，多种子回测收益差异大；完整测试时用修正后的运行重新度量。</p>
+            <p className="text-xs text-faint mt-2">可复现 = 重新运行得到与获批时相同的结果。训练已固定随机种子与确定性模式（2026-10-13）；
+              此前运行的检查需重新运行才能度量。并列敏感性计入可信度检查（第 14.7 节）。</p>
           </div>
         </div>
       </Panel>

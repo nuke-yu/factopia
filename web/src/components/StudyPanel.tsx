@@ -124,7 +124,11 @@ function credValue(c: CredCheck): string {
   const v = c.value;
   if (v == null) return "—";
   if (c.key === "significance") return `t = ${(v as number).toFixed(1)}`;
-  if (c.key === "holdout") return `IC ${fix(v.rank_ic, 3)} · ${pct(v.ai)}（起点 ${pct(v.baseline)}）`;
+  if (c.key === "holdout") return v.paired
+    ? `IC ${fix(v.rank_ic, 3)} · 中位数 ${pct(v.paired.ai_median)}（起点 ${pct(v.paired.baseline_median)}）· 胜 ${v.paired.wins}/${v.paired.n}`
+    : `IC ${fix(v.rank_ic, 3)} · ${pct(v.ai)}（起点 ${pct(v.baseline)}）`;
+  if (c.key === "robust_test") return `中位数 ${pct(v.ai_median)}（起点 ${pct(v.baseline_median)}）· 胜 ${v.wins}/${v.n}`;
+  if (c.key === "ties") return `并列 ${v.cutoff_tied_median} 只（持股 ${v.topk}，每天 ${v.distinct_median} 种打分 / ${v.stocks_median} 只）`;
   if (c.key === "placebo") return `${pct(v.share, 0)}（${v.n} 组）`;
   return pct(v as number, 1);
 }
@@ -141,7 +145,7 @@ function CredibilityBlock({ e }: { e: StudyMarket }) {
         <span className="label">可信度</span>
         <Badge tone={CRED_TONE[cred.state]}>{running && cred.state === "unchecked" ? (job!.state === "queued" ? "排队中" : "检查中") : cred.label}</Badge>
         {cred.noise?.range && <span className="num text-faint ml-auto" title="同一个模型多次回测（打分相同的股票处理顺序不同）的测试期扣成本年化">
-          多次回测 {pct(cred.noise.range[0])}~{pct(cred.noise.range[1])}</span>}
+          多次回测中位数 {pct(cred.noise.median)}（{pct(cred.noise.range[0])} ~ {pct(cred.noise.range[1])}）{cred.noise.deterministic ? "" : " · 固定随机性前的检查"}</span>}
       </div>
       <ul className="flex flex-col gap-1">{cred.checks.map((c) => (
         <li key={c.key} className="flex items-baseline gap-2 text-xs">
@@ -190,7 +194,9 @@ function MarketCard({ e, current }: { e: StudyMarket; current: boolean }) {
         <>
           <div className="text-xs text-faint">第 {f.loop} 轮（{e.kind === "text" ? "验证期判定采纳" : "RD-Agent 采纳"}）· {f.factors.slice(0, 3).join("、")}{f.factors.length > 3 ? ` 等 ${f.factors.length} 个` : ""}</div>
           <dl className="grid grid-cols-2 gap-x-3 gap-y-2 text-xs">
-            <div><dt className="text-faint">扣成本年化</dt><dd className="num text-base">{pct(b?.annual_return_with_cost)} → <span className="text-text">{pct(f.metrics.annual_return_with_cost)}</span></dd></div>
+            <div><dt className="text-faint">扣成本年化{f.credibility.noise?.median != null ? "（单次）" : ""}</dt><dd className="num text-base">{pct(b?.annual_return_with_cost)} → <span className="text-text">{pct(f.metrics.annual_return_with_cost)}</span></dd>
+              {f.credibility.noise?.median != null && f.credibility.noise.range && <dd className="num text-[11px] text-warn">
+                多次回测中位数 {pct(f.credibility.noise.median)}，区间 {pct(f.credibility.noise.range[0])} ~ {pct(f.credibility.noise.range[1])}</dd>}</div>
             {e.kind === "text"
               ? <div><dt className="text-faint">最大回撤（绝对）</dt><dd className="num text-base">{pct(b?.max_drawdown_abs)} → <span className="text-text">{pct(f.metrics.max_drawdown_abs)}</span></dd></div>
               : <div><dt className="text-faint">最大回撤</dt><dd className="num text-base">{pct(b?.max_drawdown_with_cost)} → <span className="text-text">{pct(f.metrics.max_drawdown_with_cost)}</span></dd></div>}

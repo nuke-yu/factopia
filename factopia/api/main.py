@@ -713,7 +713,8 @@ def _study_market(m: str, runs: list[dict], jobs: list[dict], rule: dict) -> dic
         bdiag = RESULTS / "runs" / run["run_id"] / "diagnostics" / "baseline.json"
         fo |= {"diagnostics": _json(diag) if diag.exists() else None,
                "baseline_diagnostics": _json(bdiag) if bdiag.exists() else None}
-        fo |= {"significance": sig, "credibility": verdict.credibility(val, sig, rule),
+        ties = _score_ties(run["run_id"], focus["loop"])
+        fo |= {"significance": sig, "ties": ties, "credibility": verdict.credibility(val, sig, rule, ties),
                "validation": _validation_summary(val), "validation_job": _job_public(vjob) if vjob else None}
     entry |= {"kind": run.get("kind", "rdagent"), "insufficient": run.get("insufficient"), "price_source": run.get("price_source"),
               "text_dataset": run.get("text_dataset"), "score_direction": run.get("score_direction", 1)}
@@ -733,6 +734,20 @@ def _signal_sig(run_id: str, loop, horizon: int) -> dict | None:
 def _cached_sig(p: Path, mtime: float, horizon: int) -> dict:
     df = pd.read_parquet(p)
     return vmetrics.significance(df.set_index("date")["rank_ic"], horizon)
+
+
+def _score_ties(run_id: str, loop) -> dict | None:
+    """测试期打分的并列情况（导出的 score 文件；持股分数线上并列的股票数，第 14.7 节）。"""
+    p = RESULTS / "runs" / run_id / "score" / f"{loop}.parquet"
+    if not p.exists():
+        return None
+    return _cached_ties(p, p.stat().st_mtime)
+
+
+@lru_cache(maxsize=256)
+def _cached_ties(p: Path, mtime: float) -> dict | None:
+    df = pd.read_parquet(p)
+    return vmetrics.ties(df.set_index(["date", "instrument"])["score"])
 
 
 def _validation(run_id: str, loop) -> dict | None:

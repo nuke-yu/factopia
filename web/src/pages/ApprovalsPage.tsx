@@ -3,7 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { Badge, ErrorBox, Loading, Notice, Panel } from "../components/ui";
 import VersionPicker, { useVersionPick } from "../components/VersionPicker";
 import { api, type ApprovalAct, type ApprovalDetail, type ApprovalStep, type Market, type RuleHit, type Submission } from "../api";
-import { MARKET_LABEL, useAsync } from "../lib";
+import { MARKET_LABEL, pct, useAsync } from "../lib";
 
 // 审批台（Spec 第 14.14 节；BR-22、23、29、47）：提交审批、按角色逐级审批、例外处理、获批锁定、审计证据包
 
@@ -171,12 +171,16 @@ function Detail({ sid, roles }: { sid: string; roles: string[] }) {
           {!d.materials_current && <Notice tone="warn" title="提交材料已变化">{d.materials_note}：运营无法完成部署核对，须重新提交。</Notice>}
           <div className="overflow-x-auto">
             <table className="w-full text-sm num">
-              <thead className="label text-left"><tr><th className="py-1 pr-3">市场</th><th className="pr-3">运行 · 轮次</th><th className="pr-3">rank IC</th><th className="pr-3">t</th><th className="pr-3">可信度</th><th>数据快照</th></tr></thead>
+              <thead className="label text-left"><tr><th className="py-1 pr-3">市场</th><th className="pr-3">运行 · 轮次</th><th className="pr-3">rank IC</th><th className="pr-3">t</th><th className="pr-3">扣成本年化（单次 / 多次中位数与区间）</th><th className="pr-3">分数线并列</th><th className="pr-3">可信度</th><th>数据快照</th></tr></thead>
               <tbody>
                 {sub.markets.map((m) => { const r = sub.materials.results[m]; return (
                   <tr key={m} className="border-t border-line"><td className="py-1.5 pr-3 font-sans">{MARKET_LABEL[m]}</td>
                     <td className="pr-3 text-xs">{(r as { hidden?: string } | undefined)?.hidden ?? `${r?.run_id ?? "—"} · ${r?.loop ?? "—"}`}</td><td className="pr-3">{r?.rank_ic?.toFixed(4) ?? "—"}</td>
-                    <td className="pr-3">{r?.rank_ic_t?.toFixed(2) ?? "—"}</td><td className="pr-3 font-sans">{r?.credibility ?? "—"}</td>
+                    <td className="pr-3">{r?.rank_ic_t?.toFixed(2) ?? "—"}</td>
+                    <td className="pr-3 text-xs">{pct(r?.return_single)}{r?.return_median != null && r.return_range
+                      ? <span className="text-warn"> / {pct(r.return_median)}（{pct(r.return_range[0])} ~ {pct(r.return_range[1])}）</span> : r?.return_single != null ? <span className="text-faint"> / 未做多次回测</span> : null}</td>
+                    <td className="pr-3 text-xs">{r?.ties != null ? `${r.ties} 只` : "—"}</td>
+                    <td className="pr-3 font-sans">{r?.credibility ?? "—"}</td>
                     <td className="text-xs text-faint">{(sub.materials.data_snapshot[m] ?? "—").slice(0, 12)}…</td></tr>); })}
               </tbody>
             </table>
