@@ -68,7 +68,7 @@ def _context(markets: list[str]) -> dict:
         al = [f for f in library.alpha158() if f.get("description")]
         for f in random.sample(al, min(10, len(al))):
             facts.append(f"factor library (public baseline): {f['name']} — {f['description']}")
-        for f in library.approved()[:5]:
+        for f in [x for x in library.approved() if x.get("approved_markets")][:5]:   # 只提供实际获批市场的信号
             facts.append(f"approved internal signal: {f['name']} — {f.get('description') or ''}")
     except Exception:
         pass
