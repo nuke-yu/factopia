@@ -262,9 +262,15 @@ def submit(m: dict, by: str, note: str = "") -> dict:
         "translations": m.get("translations"),
         "idea": None,
     }
-    if (spec.get("ai_draft") or {}).get("idea_id"):           # 研究线索来源（第 17.6 节）
+    ad = spec.get("ai_draft") or {}
+    src_ids = list(dict.fromkeys([*([ad["idea_id"]] if ad.get("idea_id") else []), *(ad.get("idea_ids") or [])]))
+    if src_ids:                                               # 研究线索来源（第 17.6、17.12 节）
         from factopia import ideas
-        materials["idea"] = ideas.lineage(spec["ai_draft"]["idea_id"])
+        from factopia.ideas import combine
+        materials["idea"] = ideas.lineage(src_ids[0])
+        materials["ideas"] = [x for x in (ideas.lineage(i) for i in src_ids) if x]
+        cmb = combine.load(ad.get("combo_id") or "")
+        materials["idea_combo"] = {k: cmb.get(k) for k in ("id", "by", "at", "base", "sources", "hypothesis_cited", "conflicts", "not_testable", "model", "prompt_version")} if cmb else None
     tr_files = {}
     if (m.get("translations") or {}).get("datasets"):         # 冻结翻译：生效译文、概念、复核记录、术语表（第 14.22 节）
         from factopia.text import review as treview

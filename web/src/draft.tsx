@@ -12,6 +12,9 @@ export type Draft = {
   includePastRuns: boolean;  // 证据包中是否包含以往运行的假设与采纳结果
   ideaId?: string | null;    // 来自研究线索池（Spec 第 17 章）
   ideaTitle?: string | null;
+  ideaIds?: string[];        // 合并转立项 / 追加线索：全部来源线索（Spec 第 17.12 节）
+  comboId?: string | null;
+  basedOn?: { id: string; version: number } | null;   // 追加线索：锁定为该研究的新版本
 };
 
 const DEFAULT: Draft = {

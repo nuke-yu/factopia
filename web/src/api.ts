@@ -126,11 +126,12 @@ export type DraftResult = {
   };
   evidence: { groups: string[]; alpha158: EvidenceAlpha[]; internal?: InternalEvidence[]; past_runs: { run_id: string; market: Market; loop: number; hypothesis: string; adopted: boolean }[] };
   mandate: Mandate;
-  meta: { model: string; prompt_version: string; prompt_tokens: number; completion_tokens: number; seconds: number; at: string; idea_id?: string | null };
+  meta: { model: string; prompt_version: string; prompt_tokens: number; completion_tokens: number; seconds: number; at: string; idea_id?: string | null;
+    idea_ids?: string[]; combo_id?: string | null; based_on?: string | null };
 };
 export type DraftInput = {
   hypothesis: string; direction: string; markets: Market[]; horizon: number; mandate: string; groups: string[]; include_past_runs: boolean;
-  idea_id?: string | null;
+  idea_id?: string | null; idea_ids?: string[]; combo_id?: string | null; based_on?: string | null;
 };
 export type RegionDiff = {
   markets: Market[]; markets_version: string; rule_packs: Partial<Record<Market, string>>; differs: number; note: string;
@@ -145,7 +146,7 @@ export type Spec = {
   evidence: { groups: string[]; include_past_runs: boolean; items: string[] }; questions: Question[];
   run: { loops: number; budget_usd: number }; signal_source?: SignalSource; region_diff?: RegionDiff;
   ai_draft: DraftResult["meta"] & { original: Pick<Spec, "hypothesis" | "rationale" | "directions" | "exclusions" | "falsification"> };
-  locked_at?: string; locked_by?: string; precheck_setup?: Precheck; edits?: { field: string; by: string; at: string }[]; past_runs?: string[];
+  based_on?: string | null; locked_at?: string; locked_by?: string; precheck_setup?: Precheck; edits?: { field: string; by: string; at: string }[]; past_runs?: string[];
 };
 export type JobState = "queued" | "running" | "done" | "failed" | "cancelled" | "budget_stopped";
 export type Job = {
@@ -286,9 +287,23 @@ export type TextCompareRow = {
 };
 export type TextOverview = {
   datasets: TextDataset[]; compare: { horizon: number; markets: TextCompareRow[]; note: string; rule?: string } | null;
-  glossary_version: string; review_counts: { pending: number; done: number; pending_real?: number; pending_simulated?: number };
+  glossary_version: string; review_counts: { pending: number; done: number; pending_real?: number; pending_simulated?: number; must_real?: number };
   concepts: { concept: string; zh: string; en: string; fr: string; terms: Record<string, string[]> }[];
+  pipeline?: { screening: "glossary" | "full"; review: { sample_size: number; sample_unscreened: number; sample_seed: number; high_impact_top: number; must_flags: string[] } };
+  glossary_additions?: GlossaryAddition[];
 };
+export type ReviewTier = "must" | "sample" | "impact" | "other";
+export type ReviewCounts = { pending: number; done: number; tiers: Record<ReviewTier, { pending: number; done: number }> };
+export type AccuracyRow = { group: string; group_zh: string; correct: number; reviewed: number; accuracy: number; ci95: [number, number] | null };
+export type ReviewAccuracy = { dataset: string; sample_size: number; pool: number; reviewed: number; rows: AccuracyRow[];
+  unscreened: { sample_size: number; reviewed: number; missed: number; miss_rate: number | null; ci95: [number, number] | null };
+  screening: string; note: string };
+export type GlossaryAddition = { concept: string; lang: string; term: string; by: string; at: string; candidate_id: string; note: string; edited: boolean };
+export type GlossaryCandidate = { id: string; dataset: string; concept: string; concept_zh: string; lang: string; term: string; count: number;
+  examples: { doc_id: string; i: number; text: string; direction: number }[]; status: "pending" | "approved" | "rejected";
+  decided_by?: string; decided_at?: string; note?: string; final_term?: string | null; created_at: string };
+export type GlossaryCandidates = { candidates: GlossaryCandidate[]; additions: GlossaryAddition[]; glossary_version: string;
+  runs: { at: string; dataset: string; model: string; sampled: number; with_risk: number; candidates: number; added: number; usd: number; stopped: string | null }[] };
 export type TextCitation = { i: number; concept: string; name: string; value: number; negated: boolean; evidence: string; review: string; text: string };
 export type TextFiling = {
   id: string; instrument: string; company: string; title: string; language: string; subtype: string | null; url: string | null;
@@ -364,6 +379,7 @@ export type ReviewItem = {
   key: string; dataset: string; doc_id: string; i: number; simulated: boolean; company: string; instrument: string; title: string;
   published_at: string; language: string; language_zh: string; original: string; translation: Record<string, string>;
   translation_confidence: number | null; model: string; glossary_version: string; method: string;
+  tier: ReviewTier; tier_zh: string; sample_kind: "screened" | "unscreened" | null;
   concepts: TextConcept[]; model_concepts: TextConcept[]; flags: TextFlag[]; decision: ReviewDecision | null; history: ReviewDecision[];
 };
 export type ReviewIn = { dataset: string; doc_id: string; i: number; action: string; reviewer: string; note?: string;
@@ -574,6 +590,12 @@ export type IdeaInput = { channel: IdeaChannel; title: string; body: string; mar
 export type IdeaSuggestion = { id: string; channel: IdeaChannel; title: string; body: string; direction: string; period: string; feedback_role: string;
   markets: Market[]; why_zh: string; grounds: string[]; angle: string; model: string; prompt_version: string; at: string };
 export type IdeaAiHypothesis = { title: string; hypothesis: string; direction: string; why_zh: string; model: string; prompt_version: string; at: string };
+export type IdeaCombo = { id: string; by: string; at: string; idea_ids: string[];
+  base: { id: string; version: number; title: string; inherited: string[] } | null;
+  sources: { tag: string; id: string; channel_zh: string; title: string; markets: Market[] }[];
+  title: string; hypothesis_cited: string; hypothesis: string; direction: string; why_zh: string;
+  uses: { tag: string; how_zh: string }[]; unused: string[]; conflicts: string[]; not_testable: string[];
+  markets: Market[]; questions: string[]; model: string; prompt_version: string };
 export type IdeaPrefill = { idea_id: string; hypothesis: string; direction: string; markets: Market[]; questions: string[]; channel_zh: string; title: string };
 
 // ---------------------------------------------------------------- 因子库与语义检索（BR-25、35）
@@ -654,9 +676,13 @@ export const api = {
     return get<{ query: string; concepts: { concept: string; name: string; terms: string[] }[]; results: TextHit[]; truncated: boolean }>(`/text/search?${p}`);
   },
   textSummary: (q: string, concepts: string[] = []) => post<TextSummary>("/text/summary", { q, concept: concepts.length ? concepts : null }),
-  textReview: (status: "pending" | "done" | "all", dataset?: string) =>
-    get<{ items: ReviewItem[]; counts: { pending: number; done: number }; actions: Record<string, string> }>(
-      `/text/review?status=${status}&limit=60${dataset ? `&dataset=${dataset}` : ""}`),
+  textReview: (status: "pending" | "done" | "all", dataset?: string, tier: ReviewTier | "all" = "all") =>
+    get<{ items: ReviewItem[]; counts: ReviewCounts; actions: Record<string, string>; tiers_zh: Record<ReviewTier, string> }>(
+      `/text/review?status=${status}&limit=60&tier=${tier}${dataset ? `&dataset=${dataset}` : ""}`),
+  textAccuracy: () => get<{ datasets: ReviewAccuracy[] }>("/text/review/accuracy"),
+  glossaryCandidates: () => get<GlossaryCandidates>("/text/glossary/candidates"),
+  glossaryDecide: (id: string, body: { action: "approve" | "reject"; by: string; note?: string; term?: string | null }) =>
+    post<GlossaryCandidate>(`/text/glossary/candidates/${id}`, body),
   textDecide: (body: ReviewIn) => post<ReviewDecision>("/text/review", body),
   overview: () => get<Overview>("/overview"),
   cube: (h: number) => get<Cube>(`/alpha158/${h}/cube`),
@@ -701,5 +727,6 @@ export const api = {
   ideaAct: (id: string, body: { action: string; by: string; note?: string; target?: string }) => post<Idea>(`/ideas/${id}/act`, body),
   ideaPrefill: (id: string, factors: string[]) => post<IdeaPrefill>(`/ideas/${id}/convert`, { factors }),
   ideaSuggest: (channel: IdeaChannel, markets: Market[], avoid: string[]) => post<IdeaSuggestion>("/ideas/suggest", { channel, markets, avoid }),
+  ideaCombine: (ids: string[], by: string, base: string | null) => post<IdeaCombo>("/ideas/combine", { ids, by, base }),
   ideaAiHypothesis: (id: string) => post<Idea>(`/ideas/${id}/ai-hypothesis`, {}),
 };

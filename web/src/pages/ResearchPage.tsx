@@ -36,7 +36,8 @@ export default function ResearchPage() {
     try {
       const r = await api.draft({ hypothesis: draft.hypothesis, direction: draft.direction, markets: draft.markets, horizon: draft.horizon,
         mandate: draft.mandate, groups: draft.groups.length === cube.data?.groups.length ? [] : draft.groups, include_past_runs: draft.includePastRuns,
-        idea_id: draft.ideaId ?? null });
+        idea_id: draft.ideaId ?? null, idea_ids: draft.ideaIds ?? [], combo_id: draft.comboId ?? null,
+        based_on: draft.basedOn ? `${draft.basedOn.id}.v${draft.basedOn.version}` : null });
       setResult(r); setLocked(null);
       navigate("/audit");
     } catch (e) {
@@ -53,6 +54,20 @@ export default function ResearchPage() {
         <h1 className="font-display text-2xl font-semibold tracking-wide mt-1">提出假设，选择研究范围</h1>
         <p className="text-muted mt-1 max-w-[70ch]">研究员只需表达想法和范围；AI 会据此起草研究规格（研究计划、候选方向、可证伪测试），在下一步由你审核确认（Spec 第 16 章）。</p>
       </div>
+      {!!draft.ideaIds?.length && (
+        <div className="panel p-3 flex flex-col gap-1.5 text-sm">
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="label">{draft.basedOn ? "追加线索" : "合并转立项"}</span>
+            <span className="text-muted">{draft.ideaTitle}</span>
+            <span className="num text-xs text-faint">{draft.comboId}</span>
+            <button type="button" className="btn h-7 px-2 text-xs ml-auto" onClick={() => update({ ideaIds: [], comboId: null, basedOn: null, ideaTitle: null })}>不关联线索</button>
+          </div>
+          <div className="text-xs text-muted">来源线索：<span className="num">{draft.ideaIds.join("、")}</span></div>
+          <span className="text-xs text-faint">{draft.basedOn
+            ? `锁定后成为研究 ${draft.basedOn.id} 的新版本（基于 v${draft.basedOn.version}，已检验的旧版本不变）；`
+            : "锁定后成为一个新研究；"}所有来源线索标记为"已转立项"并指向该版本，每条线索的防泄漏与文档许可确认项会出现在审核页</span>
+        </div>
+      )}
       {draft.ideaId && (
         <div className="panel p-3 flex flex-wrap items-center gap-3 text-sm">
           <span className="label">来自研究线索</span>

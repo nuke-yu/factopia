@@ -2,7 +2,8 @@
 
 研究员给出假设（中 / 英 / 法文）、授权、市场与周期；系统先计算证据包与授权约束，再请大模型起草规格，
 输出按 JSON 结构校验；数据缺口、自由文本授权条款与测试期年份由系统补充为待确认事项。
-大模型使用与 RD-Agent 相同的 .env 配置（CHAT_MODEL / DEEPSEEK_API_KEY），可用 FACTOPIA_LLM_* 覆盖。
+大模型优先使用 .env 中的 FACTOPIA_LLM_BASE_URL / MODEL / API_KEY（OpenAI 兼容接口，如阿里云百炼）；
+未设置时回退到 RD-Agent 的 DeepSeek 配置（CHAT_MODEL=deepseek/... 与 DEEPSEEK_API_KEY）。
 """
 import json
 import os
@@ -51,9 +52,21 @@ def llm_config() -> dict:
     raise DraftError("未配置大模型：在 .env 中设置 CHAT_MODEL=deepseek/... 与 DEEPSEEK_API_KEY，或 FACTOPIA_LLM_BASE_URL / MODEL / API_KEY")
 
 
-def _chat(prompt: str, cfg: dict) -> tuple[str, dict]:
+def _extra_body() -> dict:
+    """FACTOPIA_LLM_EXTRA_BODY：附加到请求的服务商参数（JSON），如百炼的 {"enable_thinking": false}。"""
+    raw = os.environ.get("FACTOPIA_LLM_EXTRA_BODY", "").strip()
+    if not raw:
+        return {}
+    try:
+        v = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise DraftError(f".env 中 FACTOPIA_LLM_EXTRA_BODY 不是合法 JSON：{e}") from e
+    return v if isinstance(v, dict) else {}
+
+
+def _chat(prompt: str, cfg: dict, task: str = "其他") -> tuple[str, dict]:
     body = json.dumps({"model": cfg["model"], "temperature": 0.3, "response_format": {"type": "json_object"},
-                       "messages": [{"role": "user", "content": prompt}]}).encode()
+                       "messages": [{"role": "user", "content": prompt}], **_extra_body()}).encode()
     req = urllib.request.Request(f"{cfg['base_url']}/chat/completions", data=body, method="POST",
                                  headers={"Authorization": f"Bearer {cfg['api_key']}", "Content-Type": "application/json"})
     try:
@@ -63,7 +76,10 @@ def _chat(prompt: str, cfg: dict) -> tuple[str, dict]:
         raise DraftError(f"大模型接口返回 {e.code}：{e.read()[:300].decode(errors='replace')}") from e
     except (urllib.error.URLError, TimeoutError) as e:
         raise DraftError(f"无法连接大模型接口：{e}") from e
-    return data["choices"][0]["message"]["content"], data.get("usage") or {}
+    usage = data.get("usage") or {}
+    from factopia import llm_cost
+    usage["usd"] = llm_cost.record(task, cfg["model"], usage)         # 费用记录（runtime/llm_costs.jsonl）
+    return data["choices"][0]["message"]["content"], usage
 
 
 def _evidence_text(items: list[dict]) -> str:
@@ -200,7 +216,7 @@ def make_draft(inputs: dict) -> dict:
     inputs = {**inputs, "_free_text": mandate["free_text"]}
     retry_note = ""
     for attempt in range(2):  # JSON 格式、必填字段或语言不合格时，带上原因重试一次
-        text, usage = _chat(prompt + retry_note, cfg)
+        text, usage = _chat(prompt + retry_note, cfg, "研究规格起草")
         for k in tokens:
             tokens[k] += int(usage.get(k) or 0)
         try:
@@ -212,14 +228,17 @@ def make_draft(inputs: dict) -> dict:
             retry_note = f"\n\nYour previous answer was rejected: {e}. Fix it and answer again with the full JSON object."
     draft["region_diff"] = regions.differences(inputs["markets"], mandates.load(inputs["mandate"]), draft["data_needs"])
     draft["system_questions"] = _system_questions(draft, inputs)
-    if inputs.get("idea_id"):                                  # 来自研究线索池（第 17 章）：防泄漏与文档许可须确认
+    idea_ids = list(dict.fromkeys([*([inputs["idea_id"]] if inputs.get("idea_id") else []), *(inputs.get("idea_ids") or [])]))
+    if idea_ids:                                               # 来自研究线索池（第 17 章）：每条来源线索的防泄漏与文档许可须确认
         from factopia import ideas
-        draft["system_questions"] += ideas.confirm_questions(inputs["idea_id"])
+        for iid in idea_ids:
+            draft["system_questions"] += ideas.confirm_questions(iid)
     draft["constraints"] = mandate["constraints"] + [t["constraint_en"] for t in draft["mandate_interpretations"] if t["constraint_en"]] + PLATFORM_CONSTRAINTS
     return {
         "draft": draft,
         "evidence": {"alpha158": alpha, "past_runs": past, "groups": inputs.get("groups") or [], "internal": internal},
         "mandate": mandate,
         "meta": {"model": cfg["model"], "prompt_version": PROMPT_VERSION, **tokens, "idea_id": inputs.get("idea_id"),
+                 "idea_ids": idea_ids, "combo_id": inputs.get("combo_id"), "based_on": inputs.get("based_on"),
                  "seconds": round(time.time() - t0, 1), "at": datetime.now(timezone.utc).isoformat(timespec="seconds")},
     }

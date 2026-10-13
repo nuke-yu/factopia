@@ -93,10 +93,10 @@ def _context(markets: list[str]) -> dict:
                        "France (CAC 40, EUR, 0.4% financial transaction tax on buys); markets in scope for this idea: " + ", ".join(markets)}
 
 
-def _chat(prompt: str) -> tuple[dict, dict, str]:
+def _chat(prompt: str, task: str = "线索 AI 建议") -> tuple[dict, dict, str]:
     from factopia.research import draft as drafting
     cfg = drafting.llm_config()
-    text, usage = drafting._chat(prompt, cfg)
+    text, usage = drafting._chat(prompt, cfg, task)
     try:
         return json.loads(text), usage, cfg["model"]
     except json.JSONDecodeError as e:
@@ -158,7 +158,7 @@ def auto_hypothesis(iid: str) -> dict:
     ctx = _context(idea["markets"] or list(I.MARKETS))
     prompt = AUTO_PROMPT_FILE.read_text(encoding="utf-8").format(
         channel=idea["channel_zh"], title=idea["title"], body=idea["body"], markets=ctx["markets"], data=ctx["data"])
-    raw, usage, model = _chat(prompt)
+    raw, usage, model = _chat(prompt, "线索 AI 研究假设")
     hyp = str(raw.get("hypothesis") or "").strip()
     if len(hyp) < 20:
         raise I.IdeaError("AI 没有给出完整的研究假设，请再试一次")

@@ -105,7 +105,7 @@ def explain(study: dict, diags: dict) -> dict:
     prompt = PROMPT.format(hypothesis=study.get("hypothesis"), classification=json.dumps(
         {k: study["transfer"].get(k) for k in ("label", "reason")}, ensure_ascii=False),
         facts="\n".join(f"[{f['id']}] {f['text']}" for f in fs), notes=_notes(list(study["markets"])))
-    text, usage = draft._chat(prompt, cfg)
+    text, usage = draft._chat(prompt, cfg, "研究结论解释")
     raw = json.loads(text)
     kept, dropped = filter_sentences(raw, {f["id"] for f in fs})
     return {"sentences": kept, "dropped": dropped, "transfer_view": str(raw.get("transfer_view") or ""),

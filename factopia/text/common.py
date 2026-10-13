@@ -54,9 +54,48 @@ def sha(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()[:16]
 
 
+ADDITIONS = REVIEW / "glossary_additions.json"   # 人工批准的新增术语（第 14.9 节 v1.30）；不改 configs 里的基础术语表
+
+
+def write_shared(path: Path, data) -> None:
+    """写入 review 目录下 api（非 root）与命令行（root）都要改写的文件。"""
+    write_json(path, data)
+    try:
+        os.chmod(path, 0o666)
+    except PermissionError:
+        pass
+
+
 @lru_cache(maxsize=1)
 def glossary() -> dict:
-    return yaml.safe_load((CONFIGS / "text" / "glossary.yaml").read_text(encoding="utf-8"))
+    """基础术语表 + 人工批准的新增术语；有新增时版本号为 <基础版本>+a<条数>。"""
+    g = yaml.safe_load((CONFIGS / "text" / "glossary.yaml").read_text(encoding="utf-8"))
+    adds = read_json(ADDITIONS, []) if ADDITIONS.exists() else []
+    for a in adds:
+        terms = g["concepts"].get(a["concept"], {}).get("terms", {}).setdefault(a["lang"], [])
+        if a["term"] not in terms:
+            terms.append(a["term"])
+    if adds:
+        g["version"] = f"{g['version']}+a{len(adds)}"
+    g["additions"] = adds
+    return g
+
+
+def pipeline() -> dict:
+    """文本流程开关（configs/text/pipeline.yaml）；环境变量 FACTOPIA_TEXT_SCREENING 可临时覆盖预筛方式。"""
+    p = CONFIGS / "text" / "pipeline.yaml"
+    cfg = yaml.safe_load(p.read_text(encoding="utf-8")) if p.exists() else {}
+    cfg.setdefault("screening", "glossary")
+    cfg["screening"] = os.environ.get("FACTOPIA_TEXT_SCREENING", cfg["screening"])
+    if cfg["screening"] not in ("glossary", "full"):
+        raise ValueError(f"screening 只能是 glossary 或 full：{cfg['screening']}")
+    cfg.setdefault("full_min_chars", 40)
+    r = cfg.setdefault("review", {})
+    for k, v in (("sample_size", 100), ("sample_unscreened", 30), ("sample_seed", 20261013), ("high_impact_top", 50),
+                 ("must_flags", ["low_translation_confidence"])):
+        r.setdefault(k, v)
+    cfg.setdefault("glossary_suggest", {}).setdefault("sample", 300)
+    return cfg
 
 
 def fold(text: str) -> str:

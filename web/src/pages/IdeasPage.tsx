@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Badge, ErrorBox, Loading, Notice, Panel, Seg } from "../components/ui";
-import { api, visibleMarkets, type Idea, type IdeaChannel, type IdeaDetail, type IdeaInput, type IdeaList, type IdeaSuggestion, type Market } from "../api";
+import { api, visibleMarkets, type Idea, type IdeaChannel, type IdeaCombo, type IdeaDetail, type IdeaInput, type IdeaList, type IdeaSuggestion, type Market } from "../api";
 import { useDraft } from "../draft";
 import { MARKET_LABEL, useAsync } from "../lib";
 
@@ -163,10 +163,13 @@ function Submit({ meta, actor, setActor, onCreated }: { meta: IdeaList; actor: s
   );
 }
 
-function Card({ i, active, onClick }: { i: Idea; active: boolean; onClick: () => void }) {
+function Card({ i, active, onClick, checked, onCheck }: { i: Idea; active: boolean; onClick: () => void; checked: boolean; onCheck?: () => void }) {
   const dup = (i.similar?.ideas.length ?? 0) > 0;
   return (
-    <button type="button" onClick={onClick} className={`w-full text-left p-3 rounded border transition-colors ${active ? "border-accent/60 bg-accent/10" : "border-line hover:border-accent/40"}`}>
+    <div className={`flex gap-2 p-3 rounded border transition-colors ${checked ? "border-accent bg-accent/5" : active ? "border-accent/60 bg-accent/10" : "border-line hover:border-accent/40"}`}>
+    {onCheck ? <input id={`idea-pick-${i.id}`} type="checkbox" className="mt-1 shrink-0" checked={checked} onChange={onCheck} aria-label={`选择线索：${i.title}`} />
+      : <span className="w-[13px] shrink-0" title="重复 / 不跟进的线索不能合并" />}
+    <button type="button" onClick={onClick} className="min-w-0 flex-1 text-left">
       <div className="flex flex-wrap items-center gap-1.5">
         <Badge tone={AUTO.has(i.channel) ? "warn" : "accent"}>{i.channel_zh}</Badge>
         <Badge tone={STATUS_TONE[i.status]}>{({ new: "待处理", converted: "已转立项", duplicate: "重复", dismissed: "不跟进" })[i.status]}</Badge>
@@ -178,6 +181,7 @@ function Card({ i, active, onClick }: { i: Idea; active: boolean; onClick: () =>
       <div className="text-xs text-muted mt-0.5 line-clamp-2">{i.excerpt}</div>
       <div className="text-xs text-faint mt-1">{i.submitted_by} · {i.markets.length ? i.markets.map((m) => MARKET_LABEL[m]).join(" / ") : "不限市场"}</div>
     </button>
+    </div>
   );
 }
 
@@ -186,6 +190,93 @@ function SourceLink({ ref_ }: { ref_: Record<string, string> }) {
   if (ref_.submission) return <Link className="text-accent" to="/approvals">审批台 · {ref_.submission}</Link>;
   if (ref_.research) return <Link className="text-accent" to="/portfolio">组合台 · {ref_.research}</Link>;
   return null;
+}
+
+// 合并转立项（Spec 第 17.12 节）：勾选多条线索由 AI 合成一个研究假设；或把新线索追加到已有研究，锁定为新版本
+function CombineBar({ picked, items, actor, onClear, onDone }: { picked: string[]; items: Idea[]; actor: string; onClear: () => void; onDone: (c: IdeaCombo) => void }) {
+  const projects = useAsync(() => api.projects(), []);
+  const [base, setBase] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const who = actor.trim();
+  const studies = (projects.data ?? []).filter((p) => !p.example && p.versions.length > 0);
+  const enough = base ? picked.length >= 1 : picked.length >= 2;
+  const titles = picked.map((id) => items.find((i) => i.id === id)?.title ?? id);
+  const go = async () => {
+    setBusy(true); setErr(null);
+    try { onDone(await api.ideaCombine(picked, who, base || null)); } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
+  };
+  return (
+    <div className="panel p-3 flex flex-col gap-2 text-sm border-accent/50">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="label">已选 {picked.length} 条</span>
+        <span className="text-muted min-w-0 truncate max-w-[60ch]">{titles.join("；")}</span>
+        <button type="button" className="btn h-7 px-2 text-xs ml-auto" onClick={onClear}>清空</button>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <label htmlFor="combine-base" className="text-xs text-faint">方式</label>
+        <select id="combine-base" className="field h-8 w-auto max-w-full" value={base} onChange={(e) => setBase(e.target.value)}>
+          <option value="">合并为一个新研究（至少 2 条）</option>
+          {studies.map((p) => <option key={p.id} value={p.id}>追加到已有研究：{p.title}（{p.id} v{p.versions[p.versions.length - 1]}）</option>)}
+        </select>
+        <button type="button" className="btn btn-primary h-8" disabled={busy || !enough || !who} onClick={go}>
+          {busy ? "AI 正在合成研究假设（约 10–30 秒）…" : base ? "AI 合成追加假设" : "AI 合并为一个研究假设"}</button>
+      </div>
+      {!who && <p className="text-xs text-warn">请先在左侧填写提交人 / 处理人。</p>}
+      {err && <ErrorBox error={err} />}
+    </div>
+  );
+}
+
+function CombineResult({ c, onClose }: { c: IdeaCombo; onClose: () => void }) {
+  const { update } = useDraft();
+  const navigate = useNavigate();
+  const go = () => {
+    update({ hypothesis: c.hypothesis, direction: c.direction, markets: c.markets, ideaId: null, ideaIds: c.idea_ids, comboId: c.id,
+      basedOn: c.base ? { id: c.base.id, version: c.base.version } : null, ideaTitle: c.title });
+    navigate("/research");
+  };
+  const tagTitle = (t: string) => t === "B" ? `已有研究 ${c.base?.id} v${c.base?.version}` : c.sources.find((s) => s.tag === t)?.title ?? t;
+  const parts = c.hypothesis_cited.split(/(\[(?:I\d+|B)\])/g);
+  return (
+    <Panel eyebrow={`${c.id} · ${c.model} · 提示词 ${c.prompt_version} · ${c.by}`} title={c.base ? `追加到 ${c.base.title}：${c.title}` : `合并假设：${c.title}`}
+      actions={<button type="button" className="btn h-7 px-2 text-xs" onClick={onClose}>关闭</button>}>
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]">
+        <div className="flex flex-col gap-3 min-w-0">
+          <div>
+            <div className="label mb-1">AI 合成的研究假设（每句后标明来源）</div>
+            <p className="text-sm leading-relaxed">{parts.map((x, k) => /^\[(I\d+|B)\]$/.test(x)
+              ? <span key={k} className="num text-[11px] text-accent align-super cursor-help" title={tagTitle(x.slice(1, -1))}>{x}</span> : <span key={k}>{x}</span>)}</p>
+          </div>
+          {c.direction && <p className="text-sm text-muted">方向：{c.direction}</p>}
+          <p className="text-xs text-muted">{c.why_zh}</p>
+          {c.conflicts.length > 0 && <Notice tone="warn" title="线索之间的矛盾">{c.conflicts.map((x, k) => <div key={k}>· {x}</div>)}</Notice>}
+          {c.not_testable.length > 0 && <Notice tone="accent" title="平台数据做不到、已排除的部分">{c.not_testable.map((x, k) => <div key={k}>· {x}</div>)}</Notice>}
+          <div className="flex flex-wrap items-center gap-2">
+            <button type="button" className="btn btn-primary" onClick={go}>用这条假设转立项</button>
+            <span className="text-xs text-faint">在研究立项页可以修改；锁定研究版本时，所有来源线索才标记为"已转立项"。</span>
+          </div>
+        </div>
+        <div className="flex flex-col gap-2 min-w-0">
+          <div className="label">来源线索</div>
+          <ul className="text-sm flex flex-col gap-1.5">
+            {c.base && <li><span className="num text-xs text-accent mr-1.5">[B]</span>已有研究 {c.base.title}（{c.base.id} v{c.base.version}）
+              {c.base.inherited.length > 0 && <span className="text-xs text-faint">，原来源线索 {c.base.inherited.join("、")}</span>}</li>}
+            {c.sources.map((s) => {
+              const use = c.uses.find((u) => u.tag === s.tag);
+              return (
+                <li key={s.tag}>
+                  <span className="num text-xs text-accent mr-1.5">[{s.tag}]</span><Badge tone="muted">{s.channel_zh}</Badge> {s.title}
+                  {c.unused.includes(s.tag) && <Badge tone="warn">假设中未引用</Badge>}
+                  {use?.how_zh && <div className="text-xs text-muted ml-7">{use.how_zh}</div>}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      </div>
+    </Panel>
+  );
 }
 
 function Detail({ id, actor, onChanged }: { id: string; actor: string; onChanged: () => void }) {
@@ -219,7 +310,8 @@ function Detail({ id, actor, onChanged }: { id: string; actor: string; onChanged
   };
   const convert = () => run(async () => {
     const p = await api.ideaPrefill(d.id, picked);
-    update({ hypothesis: p.hypothesis, direction: p.direction, markets: p.markets, ideaId: p.idea_id, ideaTitle: `${p.channel_zh} · ${p.title}` });
+    update({ hypothesis: p.hypothesis, direction: p.direction, markets: p.markets, ideaId: p.idea_id, ideaTitle: `${p.channel_zh} · ${p.title}`,
+      ideaIds: [], comboId: null, basedOn: null });
     navigate("/research");
   });
   const who = actor.trim();
@@ -346,6 +438,9 @@ export default function IdeasPage() {
   const set = (k: string, v: string) => { const p = new URLSearchParams(params); if (v) p.set(k, v); else p.delete(k); setParams(p); };
   const meta = list.data;
   const sel = params.get("id") ?? meta?.items[0]?.id ?? "";
+  const [picked, setPicked] = useState<string[]>([]);
+  const [combo, setCombo] = useState<IdeaCombo | null>(null);
+  const pick = (id: string) => setPicked((xs) => xs.includes(id) ? xs.filter((x) => x !== id) : xs.length >= 8 ? xs : [...xs, id]);
   return (
     <div className="flex flex-col gap-5">
       <div className="flex flex-wrap items-end gap-3">
@@ -371,6 +466,7 @@ export default function IdeasPage() {
       <div className="grid gap-5 xl:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
         {meta ? <Submit meta={meta} actor={actor} setActor={setActor} onCreated={(i) => { list.reload(); set("id", i.id); }} /> : <Loading what="线索池" />}
         <Panel eyebrow="人工提交（蓝）与自动回流（橙）" title={`线索（${meta?.items.length ?? 0}）`}>
+          <p className="text-xs text-faint mb-2">点卡片查看并单独转立项；勾选多条可以合并为一个研究，或追加到已有研究（最多 8 条）。</p>
           <div className="flex flex-wrap items-center gap-2 mb-3">
             <Seg label="状态" value={st} onChange={(v) => set("status", v === "new" ? "" : v)}
               options={[{ value: "new", label: "待处理" }, { value: "converted", label: "已转立项" }, { value: "duplicate", label: "重复" }, { value: "dismissed", label: "不跟进" }, { value: "all", label: "全部" }]} />
@@ -379,11 +475,14 @@ export default function IdeasPage() {
           </div>
           {list.loading && !meta ? <Loading what="线索" /> : meta && meta.items.length === 0 ? <p className="text-sm text-muted">没有符合条件的线索。</p> : (
             <div className="flex flex-col gap-2 max-h-[40rem] overflow-y-auto pr-1">
-              {meta?.items.map((i) => <Card key={i.id} i={i} active={i.id === sel} onClick={() => set("id", i.id)} />)}
+              {meta?.items.map((i) => <Card key={i.id} i={i} active={i.id === sel} onClick={() => set("id", i.id)} checked={picked.includes(i.id)}
+                onCheck={i.status === "new" || i.status === "converted" ? () => pick(i.id) : undefined} />)}
             </div>
           )}
         </Panel>
       </div>
+      {picked.length > 0 && <CombineBar picked={picked} items={meta?.items ?? []} actor={actor} onClear={() => setPicked([])} onDone={setCombo} />}
+      {combo && <CombineResult key={combo.id} c={combo} onClose={() => setCombo(null)} />}
       {sel && <Detail key={sel} id={sel} actor={actor} onChanged={list.reload} />}
     </div>
   );

@@ -39,6 +39,20 @@ STEP_NAMES = {"direct_exp_gen": "提出假设", "coding": "编写代码", "runni
 FULL_PROMPT_STEPS = ("direct_exp_gen", "feedback")
 
 
+
+def _cost(c: dict) -> float:
+    """RD-Agent 记录的单次调用费用；模型不在 litellm 价目表（如百炼上的模型）时为 NaN，改按 token 估算：
+    FACTOPIA_LLM_PRICE_IN / OUT（美元 / 百万 token）；思考 token 不在 RD-Agent 统计内，输出按 FACTOPIA_LLM_REASONING_FACTOR 放大。
+    保证累计费用是有限数，预算上限才会生效。"""
+    import math
+    cost = c.get("cost")
+    if isinstance(cost, (int, float)) and math.isfinite(cost):
+        return float(cost)
+    pin = float(os.environ.get("FACTOPIA_LLM_PRICE_IN", "0.27"))
+    pout = float(os.environ.get("FACTOPIA_LLM_PRICE_OUT", "1.10"))
+    k = float(os.environ.get("FACTOPIA_LLM_REASONING_FACTOR", "3"))
+    return (c.get("prompt_tokens", 0) * pin + c.get("completion_tokens", 0) * pout * k) / 1e6
+
 def _failure_reason(fb) -> str:
     """代码自检未通过的原因：优先取异常信息（如 KeyError: 'close'），否则取评审意见的第一句。"""
     found = re.findall(r"\b\w*(?:Error|Exception): .+", fb.execution_feedback or "")
@@ -80,6 +94,7 @@ def export(log_dir: Path) -> Path:
             "steps": {}, "started_at": None, "ended_at": None,
         })
 
+    acc = 0.0                                          # 全部轮次累计费用（实时事件显示）
     for msg in FileStorage(log_dir).iter_msg():
         tag, c = msg.tag, msg.content
         if tag == RESEARCH_TAG:
@@ -148,10 +163,11 @@ def export(log_dir: Path) -> Path:
             ev(msg.timestamp, "decision", decision=r["decision"], observations=c.observations,
                new_hypothesis=c.new_hypothesis)
         elif name.endswith("token_cost"):
-            r["cost_usd"] += c.get("cost", 0.0)
+            r["cost_usd"] += _cost(c)
+            acc += _cost(c)
             r["prompt_tokens"] += c.get("prompt_tokens", 0)
             r["completion_tokens"] += c.get("completion_tokens", 0)
-            ev(msg.timestamp, "cost", total_usd=round(c.get("accumulated_cost", 0.0), 5))
+            ev(msg.timestamp, "cost", total_usd=round(acc, 5))
         elif name == "time_info":
             r["steps"][step] = (c["end_time"] - c["start_time"]).total_seconds()
             r["started_at"] = r["started_at"] or _iso(c["start_time"])

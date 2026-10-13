@@ -2,7 +2,7 @@ import { Fragment, useEffect, useMemo, useState } from "react";
 import EChart from "../components/EChart";
 import { Badge, ErrorBox, Loading, Notice, Panel, Seg, Stat } from "../components/ui";
 import {
-  api, type ReviewItem, type TextCompareRow, type TextConcept, type TextDataset, type TextDoc, type TextFiling,
+  api, type GlossaryCandidate, type ReviewAccuracy, type ReviewItem, type ReviewTier, type TextCompareRow, type TextConcept, type TextDataset, type TextDoc, type TextFiling,
   type TextHit, type TextOverview, type TextSummary,
 } from "../api";
 import { cssVar, fix, MARKET_LABEL, marketColor, SHOW_FORMULAS, signed, useAsync, useThemeVersion } from "../lib";
@@ -15,6 +15,14 @@ const REVIEW_ZH: Record<string, string> = {
   pending: "待复核", not_required: "无需复核", confirm: "已确认", correct: "已修正", reject: "判定不涉及风险",
 };
 type Tab = "filings" | "search" | "review" | "glossary";
+const TIER_TONE: Record<ReviewTier, "bad" | "accent" | "warn" | "muted"> = { must: "bad", sample: "accent", impact: "warn", other: "muted" };
+const TIER_HINT: Record<ReviewTier, string> = {
+  must: "低置信度翻译。业务文档要求人工复核；未复核时，使用该数据集的研究不能提交审批。",
+  sample: "按固定种子随机抽取，用来估计 AI 判断的准确率：抽到的不论是否触发复核都要看，看完全部样本才有代表性。另有一部分是术语表没命中、没送 AI 的段落，用来估计漏检率。",
+  impact: "这段的判断一旦相反，所在公告的「风险变化」就会变号，对信号影响最大。",
+  other: "触发了复核条件（否定句、低置信度、监管措辞、财务术语等），但不在以上三组。有空再看，不看不影响信号与提交审批。",
+};
+const pctOrDash = (x: number | null | undefined) => (x == null ? "—" : `${(x * 100).toFixed(1)}%`);
 
 const time = (iso: string | null | undefined) => (iso ? iso.replace("T", " ").replace(/(:\d\d)(\+00:00|Z)$/, "$1 UTC") : "—");
 
@@ -433,20 +441,25 @@ function ReviewCard({ item, conceptsList, reviewer, onDone }: {
   return (
     <div className="py-3 flex flex-col gap-2">
       <div className="flex flex-wrap gap-2 items-center">
+        <Badge tone={TIER_TONE[item.tier]}>{item.sample_kind === "unscreened" ? "漏检抽样" : item.tier_zh}</Badge>
         <SimBadge simulated={item.simulated} />
         <span className="text-xs text-muted">{item.company} · {item.title} · 第 {item.i + 1} 段 · {item.language_zh} · {time(item.published_at)}</span>
         {item.flags.map((f) => <Badge key={f.code} tone="accent">{f.label}</Badge>)}
       </div>
       <p className="text-sm">{item.original}</p>
       {Object.entries(item.translation).map(([k, v]) => <p key={k} className="text-sm text-muted"><span className="text-faint">{LANG[k]}译文：</span>{v}</p>)}
-      <div className="text-xs text-faint">模型判断（{item.method === "lexicon" ? "词典法" : item.model}）：</div>
-      <ConceptChips concepts={item.model_concepts} />
+      {item.sample_kind === "unscreened" ? (
+        <div className="text-xs text-warn">这段没有命中术语表，没有送 AI 判断，平台按"不涉及风险"处理。请判断它是否其实表达了四类风险之一：是的话点"修正"标出概念（记为漏检），否则点"不涉及风险"。</div>
+      ) : <>
+        <div className="text-xs text-faint">模型判断（{item.method === "lexicon" ? "词典法" : item.model}）：</div>
+        <ConceptChips concepts={item.model_concepts} />
+      </>}
       {item.decision && <div className="text-xs text-muted">
         复核记录：{item.history.map((h) => `${h.at.replace("T", " ")} ${h.reviewer} ${REVIEW_ZH[h.action]}${h.note ? `（${h.note}）` : ""}`).join("；")}
       </div>}
       {!item.decision && mode === "view" && (
         <div className="flex flex-wrap gap-2">
-          <button className="btn btn-primary" disabled={busy || !reviewer} onClick={() => send("confirm")}>确认模型判断</button>
+          {item.sample_kind !== "unscreened" && <button className="btn btn-primary" disabled={busy || !reviewer} onClick={() => send("confirm")}>确认模型判断</button>}
           <button className="btn" disabled={busy || !reviewer} onClick={() => setMode("correct")}>修正</button>
           <button className="btn" disabled={busy || !reviewer} onClick={() => send("reject")}>不涉及风险</button>
           <input aria-label="复核理由" className="field flex-1 min-w-[12rem]" placeholder="理由（可选）" value={note} onChange={(e) => setNote(e.target.value)} />
@@ -482,16 +495,65 @@ function ReviewCard({ item, conceptsList, reviewer, onDone }: {
   );
 }
 
+function AccuracyPanel({ tick }: { tick: number }) {
+  const { data, error } = useAsync(() => api.textAccuracy(), [tick]);
+  if (error) return <ErrorBox error={error} />;
+  if (!data) return null;
+  return (
+    <>
+      {data.datasets.map((a: ReviewAccuracy) => (
+        <Panel key={a.dataset} eyebrow={`抽样质检 · ${a.dataset} · 从 ${a.pool.toLocaleString()} 段 AI 判断中固定抽取 ${a.sample_size} 段`} title="AI 判断准确率">
+          <div className="grid gap-4 md:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="label text-left"><tr><th className="py-1 pr-3">分组</th><th className="pr-3 text-right">已复核</th><th className="pr-3 text-right">判断正确</th><th className="pr-3 text-right">准确率</th><th className="text-right">95% 区间</th></tr></thead>
+                <tbody>
+                  {a.rows.length === 0 && <tr><td colSpan={5} className="py-2 text-faint">还没有复核抽样段落。在下方切到"抽样质检"组开始复核。</td></tr>}
+                  {a.rows.map((r) => (
+                    <tr key={r.group} className="border-t border-line">
+                      <td className="py-1.5 pr-3">{r.group_zh}</td><td className="pr-3 text-right num">{r.reviewed}</td><td className="pr-3 text-right num">{r.correct}</td>
+                      <td className="pr-3 text-right num font-medium">{pctOrDash(r.accuracy)}</td>
+                      <td className="text-right num text-muted">{r.ci95 ? `${pctOrDash(r.ci95[0])} – ${pctOrDash(r.ci95[1])}` : "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="text-sm flex flex-col gap-1.5">
+              <div className="label">术语表漏检（没送 AI 的段落）</div>
+              {a.screening === "full" ? <p className="text-muted">当前为全文模式，所有段落都送 AI，不做漏检抽样。</p> : <>
+                <div><span className="font-display text-xl num">{pctOrDash(a.unscreened.miss_rate)}</span>
+                  <span className="text-xs text-muted ml-2">已复核 {a.unscreened.reviewed} / {a.unscreened.sample_size} 段，漏检 {a.unscreened.missed} 段
+                    {a.unscreened.ci95 && `（95% 区间 ${pctOrDash(a.unscreened.ci95[0])} – ${pctOrDash(a.unscreened.ci95[1])}）`}</span></div>
+                <p className="text-xs text-faint">漏检多时：先用"术语表扩充"让 AI 找漏掉的说法；仍不够再在正式业务中打开全文模式（configs/text/pipeline.yaml）。</p>
+              </>}
+              <p className="text-xs text-faint">{a.note}。判断正确 = 确认；或判定不涉及风险而 AI 本来也没标概念；或只改译文、概念与方向不变。</p>
+            </div>
+          </div>
+        </Panel>
+      ))}
+    </>
+  );
+}
+
 function ReviewTab({ ov, onChanged }: { ov: TextOverview; onChanged: () => void }) {
   const [status, setStatus] = useState<"pending" | "done">("pending");
   const [ds, setDs] = useState<string>("");
+  const [tier, setTier] = useState<ReviewTier | "all">("must");
   const [tick, setTick] = useState(0);
   const [reviewer, setReviewer] = useState(() => { try { return localStorage.getItem("factopia-reviewer") ?? ""; } catch { return ""; } });
   useEffect(() => { try { localStorage.setItem("factopia-reviewer", reviewer); } catch { /* 忽略 */ } }, [reviewer]);
-  const { data, error, loading } = useAsync(() => api.textReview(status, ds || undefined), [status, ds, tick]);
+  const { data, error, loading } = useAsync(() => api.textReview(status, ds || undefined, tier), [status, ds, tier, tick]);
+  const tc = data?.counts.tiers;
+  const n = (t: ReviewTier) => (tc ? tc[t][status] : "");
   return (
     <div className="flex flex-col gap-4">
+      <AccuracyPanel tick={tick} />
       <div className="panel p-4 flex flex-wrap gap-3 items-center">
+        <Seg label="分组" value={tier} onChange={setTier} options={[
+          { value: "must", label: `必须复核 ${n("must")}` }, { value: "sample", label: `抽样质检 ${n("sample")}` },
+          { value: "impact", label: `高影响 ${n("impact")}` }, { value: "other", label: `其他 ${n("other")}` }, { value: "all", label: "全部" },
+        ]} />
         <Seg label="状态" value={status} onChange={setStatus}
           options={[{ value: "pending", label: `待复核 ${data?.counts.pending ?? ""}` }, { value: "done", label: `已复核 ${data?.counts.done ?? ""}` }]} />
         <Seg label="数据集" value={ds} onChange={setDs}
@@ -500,8 +562,9 @@ function ReviewTab({ ov, onChanged }: { ov: TextOverview; onChanged: () => void 
           <input id="intel-reviewer" className="field w-40" value={reviewer} onChange={(e) => setReviewer(e.target.value)} placeholder="姓名（必填）" />
         </label>
       </div>
-      <Notice tone="accent" title="进入复核的条件">
-        低置信度判断、翻译置信度低、否定句、监管措辞、关键财务术语、仅词典法标注。复核结果只追加记录不覆盖，打分与检索使用复核后的结果。
+      <Notice tone="accent" title={tier === "all" ? "四个分组" : `${({ must: "必须复核", sample: "抽样质检", impact: "高影响", other: "其他" } as const)[tier]}`}>
+        {tier === "all" ? "必须复核 → 抽样质检 → 高影响 → 其他，按这个顺序排列。只有「必须复核」未完成会阻止提交审批；其余组看多少由你决定。复核结果只追加记录不覆盖，打分与检索使用复核后的结果。"
+          : TIER_HINT[tier]}
       </Notice>
       {loading ? <Loading what="复核队列" /> : error ? <ErrorBox error={error} /> : data && (
         <Panel title={status === "pending" ? "待复核段落" : "已复核段落"} eyebrow={`显示前 ${data.items.length} 条`}>
@@ -518,8 +581,74 @@ function ReviewTab({ ov, onChanged }: { ov: TextOverview; onChanged: () => void 
   );
 }
 
+function CandidateRow({ c, by, onDone }: { c: GlossaryCandidate; by: string; onDone: () => void }) {
+  const [term, setTerm] = useState(c.term);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const go = async (action: "approve" | "reject") => {
+    setBusy(true); setErr(null);
+    try { await api.glossaryDecide(c.id, { action, by, term: action === "approve" ? term : null }); onDone(); }
+    catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
+  };
+  return (
+    <tr className="border-t border-line align-top">
+      <td className="py-2 pr-3 whitespace-nowrap">{c.concept_zh}<div className="text-xs text-faint">{LANG[c.lang] ?? c.lang} · 出现 {c.count} 次</div></td>
+      <td className="py-2 pr-3 min-w-[12rem]">
+        {c.status === "pending" ? <input aria-label="候选术语" id={`gc-${c.id}`} className="field h-8" value={term} onChange={(e) => setTerm(e.target.value)} />
+          : <span className="font-medium">{c.final_term ?? c.term}</span>}
+        {c.examples.slice(0, 2).map((x) => <blockquote key={`${x.doc_id}-${x.i}`} className="text-xs text-faint border-l-2 border-line pl-2 mt-1">{x.text}</blockquote>)}
+      </td>
+      <td className="py-2 whitespace-nowrap">
+        {c.status === "pending" ? (
+          <div className="flex gap-1.5">
+            <button className="btn btn-primary h-7 px-2 text-xs" disabled={busy || !by} onClick={() => go("approve")}>批准</button>
+            <button className="btn h-7 px-2 text-xs" disabled={busy || !by} onClick={() => go("reject")}>拒绝</button>
+          </div>
+        ) : <Badge tone={c.status === "approved" ? "good" : "muted"}>{c.status === "approved" ? "已批准" : "已拒绝"} · {c.decided_by}</Badge>}
+        {err && <div className="text-xs text-bad mt-1">{err}</div>}
+      </td>
+    </tr>
+  );
+}
+
+function GlossaryExpansion({ ov }: { ov: TextOverview }) {
+  const [tick, setTick] = useState(0);
+  const { data, error } = useAsync(() => api.glossaryCandidates(), [tick]);
+  const [by, setBy] = useState(() => { try { return localStorage.getItem("factopia-reviewer") ?? ""; } catch { return ""; } });
+  useEffect(() => { try { localStorage.setItem("factopia-reviewer", by); } catch { /* 忽略 */ } }, [by]);
+  const [show, setShow] = useState<"pending" | "done">("pending");
+  if (error) return <ErrorBox error={error} />;
+  if (!data) return <Loading what="候选术语" />;
+  const list = data.candidates.filter((c) => (show === "pending" ? c.status === "pending" : c.status !== "pending"));
+  const last = data.runs[data.runs.length - 1];
+  return (
+    <Panel eyebrow={`术语表扩充 · 当前版本 ${data.glossary_version} · 已批准新增 ${data.additions.length} 条`} title="AI 找到的候选术语"
+      actions={<label className="text-sm text-muted flex items-center gap-2 whitespace-nowrap" htmlFor="gc-by">审批人<input id="gc-by" className="field h-8 w-32" value={by} onChange={(e) => setBy(e.target.value)} placeholder="姓名" /></label>}>
+      <p className="text-sm text-muted mb-2">AI 从术语表没命中的段落里，找出其实表达了风险、但用了术语表里没有的说法，原样摘出短语作为候选。批准后加入术语表（可先修改短语），再运行补做，只判断新纳入的段落：
+        <code className="num text-xs ml-1">python -m factopia.text understand --dataset fr --refresh</code>（先显示预计花费，加 --yes 才运行）。</p>
+      <p className="text-xs text-faint mb-3">{last ? `最近一次：${time(last.at)}，抽取 ${last.sampled} 段，其中 ${last.with_risk} 段表达了风险，得到 ${last.candidates} 个候选，花费 $${last.usd}${last.stopped ? `（${last.stopped}）` : ""}。` : "还没有运行过。"}
+        生成候选：<code className="num">python -m factopia.text glossary-suggest --dataset fr</code>（先显示预计花费，加 --yes 才运行）。预筛方式：{ov.pipeline?.screening === "full" ? "全文" : "术语表预筛"}。</p>
+      <Seg label="显示" value={show} onChange={setShow} options={[
+        { value: "pending", label: `待审批 ${data.candidates.filter((c) => c.status === "pending").length}` },
+        { value: "done", label: `已处理 ${data.candidates.filter((c) => c.status !== "pending").length}` }]} />
+      <div className="overflow-x-auto mt-3">
+        <table className="w-full text-sm">
+          <thead className="label text-left"><tr><th className="py-1 pr-3">概念</th><th className="pr-3">候选短语与原文例句</th><th>审批</th></tr></thead>
+          <tbody>
+            {list.map((c) => <CandidateRow key={c.id} c={c} by={by.trim()} onDone={() => setTick((t) => t + 1)} />)}
+            {!list.length && <tr><td colSpan={3} className="py-2 text-faint">没有{show === "pending" ? "待审批" : "已处理"}的候选。</td></tr>}
+          </tbody>
+        </table>
+      </div>
+      {!by.trim() && <p className="text-xs text-warn mt-2">请先填写审批人，批准 / 拒绝按钮才能使用。</p>}
+    </Panel>
+  );
+}
+
 function GlossaryTab({ ov }: { ov: TextOverview }) {
   return (
+    <div className="flex flex-col gap-4">
+    <GlossaryExpansion ov={ov} />
     <Panel title="统一概念标签与三语术语表" eyebrow={`版本 ${ov.glossary_version} · configs/text/glossary.yaml`}>
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
@@ -534,8 +663,10 @@ function GlossaryTab({ ov }: { ov: TextOverview }) {
           </tbody>
         </table>
       </div>
-      <p className="text-xs text-faint mt-2">术语表用于预筛段落、跨语言检索和未配置大模型时的词典法标注；每条理解结果都记录所用版本。</p>
+      <p className="text-xs text-faint mt-2">术语表用于预筛段落、跨语言检索和未配置大模型时的词典法标注；每条理解结果都记录所用版本。
+        {ov.glossary_additions?.length ? ` 其中 ${ov.glossary_additions.length} 条为人工批准的新增术语（${ov.glossary_additions.map((a) => a.term).join("、")}）。` : ""}</p>
     </Panel>
+    </div>
   );
 }
 
@@ -553,9 +684,11 @@ export default function IntelPage() {
           <h1 className="font-display text-xl font-semibold">多语言公告与文本信号</h1>
         </div>
         <span className="text-sm text-muted">原文优先 · 译文与概念标签另存 · 按实际可获取时间生效</span>
-        <span className="ml-auto flex gap-2" title="真实数据的待复核会阻止研究提交审批；模拟数据只用词典法标注，复核要求豁免">
-          <Badge tone={data.review_counts.pending_real ? "warn" : "good"}>真实数据待复核 {data.review_counts.pending_real ?? data.review_counts.pending}</Badge>
+        <span className="ml-auto flex flex-wrap gap-2" title="只有真实数据「必须复核」组（低置信度翻译）未完成会阻止研究提交审批；其余待复核不阻止；模拟数据的复核要求豁免">
+          <Badge tone={data.review_counts.must_real ? "bad" : "good"}>必须复核 {data.review_counts.must_real ?? 0}</Badge>
+          <Badge tone="muted">真实数据其他待复核 {Math.max(0, (data.review_counts.pending_real ?? 0) - (data.review_counts.must_real ?? 0))}（不阻止）</Badge>
           {data.review_counts.pending_simulated ? <Badge tone="muted">模拟数据待复核 {data.review_counts.pending_simulated}（豁免）</Badge> : null}
+          <Badge tone="muted">预筛：{data.pipeline?.screening === "full" ? "全文" : "术语表"}</Badge>
         </span>
       </div>
       <div className="grid gap-4 md:grid-cols-3">

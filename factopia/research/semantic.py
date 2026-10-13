@@ -97,7 +97,7 @@ def expand(query: str, use_llm: bool = True) -> dict:
     try:
         if not use_llm:
             raise RuntimeError("未使用大模型")
-        text, usage = draft._chat(prompt, draft.llm_config())
+        text, usage = draft._chat(prompt, draft.llm_config(), "语义检索改写")
         d = json.loads(text)
         return {"method": "llm", "terms": {k: [str(x) for x in (d.get(k) or [])][:8] for k in ("en", "zh", "fr")},
                 "intent": str(d.get("intent") or ""), "tokens": int(usage.get("total_tokens") or 0)}

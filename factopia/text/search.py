@@ -92,7 +92,7 @@ def summarize(query: str, hits: list[dict], max_items: int = 12) -> dict:
         lines.append(f"[{n}]{sim} {h['company']} ({h['instrument']}), {h['title']}, published {h['published_at']}, "
                      f"language {h['language']}: {h['original']}" + (f" | zh: {tr['zh']}" if tr.get("zh") else ""))
     cfg = draft.llm_config()
-    text, usage = draft._chat(SUMMARY_PROMPT.format(query=query, excerpts="\n".join(lines)), cfg)
+    text, usage = draft._chat(SUMMARY_PROMPT.format(query=query, excerpts="\n".join(lines)), cfg, "公告检索摘要")
     raw = json.loads(text).get("sentences") or []
     kept, dropped = [], 0
     for s in raw:

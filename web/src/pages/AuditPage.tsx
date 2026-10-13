@@ -63,7 +63,8 @@ function Review({ result, markets, horizon, inputs, locked, setLocked }: {
   result: DraftResult; markets: Market[]; horizon: number; inputs: ReturnType<typeof useDraft>["draft"];
   locked: Spec | null; setLocked: (s: Spec | null) => void;
 }) {
-  const original = useMemo(() => fromDraft(result), [result]);
+  // 追加线索（Spec 第 17.12 节）：编号沿用已有研究，锁定即生成新版本
+  const original = useMemo(() => ({ ...fromDraft(result), ...(inputs.basedOn ? { id: inputs.basedOn.id } : {}) }), [result, inputs.basedOn]);
   const [f, setF] = useState<Editable>(original);
   const set = (patch: Partial<Editable>) => setF((x) => ({ ...x, ...patch }));
   const d = result.draft;
@@ -87,6 +88,7 @@ function Review({ result, markets, horizon, inputs, locked, setLocked }: {
     evidence: { groups: result.evidence.groups, include_past_runs: inputs.includePastRuns, items: result.evidence.alpha158.map((e) => e.id) },
     questions: [...questions.map((q, i) => ({ ...q, confirmed: checked[i] })), ...(leakQ ? [{ text: leakQ, source: "系统" as const, confirmed: leakOk }] : [])],
     run: { loops: 5, budget_usd: 2 }, signal_source: f.signal_source,
+    based_on: inputs.basedOn && f.id.trim() === inputs.basedOn.id ? `${inputs.basedOn.id}.v${inputs.basedOn.version}` : null,
     ai_draft: { ...result.meta, original: { hypothesis: d.hypothesis, rationale: d.rationale, directions: d.directions, exclusions: d.exclusions, falsification: d.falsification } },
   }), [f, d, inputs, markets, horizon, questions, checked, leakQ, leakOk, result]);
 
@@ -119,7 +121,9 @@ function Review({ result, markets, horizon, inputs, locked, setLocked }: {
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_400px]">
         <Panel eyebrow="研究规格" title="逐条审阅">
           <div className="flex flex-col divide-y divide-line">
-            <Row name="编号" source="AI 起草" edited={edited("id")} hint="锁定后作为研究项目编号，同一编号的后续锁定生成新版本">
+            <Row name="编号" source={inputs.basedOn ? "系统" : "AI 起草"} edited={edited("id")} hint={inputs.basedOn
+              ? `沿用研究 ${inputs.basedOn.id}，锁定后为 v${inputs.basedOn.version + 1}；改成别的编号则另立新研究`
+              : "锁定后作为研究项目编号，同一编号的后续锁定生成新版本"}>
               <input aria-label="编号" className="field num" value={f.id} disabled={ro} onChange={(e) => set({ id: e.target.value })} />
             </Row>
             <Row name="标题" source="AI 起草" edited={edited("title_zh")}>
