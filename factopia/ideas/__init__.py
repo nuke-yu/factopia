@@ -290,7 +290,7 @@ def create(body: dict) -> dict:
         idea["leakage"] = leakage(idea["document"])
     sg = body.get("ai_suggestion") or None                 # 采用了 AI 默认假设（第 17.11 节）：记录原稿与是否经人修改（BR-46）
     if sg and ch != "paper":
-        idea["ai_suggested"] = {k: sg.get(k) for k in ("id", "title", "body", "model", "prompt_version", "angle", "why_zh", "grounds")} | {
+        idea["ai_suggested"] = {k: sg.get(k) for k in ("id", "title", "body", "model", "prompt_version", "angle", "why_zh", "grounds", "selection", "seed", "focus_market", "candidates", "evidence", "dimensions", "table", "inputs", "prompt")} | {
             "edited": str(sg.get("title") or "").strip() != title or str(sg.get("body") or "").strip() != text}
     idea["similar"] = similar(idea)
     _save(idea)

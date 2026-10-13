@@ -4,6 +4,7 @@ import { Badge, ErrorBox, Loading, Notice, Panel, Seg } from "../components/ui";
 import { api, visibleMarkets, type Idea, type IdeaChannel, type IdeaCombo, type IdeaDetail, type IdeaInput, type IdeaList, type IdeaSuggestion, type Market } from "../api";
 import { useDraft } from "../draft";
 import { MARKET_LABEL, useAsync } from "../lib";
+import SuggestionBasis from "../components/SuggestionBasis";
 
 // 研究线索池（Spec 第 17 章，EXT-01）：首页汇集多种信息输入渠道，统一为线索卡片，挑选后转为研究立项
 
@@ -33,7 +34,8 @@ function fileToBase64(f: File): Promise<string> {
   });
 }
 
-function Submit({ meta, actor, setActor, onCreated }: { meta: IdeaList; actor: string; setActor: (v: string) => void; onCreated: (i: Idea) => void }) {
+function Submit({ meta, actor, setActor, onCreated, onSuggestion }: { meta: IdeaList; actor: string; setActor: (v: string) => void; onCreated: (i: Idea) => void;
+  onSuggestion: (s: IdeaSuggestion | null) => void }) {
   const [ch, setCh] = useState<IdeaChannel>("hypothesis");
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
@@ -48,11 +50,13 @@ function Submit({ meta, actor, setActor, onCreated }: { meta: IdeaList; actor: s
   const [sugBusy, setSugBusy] = useState(false);
   const [sugErr, setSugErr] = useState<string | null>(null);
   const [seen, setSeen] = useState<string[]>([]);
-  async function suggest(channel: IdeaChannel) {
+  const [seed, setSeed] = useState("");             // 研究员的想法种子：填了就以它为主线，不填由平台按证据选方向
+  async function suggest(channel: IdeaChannel, another = false) {
     if (channel === "paper") { setSug(null); return; }
     setSugBusy(true); setSugErr(null);
     try {
-      const r = await api.ideaSuggest(channel, markets.length ? markets : visibleMarkets(), seen.slice(-20));
+      const r = await api.ideaSuggest(channel, markets.length ? markets : visibleMarkets(), seen.slice(-20), seed.trim(),
+        another && !seed.trim() && sug ? sug.angle : null);
       setSug(r); setSeen((xs) => [...xs, r.title]);
       setTitle(r.title); setBody(r.body);
       setExtra((e) => ({ ...e, direction: r.direction, period: r.period, feedback_role: r.feedback_role }));
@@ -60,6 +64,7 @@ function Submit({ meta, actor, setActor, onCreated }: { meta: IdeaList; actor: s
     } catch (e) { setSugErr((e as Error).message); } finally { setSugBusy(false); }
   }
   useEffect(() => { suggest(ch); }, [ch]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { onSuggestion(ch === "paper" ? null : sug); }, [sug, ch]); // eslint-disable-line react-hooks/exhaustive-deps
   const edited = !!sug && (sug.title !== title.trim() || sug.body !== body.trim());
   const x = (k: string) => extra[k] ?? "";
   const setX = (k: string, v: string) => setExtra((e) => ({ ...e, [k]: v }));
@@ -93,15 +98,24 @@ function Submit({ meta, actor, setActor, onCreated }: { meta: IdeaList; actor: s
           <div className="border border-accent/40 bg-accent/5 rounded p-3 text-sm flex flex-col gap-1">
             <div className="flex flex-wrap items-center gap-2">
               <Badge tone="accent">AI 默认假设</Badge>
-              {sug && <span className="text-xs text-faint">研究角度：{sug.angle} · {sug.model} · 提示词 {sug.prompt_version}{edited ? " · 已修改" : ""}</span>}
-              <button type="button" className="btn h-7 px-2 text-xs ml-auto" disabled={sugBusy} onClick={() => suggest(ch)}>{sugBusy ? "AI 生成中…" : "换一个"}</button>
+              {sug && <span className="text-xs text-faint">方向：{sug.angle}{sug.focus_market ? ` · 侧重${MARKET_LABEL[sug.focus_market]}` : ""} · {sug.model} · 提示词 {sug.prompt_version}{edited ? " · 已修改" : ""}</span>}
+              <button type="button" className="btn h-7 px-2 text-xs ml-auto" disabled={sugBusy} onClick={() => suggest(ch, true)}>{sugBusy ? "AI 生成中…" : seed.trim() ? "按想法生成" : "换一个"}</button>
             </div>
-            {sugBusy && !sug && <p className="text-muted">AI 正在根据平台数据、市场差异和因子库生成建议（约 5–20 秒）…</p>}
+            <label className="text-xs text-muted">你的想法（可选）：填一句话或几个关键词，AI 围绕它展开；不填则由平台按证据选方向
+              <input id="idea-seed" className="field mt-1 text-sm" value={seed} maxLength={500} onChange={(e) => setSeed(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter" && !sugBusy) { e.preventDefault(); suggest(ch, true); } }}
+                placeholder="例如：港股大跌之后放量的股票反弹更快" />
+            </label>
+            {sugBusy && !sug && <p className="text-muted">AI 正在根据平台证据生成建议（约 10–20 秒）…</p>}
             {sugErr && <p className="text-xs text-bad">{sugErr}</p>}
             {sug && <>
+              {sug.selection && sug.selection.length > 0 && <div className="text-xs">
+                <span className="text-faint">{sug.seed ? "依据：" : "为什么选这个方向（加分 / 减分项）："}</span>
+                <ul className="list-disc pl-4 mt-0.5 text-muted">{sug.selection.map((w) => <li key={w}>{w}</li>)}</ul>
+              </div>}
               <p className="text-muted">{sug.why_zh}</p>
-              {sug.grounds.length > 0 && <details className="text-xs text-faint"><summary className="cursor-pointer">AI 参考的平台知识（{sug.grounds.length} 条，只含名称与说明）</summary>
-                <ul className="list-disc pl-4 mt-1">{sug.grounds.map((g) => <li key={g}>{g.length > 140 ? `${g.slice(0, 140)}…` : g}</li>)}</ul></details>}
+              {sug.table && <a href="#suggestion-basis" className="text-xs text-accent hover:underline">
+                完整生成依据：{sug.inputs?.used.length ?? 0} 个数据维度 · {sug.table.length} 个方向 × {sug.dimensions?.length ?? 0} 项打分 · {sug.evidence?.length ?? 0} 条证据（引用 {sug.evidence?.filter((e) => e.cited).length ?? 0}）· 完整提示词 ↓</a>}
               <p className="text-xs text-faint">已预填到下方，可直接修改；{ch === "experience" ? "经验请改成你自己的观察。" : ch === "feedback" ? "反馈请改成真实收到的内容。" : "提交后研究员仍须挑选、立项并通过检验。"}</p>
             </>}
           </div>
@@ -341,7 +355,11 @@ function Detail({ id, actor, onChanged }: { id: string; actor: string; onChanged
               </>}
             </div>
           )}
-          {d.ai_suggested && <div className="text-xs text-faint">采用 AI 默认假设（{d.ai_suggested.model} · {d.ai_suggested.prompt_version} · 研究角度：{d.ai_suggested.angle}）{d.ai_suggested.edited ? "，提交人已修改" : "，未修改"}</div>}
+          {d.ai_suggested && <div className="text-xs text-faint">采用 AI 默认假设（{d.ai_suggested.model} · {d.ai_suggested.prompt_version} · 方向：{d.ai_suggested.angle}）{d.ai_suggested.edited ? "，提交人已修改" : "，未修改"}
+            {d.ai_suggested.seed && <div>研究员的想法：{d.ai_suggested.seed}</div>}
+            {d.ai_suggested.selection && d.ai_suggested.selection.length > 0 && <div>选择依据：{d.ai_suggested.selection.join("；")}</div>}
+            {"table" in d.ai_suggested && <details className="mt-1"><summary className="cursor-pointer text-accent">查看提交时的完整生成依据</summary>
+              <div className="mt-2"><SuggestionBasis s={d.ai_suggested as unknown as IdeaSuggestion} /></div></details>}</div>}
           {d.document && (
             <div className="text-sm border border-line rounded p-3 flex flex-col gap-1">
               <div className="label">文档</div>
@@ -440,6 +458,7 @@ export default function IdeasPage() {
   const sel = params.get("id") ?? meta?.items[0]?.id ?? "";
   const [picked, setPicked] = useState<string[]>([]);
   const [combo, setCombo] = useState<IdeaCombo | null>(null);
+  const [sugShown, setSugShown] = useState<IdeaSuggestion | null>(null);
   const pick = (id: string) => setPicked((xs) => xs.includes(id) ? xs.filter((x) => x !== id) : xs.length >= 8 ? xs : [...xs, id]);
   return (
     <div className="flex flex-col gap-5">
@@ -464,7 +483,7 @@ export default function IdeasPage() {
         </div>
       )}
       <div className="grid gap-5 xl:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
-        {meta ? <Submit meta={meta} actor={actor} setActor={setActor} onCreated={(i) => { list.reload(); set("id", i.id); }} /> : <Loading what="线索池" />}
+        {meta ? <Submit meta={meta} actor={actor} setActor={setActor} onCreated={(i) => { list.reload(); set("id", i.id); }} onSuggestion={setSugShown} /> : <Loading what="线索池" />}
         <Panel eyebrow="人工提交（蓝）与自动回流（橙）" title={`线索（${meta?.items.length ?? 0}）`}>
           <p className="text-xs text-faint mb-2">点卡片查看并单独转立项；勾选多条可以合并为一个研究，或追加到已有研究（最多 8 条）。</p>
           <div className="flex flex-wrap items-center gap-2 mb-3">
@@ -481,6 +500,7 @@ export default function IdeasPage() {
           )}
         </Panel>
       </div>
+      {sugShown && <SuggestionBasis key={sugShown.id} s={sugShown} />}
       {picked.length > 0 && <CombineBar picked={picked} items={meta?.items ?? []} actor={actor} onClear={() => setPicked([])} onDone={setCombo} />}
       {combo && <CombineResult key={combo.id} c={combo} onClose={() => setCombo(null)} />}
       {sel && <Detail key={sel} id={sel} actor={actor} onChanged={list.reload} />}

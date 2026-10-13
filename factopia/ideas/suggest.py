@@ -1,12 +1,14 @@
-"""AI 默认假设（Spec 第 17.11 节）：线索池除论文 / 研报外的渠道都给出 AI 生成的默认假设，每次不同。
+"""AI 默认假设（Spec 第 17.11 节）：线索池除论文 / 研报外的渠道都给出 AI 生成的默认假设。
 
 - 人工渠道（投资假设 / 研究员经验 / 人工反馈）：打开表单即由 AI 生成一条建议预填，可"换一个"，研究员修改后提交；
   提交时记录 AI 原稿与是否经人修改（BR-46）。
 - 自动回流渠道（监控预警 / 组合归因 / 审批退回）：AI 把平台记录改写为可检验的研究假设，转立项时使用。
 
-依据（体现 AI 挖掘，而不是凭空编写）：平台可用数据、三个市场的交易差异、因子库的名称与说明、以往研究题目、
-近期的监控与组合线索。防泄漏：不提供任何测试期（2022 年起）以后的统计结果，只提供名称与说明。
-每次不同：随机研究角度 + 随机市场侧重 + 避开最近的建议与已有线索；生成后按词语重合度查重，过于相似则重试一次。
+人工渠道的方向（v2）：研究员给了想法种子就以它为主线；否则由平台按证据给研究方向排序（研究缺口、测试期前的显著因子、
+以往轮次是否采纳、排除方向、获批信号，见 directions.py），在得分最高的几个方向中加权抽取，系统给出选择理由。
+AI 拿到编号的证据条目（[E#]），引用后在页面显示。防泄漏：以往运行只有方向与是否采纳，因子统计只用测试期前的数据。
+每次不同：最近用过的方向降低优先级、"换一个"排除当前方向、避开已有线索与研究题目；按词语重合度查重，过于相似则重试一次。
+自动回流渠道与线索合并仍使用 _context（平台背景，只有名称与说明）。
 """
 import json
 import random
@@ -17,19 +19,12 @@ from pathlib import Path
 
 from factopia import ideas as I
 
-PROMPT_VERSION = "idea-suggest-v1"
+PROMPT_VERSION = "idea-suggest-v2"
 PROMPT_FILE = Path(__file__).parent / "prompts" / f"{PROMPT_VERSION}.md"
 AUTO_PROMPT_VERSION = "idea-auto-v1"
 AUTO_PROMPT_FILE = Path(__file__).parent / "prompts" / f"{AUTO_PROMPT_VERSION}.md"
 MAX_OVERLAP = 0.45
 
-ANGLES = [
-    "短期反转与流动性提供", "波动率调整后的中期动量", "成交量与价格背离", "换手率异常与关注度", "低波动异象",
-    "公告发布时点与盘后信息消化", "管理层风险措辞的变化", "跨市场领先滞后（同一发行人在不同市场挂牌）",
-    "交易成本与印花税对高换手信号的侵蚀", "节假日与交易日历差异带来的错位", "行业内相对强弱",
-    "市场急跌后的恢复速度", "指数成分调整前后的价格压力", "汇率波动对本地股票收益的传导", "开盘与收盘价格行为差异",
-    "大市值与中小市值的信号衰减差异", "流动性冲击后的价格回归", "连续涨跌天数与过度反应",
-]
 CHANNEL_TASK = {
     "hypothesis": "an investment hypothesis a quant researcher could test",
     "experience": "a market observation phrased the way an experienced local researcher would describe it from practice "
@@ -103,20 +98,37 @@ def _chat(prompt: str, task: str = "线索 AI 建议") -> tuple[dict, dict, str]
         raise I.IdeaError(f"大模型输出不是合法 JSON：{e}") from e
 
 
-def suggest(channel: str, markets: list[str] | None = None, avoid: list[str] | None = None) -> dict:
+def suggest(channel: str, markets: list[str] | None = None, avoid: list[str] | None = None, seed: str = "",
+            skip_angle: str | None = None) -> dict:
+    """seed：研究员给的想法种子（可选），填了就以它为主线；不填时按平台证据选方向（factopia.ideas.directions）。
+    skip_angle："换一个"时排除当前方向。"""
+    from factopia.ideas import directions as D
     if channel not in CHANNEL_TASK:
         raise I.IdeaError("论文 / 研报渠道不生成默认假设；可选：投资假设、研究员经验、人工反馈")
+    seed = (seed or "").strip()[:500]
     ms = [m for m in I.MARKETS if m in (markets or I.MARKETS)] or list(I.MARKETS)
-    recent = [r["title"] for r in _recent()] + [i["title"] for i in I.all_ideas()[:40]] + list(avoid or [])
-    focus = random.choice(ms + ["all"] * 2)
-    angle = random.choice(ANGLES)
+    log = _recent()
+    ev = D.gather(ms)
+    recent = [r["title"] for r in log] + [i["title"] for i in ev["ideas"][:40]] + [s["title"] for s in ev["studies"]] + list(avoid or [])
+    board = D.choose(ms, [r.get("angle") or "" for r in log], ev, skip_angle, draw=not seed)
+    pick = board if not seed else None
+    if pick:
+        angle, market = pick["angle"]["zh"], pick["market"]
+        selection = pick["why"]
+        direction = (f"Research direction selected by the platform from its evidence: {angle} — market focus: {I.MARKET_ZH[market]} ({market}).\n"
+                     "Why the platform selected it: " + " / ".join(selection))
+    else:
+        angle, market, selection = "研究员的想法", None, ["以研究员输入的想法为主线，平台证据作为补充；下方打分表仅供参考，未用于选方向"]
+        direction = (f"The researcher gave this idea seed; develop it into a testable idea and keep its core intent:\n\"{seed}\"\n"
+                     "If part of the seed cannot be tested with the available data, keep the testable part and say what was dropped in why_zh.")
+    items = D.evidence_items(pick["angle"] if pick else None, pick["coverage"] if pick else None, market, ms, ev, seed)
     ctx = _context(ms)
-    out, usage_all, model, note = None, {"prompt_tokens": 0, "completion_tokens": 0}, None, ""
+    out, usage_all, model, note, prompt = None, {"prompt_tokens": 0, "completion_tokens": 0}, None, "", ""
     for attempt in range(2):
         prompt = PROMPT_FILE.read_text(encoding="utf-8").format(
-            task=CHANNEL_TASK[channel], angle=angle, focus=("all markets in scope" if focus == "all" else I.MARKET_ZH[focus] + f" ({focus})"),
-            markets=ctx["markets"], data=ctx["data"], facts="\n".join(f"[K{i + 1}] {f}" for i, f in enumerate(ctx["facts"])) or "- none",
-            avoid="\n".join(f"- {t}" for t in recent[-40:]) or "- none", roles=", ".join(ROLE_CHOICES), note=note)
+            task=CHANNEL_TASK[channel], direction=direction, markets=ctx["markets"], data=ctx["data"],
+            evidence="\n".join(f"[{it['id']}] {it['text']}" for it in items) or "- none",
+            avoid="\n".join(f"- {t}" for t in recent[-60:]) or "- none", roles=", ".join(ROLE_CHOICES), note=note)
         raw, usage, model = _chat(prompt)
         for k in usage_all:
             usage_all[k] += int(usage.get(k) or 0)
@@ -129,22 +141,26 @@ def suggest(channel: str, markets: list[str] | None = None, avoid: list[str] | N
         out = raw
         if sim <= MAX_OVERLAP:
             break
-        note = f"\n\nYour previous suggestion \"{title}\" was too similar to an existing one. Propose a clearly different idea."
-        angle = random.choice([a for a in ANGLES if a != angle])
+        note = f"\n\nYour previous suggestion \"{title}\" was too similar to an existing one. Propose a clearly different idea within the same direction."
     if not out:
         raise I.IdeaError("AI 两次都没有给出完整的建议，请再试一次")
-    nk = len(ctx["facts"])
-    cites = sorted({int(x) for x in re.findall(r"\d+", " ".join(map(str, out.get("grounds") or []))) if 1 <= int(x) <= nk})
+    by_id = {it["id"]: it for it in items}
+    cited = [f"E{n}" for n in dict.fromkeys(re.findall(r"E?(\d+)", " ".join(map(str, out.get("grounds") or []))))]
+    grounds = [{"kind": by_id[c]["kind"], "text": by_id[c]["zh"]} for c in cited if c in by_id][:8]
+    evidence = [{"id": it["id"], "kind": it["kind"], "zh": it["zh"], "en": it["text"], "cited": it["id"] in cited} for it in items]
     sug = {"id": f"sug_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}_{random.randrange(16 ** 4):04x}",
            "channel": channel, "title": str(out["title"]).strip()[:200], "body": str(out["body"]).strip()[:4000],
            "direction": str(out.get("direction") or "")[:500], "period": str(out.get("period") or "")[:200],
            "feedback_role": out.get("feedback_role") if out.get("feedback_role") in ROLE_CHOICES else ROLE_CHOICES[0],
            "markets": [m for m in I.MARKETS if m in (out.get("markets") or ms)] or ms,
-           "why_zh": str(out.get("why_zh") or "")[:600], "grounds": [ctx["facts"][k - 1] for k in cites][:5],
-           "angle": angle, "model": model, "prompt_version": PROMPT_VERSION, "usage": usage_all, "at": _now()}
+           "why_zh": str(out.get("why_zh") or "")[:600], "grounds": grounds,
+           "angle": angle, "focus_market": market, "selection": selection, "candidates": (pick or {}).get("candidates") or [],
+           "seed": seed, "evidence_n": len(items), "evidence": evidence, "table": board["table"], "dimensions": D.DIMENSIONS,
+           "inputs": D.inputs_summary(ev, ms, log, recent, avoid or []), "prompt": prompt,
+           "model": model, "prompt_version": PROMPT_VERSION, "usage": usage_all, "at": _now()}
     I.DIR.mkdir(parents=True, exist_ok=True)
     with _log().open("a", encoding="utf-8") as f:
-        f.write(json.dumps({k: sug[k] for k in ("id", "channel", "title", "angle", "model", "prompt_version", "at")}, ensure_ascii=False) + "\n")
+        f.write(json.dumps({k: sug[k] for k in ("id", "channel", "title", "angle", "focus_market", "seed", "model", "prompt_version", "at")}, ensure_ascii=False) + "\n")
     return sug
 
 

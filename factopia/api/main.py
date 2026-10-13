@@ -541,15 +541,17 @@ class IdeaSuggestIn(BaseModel):
     channel: str
     markets: list[str] = []
     avoid: list[str] = []
+    seed: str = Field("", max_length=500)       # 研究员的想法种子（可选）
+    skip_angle: str | None = None                # "换一个"时排除当前方向
 
 
 @app.post("/api/ideas/suggest")
 def ideas_suggest(body: IdeaSuggestIn):
-    """AI 默认假设（第 17.11 节）：投资假设 / 研究员经验 / 人工反馈渠道，每次不同。约 10–30 秒。"""
+    """AI 默认假设（第 17.11 节）：投资假设 / 研究员经验 / 人工反馈渠道；按平台证据选方向，或以研究员的想法种子为主线。约 10–30 秒。"""
     from factopia.ideas import suggest
     ms = [m for m in body.markets if access.can(m)] or access.markets()
     try:
-        return suggest.suggest(body.channel, ms, body.avoid[:20])
+        return suggest.suggest(body.channel, ms, body.avoid[:20], body.seed, body.skip_angle)
     except (_ideas().IdeaError, drafting.DraftError) as e:
         raise HTTPException(502 if isinstance(e, drafting.DraftError) else 422, str(e))
 

@@ -574,7 +574,8 @@ export type Idea = {
   similar?: { research: { kind: string; kind_zh: string; title: string; ref: string; score: number }[];
     ideas: { id: string; title: string; channel_zh: string; overlap: number }[]; note: string };
   extract_error?: string;
-  ai_suggested?: { id: string; title: string; body: string; model: string; prompt_version: string; angle: string; why_zh: string; grounds: string[]; edited: boolean };
+  ai_suggested?: { id: string; title: string; body: string; model: string; prompt_version: string; angle: string; why_zh: string; grounds: (string | IdeaGround)[]; edited: boolean;
+    selection?: string[]; seed?: string };
   ai_hypothesis?: IdeaAiHypothesis;
 };
 export type IdeaDetail = Idea & { events: { action: string; by: string; note?: string; at: string; hash: string; target?: string; research?: string }[];
@@ -588,7 +589,17 @@ export type IdeaInput = { channel: IdeaChannel; title: string; body: string; mar
     sample_start?: string; sample_end?: string };
   ai_suggestion?: IdeaSuggestion | null };
 export type IdeaSuggestion = { id: string; channel: IdeaChannel; title: string; body: string; direction: string; period: string; feedback_role: string;
-  markets: Market[]; why_zh: string; grounds: string[]; angle: string; model: string; prompt_version: string; at: string };
+  markets: Market[]; why_zh: string; grounds: (string | IdeaGround)[]; angle: string; model: string; prompt_version: string; at: string;
+  focus_market?: Market | null; selection?: string[]; candidates?: { angle: string; market: Market; score: number }[]; seed?: string; evidence_n?: number;
+  evidence?: { id: string; kind: string; zh: string; en: string; cited: boolean }[];
+  dimensions?: { key: string; label: string; rule: string }[];
+  table?: { angle: string; market: Market; score: number; by_market: Partial<Record<Market, number>>; detail: Record<string, { points: number; note: string }>;
+    counts: { studies: number; rounds: number; adopted: number; exclusions: number; ideas: number }; groups: string[]; keywords: string;
+    skipped: boolean; top: boolean; chance: number | null; selected: boolean }[];
+  inputs?: { used: { name: string; source: string; count: number; use: string; items: string[] }[]; not_used: { name: string; why: string }[];
+    avoid_n: number; session_avoid_n: number };
+  prompt?: string };
+export type IdeaGround = { kind: string; text: string };
 export type IdeaAiHypothesis = { title: string; hypothesis: string; direction: string; why_zh: string; model: string; prompt_version: string; at: string };
 export type IdeaCombo = { id: string; by: string; at: string; idea_ids: string[];
   base: { id: string; version: number; title: string; inherited: string[] } | null;
@@ -730,7 +741,8 @@ export const api = {
   extractIdea: (id: string, by: string) => post<Idea>(`/ideas/${id}/extract?by=${encodeURIComponent(by)}`, {}),
   ideaAct: (id: string, body: { action: string; by: string; note?: string; target?: string }) => post<Idea>(`/ideas/${id}/act`, body),
   ideaPrefill: (id: string, factors: string[]) => post<IdeaPrefill>(`/ideas/${id}/convert`, { factors }),
-  ideaSuggest: (channel: IdeaChannel, markets: Market[], avoid: string[]) => post<IdeaSuggestion>("/ideas/suggest", { channel, markets, avoid }),
+  ideaSuggest: (channel: IdeaChannel, markets: Market[], avoid: string[], seed = "", skip_angle: string | null = null) =>
+    post<IdeaSuggestion>("/ideas/suggest", { channel, markets, avoid, seed, skip_angle }),
   ideaCombine: (ids: string[], by: string, base: string | null) => post<IdeaCombo>("/ideas/combine", { ids, by, base }),
   ideaAiHypothesis: (id: string) => post<Idea>(`/ideas/${id}/ai-hypothesis`, {}),
 };
