@@ -1587,6 +1587,29 @@ def retry_job(job_id: str):
     return store.retry_job(job)
 
 
+class ResumeIn(BaseModel):
+    budget_usd: float | None = Field(None, gt=0, le=20)
+
+
+@app.get("/api/jobs/{job_id}/resume")
+def job_resume_info(job_id: str):
+    return store.resume_info(_load_job(job_id))
+
+
+@app.post("/api/jobs/{job_id}/resume")
+def resume_job(job_id: str, body: ResumeIn):
+    """从断点继续：同一任务重新排队，RD-Agent 从最近的检查点续跑剩下的轮数（已完成的轮次与费用保留）。"""
+    job = _load_job(job_id)
+    access.require(job["market"], "在该市场继续运行任务")
+    try:
+        job = store.resume_job(job, body.budget_usd)
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+    if store.paused():                                    # 暂停原因已处理（如换了密钥）才会点续跑：一并恢复排队
+        store.resume()
+    return _job_public(job)
+
+
 @app.get("/api/runner")
 def runner_status():
     """后台运行器：是否暂停（及原因）、排队与运行中的任务数。"""
@@ -1689,8 +1712,9 @@ def text_filings(dataset: str, instrument: str | None = None, limit: int = Query
     if not s:
         raise HTTPException(404, "该数据集尚未生成文本信号（先运行 python -m factopia.text all）")
     items = [f for f in s["filings"] if not instrument or f["instrument"] == instrument]
+    exc = [f for f in s.get("excluded") or [] if not instrument or f["instrument"] == instrument]
     return {"dataset": dataset, "simulated": s["simulated"], "source": s["source"], "licence": s["licence"],
-            "total": len(items), "items": items[:limit]}
+            "total": len(items), "items": items[:limit], "excluded": exc, "cleaning": s.get("cleaning")}
 
 
 @app.get("/api/text/{dataset}/filings/{doc_id}")

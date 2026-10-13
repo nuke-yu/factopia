@@ -324,7 +324,29 @@ function FilingsTab({ ov }: { ov: TextOverview }) {
               </tbody>
             </table>
           </div>
-          <p className="text-xs text-faint mt-2">风险语气 = 每百段的净风险表述（加重为正、缓解或否定为负，按置信度加权，使用复核后的结果）。点击一行查看原文、译文与引用。</p>
+          <p className="text-xs text-faint mt-2">风险语气 = 每百段的净风险表述（加重为正、缓解或否定为负，按置信度加权，使用复核后的结果）。点击一行查看原文、译文与引用。
+            {data.cleaning?.table_rows.enabled && ` 以数字为主的表格行不计入（分子分母都不计，本数据集共 ${data.cleaning.table_paragraphs.toLocaleString()} 段）。`}</p>
+        </Panel>
+      )}
+      {data && !!data.excluded?.length && (
+        <Panel title={`不参与系列比较的公告（${data.excluded.length} 篇）`} eyebrow="数据清理 · configs/text/pipeline.yaml series_filter">
+          <p className="text-sm text-muted mb-2">"报告已发布 / 提供查阅"一类的通知，以及 PDF 抽不出文字的短文件，风险语气接近 0；混进同公司报告系列会制造假的"变乐观 / 变悲观"，所以不参与比较、不进入信号。规则：少于 {data.cleaning?.series_filter.min_paragraphs} 段，或标题像通知且少于 {data.cleaning?.series_filter.notice_max_paragraphs} 段。</p>
+          <div className="overflow-x-auto max-h-[320px]">
+            <table className="w-full text-sm">
+              <thead className="label text-left sticky top-0 bg-bg-2"><tr><th className="py-1 pr-3">公司</th><th className="pr-3">公告</th><th className="pr-3">正式发布</th><th className="pr-3 text-right">段落</th><th>原因</th></tr></thead>
+              <tbody>
+                {data.excluded.map((f) => (
+                  <tr key={f.id} className="border-t border-line cursor-pointer hover:bg-bg-3" onClick={() => setOpen(f.id)} tabIndex={0} onKeyDown={(e) => e.key === "Enter" && setOpen(f.id)}>
+                    <td className="py-1.5 pr-3 whitespace-nowrap">{f.company}<div className="num text-xs text-faint">{f.instrument}</div></td>
+                    <td className="pr-3 max-w-[36ch] truncate" title={f.title}>{f.title}</td>
+                    <td className="pr-3 num text-xs whitespace-nowrap">{time(f.published_at)}</td>
+                    <td className="pr-3 num text-right">{f.n_paragraphs}</td>
+                    <td className="text-xs text-muted">{f.reason}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </Panel>
       )}
     </div>

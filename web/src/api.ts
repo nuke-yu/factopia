@@ -666,7 +666,9 @@ export const api = {
   dictionary: () => get<RefDictionary>("/refdata/dictionary"),
   textOverview: () => get<TextOverview>("/text/overview"),
   textFilings: (ds: string, instrument?: string) =>
-    get<{ dataset: string; simulated: boolean; source: string; licence: string; total: number; items: TextFiling[] }>(
+    get<{ dataset: string; simulated: boolean; source: string; licence: string; total: number; items: TextFiling[];
+      excluded?: { id: string; instrument: string; company: string; title: string; language: string; published_at: string; n_paragraphs: number; reason: string }[];
+      cleaning?: { table_paragraphs: number; series_filter: { datasets: string[]; min_paragraphs: number; notice_max_paragraphs: number }; table_rows: { enabled: boolean; numeric_share: number } } }>(
       `/text/${ds}/filings${instrument ? `?instrument=${encodeURIComponent(instrument)}` : ""}`),
   textDoc: (ds: string, id: string) => get<TextDoc>(`/text/${ds}/filings/${id}`),
   textSearch: (q: string, datasets: string[] = [], concepts: string[] = []) => {
@@ -715,6 +717,8 @@ export const api = {
   job: (id: string) => get<JobDetail>(`/jobs/${id}`),
   cancelJob: (id: string) => post<{ ok: boolean }>(`/jobs/${id}/cancel`, {}),
   jobLive: (id: string) => get<LiveState | Record<string, never>>(`/jobs/${id}/live`),
+  resumeInfo: (id: string) => get<{ ok: boolean; reason?: string; complete?: number; remaining?: number; checkpoint?: string }>(`/jobs/${id}/resume`),
+  resumeJob: (id: string, budget_usd?: number) => post<Job>(`/jobs/${id}/resume`, { budget_usd: budget_usd ?? null }),
   retryJob: (id: string) => post<{ batch_id: string; jobs: Job[] }>(`/jobs/${id}/retry`, {}),
   runner: () => get<RunnerStatus>("/runner"),
   resumeRunner: () => post<RunnerStatus>("/runner/resume", {}),

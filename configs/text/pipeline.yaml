@@ -18,3 +18,18 @@ review:
 # 术语表扩充（AI 从未命中的段落里找漏掉的风险说法，人工批准后生效）
 glossary_suggest:
   sample: 300                 # 每次抽取的未命中段落数
+
+# 数据清理（不调用大模型，只改打分口径；修改后重算信号 python -m factopia.text signal --dataset fr）
+# 通知类公告："报告已发布 / mise à disposition"一类的短文件。风险语气接近 0，混入同公司报告系列会制造假的
+# "变乐观 / 变悲观"。排除后不参与系列比较，页面上仍列出并标明原因。模拟数据集不适用（生成的公告本来就短）。
+series_filter:
+  datasets: [fr]
+  min_paragraphs: 10            # 少于该段数：通知或 PDF 抽不出文字
+  notice_max_paragraphs: 20     # 标题像通知、且少于该段数
+  notice_title_pattern: "mise [àa] disposition|availability|available|disponibilit|publication (of|du|de)|publie son|publishes its|terms of availability|modalit[ée]s de mise|filed (today|on)|d[ée]p[ôo]t du"
+
+# 表格行：以数字为主的段落（财务报表里的一行）不是管理层的风险表述。不送大模型、不计入风险语气（分子分母都不计）
+table_rows:
+  enabled: true
+  min_tokens: 4
+  numeric_share: 0.4            # 数字类词占比达到该值视为表格行

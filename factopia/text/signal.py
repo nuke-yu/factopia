@@ -19,7 +19,7 @@ import pandas as pd
 
 from factopia.factors.stats import newey_west_t
 from factopia.text import review
-from factopia.text.common import DATASETS, PRICES, concept_names, ds_dir, read_json, write_json
+from factopia.text.common import DATASETS, PRICES, concept_names, ds_dir, is_table, pipeline, read_json, series_exclusion, write_json
 
 HOLD_DAYS = 63
 MIN_STOCKS = 5
@@ -64,11 +64,17 @@ def score_filing(dataset: str, filing: dict, dec: dict) -> dict | None:
     lab = read_json(ds_dir(dataset) / "labels" / f"{filing['id']}.json")
     if not lab:
         return None
-    n = max(int(lab["paragraphs_total"]), 1)
+    tables: set[int] = set()
+    if pipeline()["table_rows"]["enabled"]:          # 表格行不计入风险语气（分子分母都不计）
+        doc = read_json(ds_dir(dataset) / "docs" / f"{filing['id']}.json") or {"paragraphs": []}
+        tables = {p["i"] for p in doc["paragraphs"] if is_table(p["text"])}
+    n = max(int(lab["paragraphs_total"]) - len(tables), 1)
     tone = {c: 0.0 for c in concept_names()}
     contrib = []
     pending = 0
     for x in lab["labels"]:
+        if x["i"] in tables:
+            continue
         eff = review.apply(x, dec.get(review.key(dataset, filing["id"], x["i"])))
         pending += eff["review_status"] == "pending"
         for c in eff["concepts"]:
@@ -78,7 +84,8 @@ def score_filing(dataset: str, filing: dict, dec: dict) -> dict | None:
                             "negated": c["negated"], "evidence": c.get("evidence", ""), "review": eff["review_status"]})
     return {"tone": {c: round(v, 4) for c, v in tone.items()}, "tone_total": round(sum(tone.values()), 4),
             "contrib": contrib, "pending_review": pending, "model": lab["model"],
-            "glossary_version": lab["glossary_version"], "prompt_version": lab["prompt_version"]}
+            "glossary_version": lab["glossary_version"], "prompt_version": lab["prompt_version"],
+            "table_paragraphs": len(tables), "paragraphs_scored": n}
 
 
 def scores(dataset: str, realign: bool = True, save: bool = True) -> pd.DataFrame:
@@ -91,12 +98,18 @@ def scores(dataset: str, realign: bool = True, save: bool = True) -> pd.DataFram
     else:
         meta = pd.read_parquet(d / "aligned.parquet")
     dec = review.decisions()
-    rows = []
+    rows, excluded = [], []
     for f in meta.to_dict("records"):
+        why = series_exclusion(dataset, int(f.get("n_paragraphs") or 0), f.get("title") or "")
+        if why:                                          # 通知类公告不参与系列比较（configs/text/pipeline.yaml series_filter）
+            excluded.append({**{k: f.get(k) for k in ("id", "instrument", "company", "title", "language", "published_at", "url")},
+                             "n_paragraphs": int(f.get("n_paragraphs") or 0), "reason": why})
+            continue
         s = score_filing(dataset, f, dec)
         if s:
             rows.append({**f, **s})
     df = pd.DataFrame(rows)
+    df.attrs["excluded"] = excluded
     if df.empty:
         return df
     by_kind = DATASETS[dataset]["series_by_subtype"]
@@ -214,7 +227,10 @@ def run(dataset: str, horizon: int = 20) -> dict:
     out = {"dataset": dataset, "market": cfg["market"], "simulated": cfg["simulated"], "source": cfg["source"],
            "licence": cfg["licence"], "processing_delay_min": cfg["processing_delay_min"], "hold_days": HOLD_DAYS,
            "concepts": names, "n_filings": len(df), "n_companies": int(df["instrument"].nunique()),
-           "n_changes": int(df["change"].notna().sum()), "evaluation": ev, "filings": filings[::-1]}
+           "n_changes": int(df["change"].notna().sum()), "evaluation": ev, "filings": filings[::-1],
+           "excluded": sorted(df.attrs.get("excluded", []), key=lambda x: str(x["published_at"]), reverse=True),
+           "cleaning": {"series_filter": pipeline()["series_filter"], "table_rows": pipeline()["table_rows"],
+                        "table_paragraphs": int(df["table_paragraphs"].sum()) if "table_paragraphs" in df else 0}}
     write_json(d / "summary.json", out)
     return out
 

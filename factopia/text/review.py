@@ -17,10 +17,11 @@ from datetime import datetime, timezone
 
 import pandas as pd
 
-from factopia.text.common import DATASETS, LANG_ZH, REVIEW, concept_names, ds_dir, glossary, pipeline, read_json, write_shared
+from factopia.text.common import DATASETS, LANG_ZH, REVIEW, concept_names, ds_dir, glossary, is_table, pipeline, read_json, series_exclusion, write_shared
 from factopia.text.understand import FLAG_ZH
 
 ACTIONS = {"confirm": "确认", "correct": "修正", "reject": "判定不涉及风险"}
+TIERS_VERSION = "tiers-v2"          # 分组算法变化时递增，使缓存失效
 TIERS = {"must": "必须复核", "sample": "抽样质检", "impact": "高影响", "other": "其他"}
 
 
@@ -110,7 +111,7 @@ def _rank(seed: int, k: str) -> int:
 def _signature(dataset: str) -> str:
     d = ds_dir(dataset)
     labels = d / "labels"
-    parts = [glossary()["version"], json.dumps(pipeline()["review"], sort_keys=True), pipeline()["screening"]]
+    parts = [TIERS_VERSION, glossary()["version"], json.dumps(pipeline(), sort_keys=True, default=str)]   # 含清理规则：高影响依赖打分口径
     for p in (labels, labels / "_cache.json", d / "filings.parquet"):   # 不含复核记录：避免每次复核后重算高影响
         parts.append(str(p.stat().st_mtime_ns) if p.exists() else "-")
     parts.append(str(sum(1 for _ in labels.glob("*.json"))) if labels.exists() else "0")
@@ -128,17 +129,28 @@ def tiers(dataset: str) -> dict:
     cfg = pipeline()["review"]
     seed = int(cfg["sample_seed"])
     simulated = bool(DATASETS[dataset]["simulated"])
-    must, pool, files = [], [], []
-    if (d / "filings.parquet").exists():
-        files = pd.read_parquet(d / "filings.parquet")["id"].tolist()
+    must, pool, files, skip = [], [], [], []
+    meta = pd.read_parquet(d / "filings.parquet") if (d / "filings.parquet").exists() else pd.DataFrame(columns=["id"])
+    files = meta.to_dict("records")
+    excluded = []
     labelled = {}
-    for f_id in files:
+    for f in files:
+        f_id = f["id"]
         lab = read_json(d / "labels" / f"{f_id}.json")
         if not lab:
             continue
-        labelled[f_id] = {x["i"] for x in lab["labels"]}
+        # 不计分的段落不进复核与抽样：通知类公告的全部段落、表格行（第 14.9 节 v1.31）
+        if series_exclusion(dataset, int(f.get("n_paragraphs") or 0), f.get("title") or ""):
+            excluded.append(f_id)
+            continue
+        doc = read_json(d / "docs" / f"{f_id}.json") or {"paragraphs": []}
+        tables = {p["i"] for p in doc["paragraphs"] if is_table(p["text"])}
+        labelled[f_id] = {x["i"] for x in lab["labels"]} | tables
         for x in lab["labels"]:
             k = key(dataset, f_id, x["i"])
+            if x["i"] in tables:
+                skip.append(k)
+                continue
             if set(x.get("flags") or []) & set(cfg["must_flags"]):
                 must.append(k)
             if x.get("method") == "llm":
@@ -156,6 +168,7 @@ def tiers(dataset: str) -> dict:
                 break
     impact = [] if simulated else _impact(dataset, int(cfg["high_impact_top"]))   # 模拟数据复核豁免，不排高影响
     out = {"signature": sig, "dataset": dataset, "must": must, "sample": sample, "unscreened": unscreened, "impact": impact,
+           "skip": skip, "excluded_docs": excluded,
            "pool": len(pool), "settings": cfg, "screening": pipeline()["screening"]}
     try:
         ensure_dir()
@@ -218,6 +231,7 @@ def queue(dataset: str | None = None, status: str = "pending", limit: int = 100,
             continue
         t = tiers(ds)
         t = {**t, "_must": set(t["must"]), "_sample": set(t["sample"]) | set(t["unscreened"]), "_impact": set(t["impact"])}
+        skip, excluded_docs = set(t.get("skip") or []), set(t.get("excluded_docs") or [])
         unscreened = set(t["unscreened"])
         meta = pd.read_parquet(d / "filings.parquet").set_index("id")
         by_doc: dict[str, set[int]] = {}
@@ -225,12 +239,16 @@ def queue(dataset: str | None = None, status: str = "pending", limit: int = 100,
             _, f_id, i = k.rsplit(":", 2)
             by_doc.setdefault(f_id, set()).add(int(i))
         for f_id in reversed(meta.index.tolist()):
+            if f_id in excluded_docs:
+                continue
             lab = read_json(d / "labels" / f"{f_id}.json")
             if not lab:
                 continue
             rows = list(lab["labels"]) + [{"i": i, "concepts": [], "flags": [], "method": "unscreened"} for i in sorted(by_doc.get(f_id, ()))]
             for x in rows:
                 k = key(ds, f_id, x["i"])
+                if k in skip:
+                    continue
                 tr = _tier_of(k, t) or ("other" if x.get("flags") else None)
                 if tr is None:                               # 未触发复核、也不在抽样中的段落不进队列
                     continue

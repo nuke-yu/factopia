@@ -6,6 +6,7 @@ import { Badge, ErrorBox, Loading, Notice, Panel, Seg } from "../components/ui";
 import ResearchTrail from "../components/charts/ResearchTrail";
 import NavChart from "../components/charts/NavChart";
 import LiveStatus from "../components/LiveStatus";
+import ResumeButton from "../components/ResumeButton";
 
 const PIPELINE = ["提出假设", "编写代码", "Qlib 回测", "评审结果"];
 const LIVE_POLL_MS = 5000;
@@ -29,7 +30,7 @@ export default function RunPage() {
           <label htmlFor="run-sel" className="label whitespace-nowrap">运行</label>
           <select id="run-sel" className="field w-auto num text-sm" value={runId} onChange={(e) => setParams({ run: e.target.value })}>
             {!runId && <option value="">等待运行开始…</option>}
-            {runs.data?.map((r) => <option key={r.run_id} value={r.run_id}>{r.run_id} · {MARKET_LABEL[r.market]} · {r.rounds} 轮</option>)}
+            {runs.data?.map((r) => <option key={r.run_id} value={r.run_id}>{r.research?.id ? `${r.research.id} v${r.research.version} · ` : ""}{r.run_id} · {MARKET_LABEL[r.market]} · {r.rounds} 轮</option>)}
           </select>
         </div>
       </div>
@@ -77,7 +78,7 @@ function JobWaiting({ jobId, onRun }: { jobId: string; onRun: (runId: string) =>
         {j.state === "queued" && <span className="text-sm text-muted">前面还有 {ahead} 个任务</span>}
         {j.state === "running" && <span className="text-sm text-muted">RD-Agent 正在准备数据与基准回测，第一轮开始后自动切换到过程视图…</span>}
         {(j.state === "queued" || j.state === "running") && <div className="ml-auto"><StopButton jobId={j.job_id} /></div>}
-        {["failed", "cancelled", "budget_stopped"].includes(j.state) && <div className="ml-auto"><RetryButton jobId={j.job_id} /></div>}
+        {["failed", "cancelled", "budget_stopped"].includes(j.state) && <div className="ml-auto"><ResumeButton jobId={j.job_id} onDone={() => setFinal(false)} /><RetryButton jobId={j.job_id} /></div>}
       </section>
       {j.error && <Notice tone="bad" title="运行失败">{j.error}</Notice>}
       {isLive(live.data) && <LiveStatus job={j} live={live.data} />}
@@ -101,7 +102,7 @@ function RetryButton({ jobId }: { jobId: string }) {
     <span className="inline-flex items-center gap-2">
       <button className="btn" onClick={async () => {
         try { const r = await api.retryJob(jobId); setParams({ job: r.jobs[0].job_id }); } catch (e) { setError((e as Error).message); }
-      }}>重新运行</button>
+      }} title="新建任务，从第 0 轮重头开始">重新运行</button>
       {error && <span className="text-xs text-bad">{error}</span>}
     </span>
   );

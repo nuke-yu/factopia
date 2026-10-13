@@ -170,6 +170,40 @@ def resume() -> None:
     PAUSE_FILE.unlink(missing_ok=True)
 
 
+def resume_info(job: dict) -> dict:
+    """从断点继续（RD-Agent 检查点）：能否续跑、已完成几轮、还剩几轮。RD-Agent 每完成一步就在
+    <日志目录>/__session__/<轮>/<步>_<名称> 保存检查点；一轮完整 = 有第 4 步 record。"""
+    resumable = ("failed", "cancelled", "budget_stopped") + (("queued", "running") if job.get("resume") else ())   # 已排队 / 刚被运行器取走等待续跑的也算
+    if job.get("kind") or job["state"] not in resumable or not job.get("log_dir"):
+        return {"ok": False, "reason": "只有失败或已停止的 RD-Agent 研究任务可以从断点继续"}
+    sess = Path(job["log_dir"]) / "__session__"
+    loops = sorted((p for p in sess.glob("*") if p.is_dir() and p.name.isdigit()), key=lambda p: int(p.name)) if sess.exists() else []
+    if not loops or not any(loops[0].iterdir()):
+        return {"ok": False, "reason": "没有可用的检查点（第一步都没有完成），请重新运行"}
+    complete = sum(1 for p in loops if any(f.name.startswith("4_") for f in p.iterdir()))
+    remaining = int(job["loops"]) - complete
+    if remaining <= 0:
+        return {"ok": False, "reason": f"已完成全部 {job['loops']} 轮，无需续跑"}
+    last = max((f for p in loops for f in p.iterdir()), key=lambda f: (int(f.parent.name), int(f.name.split("_")[0])))
+    return {"ok": True, "complete": complete, "remaining": remaining, "checkpoint": f"第 {last.parent.name} 轮 · {last.name.split('_', 1)[1]}"}
+
+
+def resume_job(job: dict, budget_usd: float | None = None) -> dict:
+    """原任务重新排队，从检查点续跑：沿用同一运行编号与日志目录，只跑剩下的轮数；续跑记录写入 resumes。"""
+    info = resume_info(job)
+    if not info["ok"]:
+        raise ValueError(info["reason"])
+    budget = float(budget_usd) if budget_usd is not None else float(job["budget_usd"])
+    if job["cost_usd"] >= budget:
+        raise ValueError(f"已花费 ${job['cost_usd']:.2f}，达到预算 ${budget:.2f}：续跑须提高预算")
+    job.setdefault("resumes", []).append({"at": now(), "from_state": job["state"], "error": job.get("error"), "rounds": job.get("rounds"),
+                                         "cost_usd": job.get("cost_usd"), "checkpoint": info["checkpoint"], "remaining": info["remaining"],
+                                         "model": os.environ.get("CHAT_MODEL")})
+    job.update(state="queued", resume=True, budget_usd=budget, error=None, ended_at=None)
+    write_job(job)
+    return job
+
+
 def retry_job(job: dict) -> dict:
     """失败或停止的任务：用同一版本、市场与参数重新排队（新的批次）。"""
     if job.get("kind") == "monitor":

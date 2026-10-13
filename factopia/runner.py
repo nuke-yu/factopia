@@ -129,23 +129,39 @@ def stop(proc: subprocess.Popen, prefixes: list[Path]) -> None:
 
 
 def run_job(job: dict) -> None:
-    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M-%S-%f")
-    log_dir = store.RUNTIME / "rdagent" / job["market"] / f"h{job['horizon']}" / "log" / stamp
-    run_id = rdagent_run._run_id(log_dir)[0]
-    job.update(state="running", started_at=store.now(), run_id=run_id, log_dir=str(log_dir))
+    resume = store.resume_info(job) if job.get("resume") else None
+    if job.get("resume") and not (resume and resume["ok"]):   # 要求续跑却没有检查点：不能悄悄改成从头开始
+        job.update(state="failed", resume=False, ended_at=store.now(), error=f"无法从断点继续：{(resume or {}).get('reason')}")
+        store.write_job(job)
+        log(f"{job['job_id']}: {job['error']}")
+        return
+    if resume and resume["ok"]:                        # 从断点继续：同一日志目录与运行编号，只跑剩下的轮数
+        log_dir = Path(job["log_dir"])
+        run_id = job["run_id"]
+        # RD-Agent 续跑时从第 0 轮重新计数（已完成的轮直接跳过），--loop-n 是总轮数而不是剩余轮数
+        cmd = [ENTRYPOINT, "rdagent", "fin_factor", "--path", str(log_dir), "--loop-n", str(job["loops"])]
+        job.update(state="running", resumed_at=store.now(), resume=False)
+        log(f"{job['job_id']}: 从断点继续（{resume['checkpoint']}，还剩 {resume['remaining']} 轮）→ {run_id}")
+    else:
+        stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M-%S-%f")
+        log_dir = store.RUNTIME / "rdagent" / job["market"] / f"h{job['horizon']}" / "log" / stamp
+        run_id = rdagent_run._run_id(log_dir)[0]
+        cmd = [ENTRYPOINT, "rdagent", "fin_factor", "--loop-n", str(job["loops"])]
+        job.update(state="running", started_at=store.now(), run_id=run_id, log_dir=str(log_dir), resume=False)
+        log(f"{job['job_id']}: 开始 {job['research_id']} v{job['version']} {job['market']} → {run_id}")
     store.write_job(job)
-    log(f"{job['job_id']}: 开始 {job['research_id']} v{job['version']} {job['market']} → {run_id}")
 
     src = SRC_ROOT / job["job_id"]
     wd = rdagent_workdir(job["market"], job["horizon"], job["job_id"])
     env = {**os.environ,
            "FACTOPIA_RESEARCH": str(store.version_path(job["research_id"], job["version"])),
            "FACTOPIA_MARKET": job["market"], "FACTOPIA_JOB_ID": job["job_id"], "LOG_TRACE_PATH": str(log_dir),
-           "FACTOPIA_SRC_DIR": str(src)}
+           "FACTOPIA_SRC_DIR": str(src), **({"FACTOPIA_RESUME": "1"} if resume and resume["ok"] else {})}
     live = LiveParser()
     log_file = store.log_path(job["job_id"])
     with log_file.open("ab") as out, log_file.open("r", errors="replace") as tail:
-        proc = subprocess.Popen([ENTRYPOINT, "rdagent", "fin_factor", "--loop-n", str(job["loops"])],
+        tail.seek(0, os.SEEK_END)                      # 只解析本次运行的输出：续跑 / 重试沿用同一日志文件，旧的错误不能再触发停止
+        proc = subprocess.Popen(cmd,
                                 stdout=out, stderr=subprocess.STDOUT, env=env, start_new_session=True)
         reason, last_export, backtested = None, 0.0, 0
         while proc.poll() is None:
@@ -289,7 +305,7 @@ def main() -> None:
         if job is None:
             time.sleep(POLL_S)
             continue
-        job.update(state="running", started_at=store.now())   # 先标记，避免下一轮再次取到
+        job.update(state="running", **({} if job.get("resume") else {"started_at": store.now()}))   # 先标记，避免下一轮再次取到；续跑保留原开始时间
         store.write_job(job)
         th = threading.Thread(target=execute, args=(job,), name=job["job_id"], daemon=True)
         th.start()

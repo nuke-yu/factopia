@@ -20,11 +20,11 @@ STEP_ZH = {"direct_exp_gen": "提出假设", "coding": "编写代码", "running"
 SCRIPT_ZH = {"generate.py": "生成 RD-Agent 数据", "conf_baseline.yaml": "起点回测（20 个基础因子）",
              "read_exp_res.py": "读取回测结果", "runtime_info.py": "检查运行环境"}
 FATAL = [  # (日志中的特征, 给研究员看的原因)：出现后排队中的任务暂停，避免连续失败
-    ("Insufficient Balance", "大模型账户余额不足：请充值后点击\"继续运行\""),
-    ("Arrearage", "大模型账户欠费（阿里云百炼）：请充值后点击\"继续运行\""),
-    ("access_denied", "大模型无权访问所配置的模型（阿里云百炼）：请检查 .env 中的模型名称或在百炼开通后点击\"继续运行\""),
-    ("AuthenticationError", "大模型 API Key 无效或已过期：请检查 .env 后点击\"继续运行\""),
-    ("Incorrect API key", "大模型 API Key 无效或已过期：请检查 .env 后点击\"继续运行\""),
+    ("Insufficient Balance", "大模型账户余额不足：充值后在任务上点\"从断点继续\""),
+    ("Arrearage", "大模型账户欠费（阿里云百炼）：充值后在任务上点\"从断点继续\""),
+    ("access_denied", "大模型无权访问所配置的模型（阿里云百炼）：检查 .env 中的模型名称或在百炼开通后，在任务上点\"从断点继续\""),
+    ("AuthenticationError", "大模型 API Key 无效或已过期：检查 .env 后在任务上点\"从断点继续\""),
+    ("Incorrect API key", "大模型 API Key 无效或已过期：检查 .env 后在任务上点\"从断点继续\""),
 ]
 
 

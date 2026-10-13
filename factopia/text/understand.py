@@ -155,9 +155,10 @@ class BudgetReached(Exception):
 def screen(doc: dict, lang: str) -> list[dict]:
     """哪些段落交给大模型：术语表预筛（命中任一概念）或全文（configs/text/pipeline.yaml screening）。"""
     pl = pipeline()
+    from factopia.text.common import is_table
     if pl["screening"] == "full":
-        return [p for p in doc["paragraphs"] if len(p["text"].strip()) >= pl["full_min_chars"] or concept_hits(p["text"], lang)]
-    return [p for p in doc["paragraphs"] if concept_hits(p["text"], lang)]
+        return [p for p in doc["paragraphs"] if (len(p["text"].strip()) >= pl["full_min_chars"] or concept_hits(p["text"], lang)) and not is_table(p["text"])]
+    return [p for p in doc["paragraphs"] if concept_hits(p["text"], lang) and not is_table(p["text"])]
 
 
 def _ckey(model: str, sha: str) -> str:

@@ -82,7 +82,14 @@ def glossary() -> dict:
 
 
 def pipeline() -> dict:
-    """文本流程开关（configs/text/pipeline.yaml）；环境变量 FACTOPIA_TEXT_SCREENING 可临时覆盖预筛方式。"""
+    """文本流程开关（configs/text/pipeline.yaml）；环境变量 FACTOPIA_TEXT_SCREENING 可临时覆盖预筛方式。
+    按文件修改时间缓存：逐段调用（is_table 等）不会反复读文件，改了配置立即生效。"""
+    p = CONFIGS / "text" / "pipeline.yaml"
+    return _pipeline(p.stat().st_mtime_ns if p.exists() else 0, os.environ.get("FACTOPIA_TEXT_SCREENING", ""))
+
+
+@lru_cache(maxsize=4)
+def _pipeline(_mtime: int, _env: str) -> dict:
     p = CONFIGS / "text" / "pipeline.yaml"
     cfg = yaml.safe_load(p.read_text(encoding="utf-8")) if p.exists() else {}
     cfg.setdefault("screening", "glossary")
@@ -95,7 +102,39 @@ def pipeline() -> dict:
                  ("must_flags", ["low_translation_confidence"])):
         r.setdefault(k, v)
     cfg.setdefault("glossary_suggest", {}).setdefault("sample", 300)
+    sf = cfg.setdefault("series_filter", {})
+    for k, v in (("datasets", []), ("min_paragraphs", 10), ("notice_max_paragraphs", 20), ("notice_title_pattern", "")):
+        sf.setdefault(k, v)
+    tr = cfg.setdefault("table_rows", {})
+    for k, v in (("enabled", False), ("min_tokens", 4), ("numeric_share", 0.4)):
+        tr.setdefault(k, v)
     return cfg
+
+
+_NUM = re.compile(r"^[(\-–−+]?[\d.,  %€$£]+[)%]?$|^[–—-]+$")
+
+
+def is_table(text: str) -> bool:
+    """以数字为主的段落（财务报表行）：数字类词占比 ≥ table_rows.numeric_share。"""
+    tr = pipeline()["table_rows"]
+    if not tr["enabled"]:
+        return False
+    toks = text.split()
+    if len(toks) < tr["min_tokens"]:
+        return False
+    return sum(bool(_NUM.match(t)) for t in toks) / len(toks) >= tr["numeric_share"]
+
+
+def series_exclusion(dataset: str, n_paragraphs: int, title: str) -> str | None:
+    """通知类公告：返回排除原因；不排除时返回 None（configs/text/pipeline.yaml series_filter）。"""
+    sf = pipeline()["series_filter"]
+    if dataset not in sf["datasets"]:
+        return None
+    if n_paragraphs < sf["min_paragraphs"]:
+        return f"段落过少（{n_paragraphs} 段 < {sf['min_paragraphs']}）：通知或 PDF 抽不出文字"
+    if sf["notice_title_pattern"] and n_paragraphs < sf["notice_max_paragraphs"] and re.search(sf["notice_title_pattern"], title or "", re.I):
+        return f"通知类公告（标题为报告发布 / 提供查阅通知，{n_paragraphs} 段）"
+    return None
 
 
 def fold(text: str) -> str:

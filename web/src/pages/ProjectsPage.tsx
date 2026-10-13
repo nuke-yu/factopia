@@ -4,6 +4,7 @@ import { api, type Job, type Project, type ProjectRun } from "../api";
 import { cssVar, MARKET_LABEL, pct, useAsync } from "../lib";
 import { Badge, ErrorBox, Loading, Panel } from "../components/ui";
 import Globe from "../components/charts/Globe";
+import ResumeButton from "../components/ResumeButton";
 
 const STATUS_TONE = { 示例: "muted", 已锁定: "muted", 排队中: "muted", 运行中: "accent", 已完成: "good", 已中止: "warn" } as const;
 const JOB_TONE = { queued: "muted", running: "accent", done: "good", failed: "bad", cancelled: "warn", budget_stopped: "warn" } as const;
@@ -127,7 +128,7 @@ function RetryButton({ jobId }: { jobId: string }) {
     <button className="btn mr-2" onClick={async () => {
       const r = await api.retryJob(jobId);
       navigate(`/run?job=${r.jobs[0].job_id}`);
-    }}>重新运行</button>
+    }} title="新建任务，从第 0 轮重头开始">重新运行</button>
   );
 }
 
@@ -143,7 +144,7 @@ function JobRow({ j }: { j: Job }) {
       <td className="num text-right pr-3 text-faint">—</td>
       <td className="num text-right pr-3">${j.cost_usd.toFixed(2)}</td>
       <td className="text-right whitespace-nowrap">
-        {["failed", "cancelled", "budget_stopped"].includes(j.state) && <RetryButton jobId={j.job_id} />}
+        {["failed", "cancelled", "budget_stopped"].includes(j.state) && <><ResumeButton jobId={j.job_id} /><RetryButton jobId={j.job_id} /></>}
         <Link className="btn" to={`/run?job=${j.job_id}`}>查看任务</Link>
       </td>
     </tr>
@@ -167,7 +168,7 @@ function RunRow({ r }: { r: ProjectRun }) {
       <td className="num text-right pr-3">{pct(r.baseline_return)} → <span className={r.best_return != null ? "text-good" : "text-faint"}>{pct(r.best_return)}</span></td>
       <td className="num text-right pr-3">${r.cost_usd.toFixed(2)}</td>
       <td className="text-right whitespace-nowrap">
-        {r.job_id && r.job_state && ["failed", "cancelled", "budget_stopped"].includes(r.job_state) && <RetryButton jobId={r.job_id} />}
+        {r.job_id && r.job_state && ["failed", "cancelled", "budget_stopped"].includes(r.job_state) && <><ResumeButton jobId={r.job_id} /><RetryButton jobId={r.job_id} /></>}
         <Link className="btn mr-2" to={`/run?run=${r.run_id}`}>{r.state === "运行中" ? "查看过程" : "回放过程"}</Link>
         <Link className="btn" to={`/results?run=${r.run_id}`}>查看结果</Link>
       </td>

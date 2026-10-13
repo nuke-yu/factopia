@@ -52,6 +52,10 @@ if [ -n "$FACTOPIA_MARKET" ]; then
   mkdir -p "$FACTOPIA_WORKDIR"
   cd "$FACTOPIA_WORKDIR"
   echo "[entrypoint] market=$FACTOPIA_MARKET horizon=$FACTOPIA_HORIZON data=$HOME_DIR workdir=$(pwd)"
+  # 从断点继续：上面删除了数据目录，而续跑不会再初始化场景，须在这里重新生成
+  if [ -n "$FACTOPIA_RESUME" ]; then
+    python -m factopia.mining.rdagent_ext.prepare_run data
+  fi
 fi
 
 exec "$@"

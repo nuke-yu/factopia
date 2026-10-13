@@ -10,6 +10,8 @@
     3. 按该市场交易日历计算训练 / 验证 / 测试时间段，段与段之间间隔 N 个交易日；
     4. 回测成本 open_cost / close_cost 改为该市场规则包中的单边成本（税费 + 佣金与冲击；RULE-04，模板中的数值不再生效）；
   并输出时间段、工作目录（按市场和周期分开；设置 FACTOPIA_JOB_ID 时每个任务一个子目录）以及场景子类的环境变量。
+- `data`：从断点继续时（FACTOPIA_RESUME），在工作目录中重新生成因子数据目录。`apply` 每次启动都会删除数据目录；
+  全新运行由场景初始化重新生成，但续跑直接载入检查点、不再初始化场景，不补生成的话 AI 的因子代码全部读不到 daily_pv.h5。
 """
 import os
 import re
@@ -102,5 +104,21 @@ def mode_apply() -> None:
           f"test={dates['TEST_START']}~{dates['TEST_END']}'")
 
 
+def mode_data() -> None:
+    from rdagent.components.coder.factor_coder.config import FACTOR_COSTEER_SETTINGS
+    from rdagent.scenarios.qlib.experiment import utils as qlib_exp_utils
+
+    from factopia.research.context import BENCHMARK_FILE
+    qlib_exp_utils.generate_data_folder_from_qlib()
+    src = Path(qlib_exp_utils.__file__).parent / "factor_data_template" / BENCHMARK_FILE
+    for folder in (FACTOR_COSTEER_SETTINGS.data_folder, FACTOR_COSTEER_SETTINGS.data_folder_debug):
+        if src.exists():
+            shutil.copy(src, Path(folder) / BENCHMARK_FILE)
+        missing = [f for f in ("daily_pv.h5", BENCHMARK_FILE) if not (Path(folder) / f).exists()]
+        if missing:
+            raise SystemExit(f"续跑前重新生成数据失败：{Path(folder).resolve()} 缺少 {', '.join(missing)}")
+    print(f"[prepare_run] 续跑：已重新生成数据目录 {Path(FACTOR_COSTEER_SETTINGS.data_folder).resolve()}")
+
+
 if __name__ == "__main__":
-    {"env": mode_env, "apply": mode_apply}[sys.argv[1]]()
+    {"env": mode_env, "apply": mode_apply, "data": mode_data}[sys.argv[1]]()
