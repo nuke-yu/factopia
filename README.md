@@ -14,10 +14,15 @@ Windows 同事请在 WSL2（Ubuntu）中操作。
 cp .env.example .env          # 填写 API key
 docker compose build app rdagent
 docker compose --profile build-only build qlib-runner
+# 如果不成功，用国内镜像build qlib-runner
+# docker compose --profile build-only build --build-arg QLIB_GIT_URL=https://gitee.com/mirrors/qlib.git qlib-runner
+
 
 # 启动独立的 Docker 引擎（dind），并把回测镜像载入其中（回测镜像更新后需重新执行）
 docker compose up -d dind
 docker save factopia-qlib:dev | docker compose exec -T dind docker load
+# if fails, then try below cmd
+# cmd /c "docker save factopia-qlib:dev | docker compose exec -T dind docker load"
 ```
 
 ### 常用命令

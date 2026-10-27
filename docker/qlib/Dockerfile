@@ -2,11 +2,16 @@
 # 多架构：Apple 芯片原生运行，x86 云服务器同样可用。不含 GPU / PyTorch（fin_factor 回测使用 LightGBM）。
 FROM python:3.11-slim
 
+# Qlib 源码地址。默认 GitHub；直连 GitHub 不稳定时可改用镜像（如 Gitee）：
+#   docker compose --profile build-only build \
+#     --build-arg QLIB_GIT_URL=https://gitee.com/mirrors/qlib.git qlib-runner
+ARG QLIB_GIT_URL=https://github.com/microsoft/qlib.git
+
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential git curl \
     && rm -rf /var/lib/apt/lists/*
 
 # 与 RD-Agent 官方镜像使用相同的 Qlib 提交
-RUN git clone https://github.com/microsoft/qlib.git /workspace/qlib \
+RUN git clone ${QLIB_GIT_URL} /workspace/qlib \
     && cd /workspace/qlib && git reset --hard 2fb9380b342556ddb50a4b24e4fe8655d548b2b8
 WORKDIR /workspace/qlib
 RUN pip install --no-cache-dir --upgrade cython \
