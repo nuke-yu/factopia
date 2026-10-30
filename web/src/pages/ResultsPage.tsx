@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api, type Metrics, type Quantiles, type Round, type RoundVerdict, type Run } from "../api";
 import { cssVar, fix, MARKET_LABEL, pct, signed, useAsync } from "../lib";
-import { Badge, ErrorBox, Loading, Notice, Panel, Stat, ViewToggle } from "../components/ui";
+import { Badge, ErrorBox, Loading, Notice, Panel, Stat, Tex, TexVars, ViewToggle } from "../components/ui";
 import ResearchTrail from "../components/charts/ResearchTrail";
 import TransferCube from "../components/charts/TransferCube";
 import IcSurface from "../components/charts/IcSurface";
@@ -289,7 +289,13 @@ function RoundDetail({ run, round, verdict }: { run: Run; round?: Round; verdict
             <li key={f.name} className="border border-line rounded p-2">
               <div className="num font-medium text-accent">{f.name}</div>
               <div className="text-xs text-muted mt-0.5">{f.description}</div>
-              <div className="num text-[11px] text-faint mt-1 break-all">{f.formulation}</div>
+              <div className="mt-1 overflow-x-auto"><Tex tex={f.formulation} display /></div>
+              {f.variables && Object.keys(f.variables).length > 0 && (
+                <details className="mt-1">
+                  <summary className="text-xs text-muted cursor-pointer">变量说明</summary>
+                  <TexVars vars={f.variables} />
+                </details>
+              )}
               {f.code && (
                 <details className="mt-1">
                   <summary className="text-xs text-muted cursor-pointer">查看代码</summary>

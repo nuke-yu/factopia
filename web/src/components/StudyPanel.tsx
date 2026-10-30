@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
-import { useState } from "react";
-import { api, type Check, type CredCheck, type Diagnostics, type Explanation, type Market, type Study, type StudyMarket } from "../api";
+import { useEffect, useRef, useState } from "react";
+import { api, type Check, type CredCheck, type Diagnostics, type Explanation, type Market, type PaperDemoResult, type Study, type StudyMarket } from "../api";
 import { cssVar, fix, MARKET_LABEL, pct, signed, useAsync } from "../lib";
 import { Badge, ErrorBox, Loading, Panel } from "./ui";
 import StudyScatter from "./charts/StudyScatter";
@@ -74,6 +74,7 @@ export default function StudyPanel({ researchId, version, current }: { researchI
         <TransferBlock s={s} />
         <ExplainBlock s={s} onDone={study.reload} />
         <RulesLine s={s} />
+        <PaperDemoBlock s={s} />
 
         {anyRounds && (
           <div className="grid gap-5 xl:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]">
@@ -269,6 +270,119 @@ function DiagnosticsBlock({ d }: { d: Diagnostics }) {
         {!sg && <p className="text-faint">逐股打分尚未导出：重新导出后补齐中性化、稳定性与冗余诊断。</p>}
       </div>
     </details>
+  );
+}
+
+/** 一键接入模拟盘（研究线 → 结果展示线的连接入口）：按钮名称固定，点击后弹出市场复选下拉。
+ *  勾选决定接入范围：只勾香港就只接入港股模拟盘，全选则接入全部；勾选了运行中的市场会重置该市场模拟盘（清空旧状态从头开始），未勾选的保持现状。 */
+function PaperDemoBlock({ s }: { s: Study }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [done, setDone] = useState<PaperDemoResult | null>(null);
+  const [open, setOpen] = useState(false);
+  const [sel, setSel] = useState<Market[] | null>(null);
+  const popRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (ev: PointerEvent) => { if (popRef.current && !popRef.current.contains(ev.target as Node)) setOpen(false); };
+    document.addEventListener("pointerdown", onDoc);
+    return () => document.removeEventListener("pointerdown", onDoc);
+  }, [open]);
+  const wired = useAsync(async () => {
+    const r = await api.signals();
+    return r.items.filter((e) => e.signal_id.startsWith(`${s.research_id}.v${s.version}.`) && e.paper);
+  }, [s.research_id, s.version]);
+  const live: Partial<Record<Market, { active: boolean; mode: string }>> = {};
+  (wired.data ?? []).forEach((e) => { live[e.market] = e.paper ?? { active: false, mode: "" }; });
+  const appr = useAsync(() => api.approvals(s.research_id), [s.research_id]);
+  const subs = (appr.data?.items ?? []).filter((x) => x.version === s.version);
+  const approvedSub = subs.find((x) => x.status === "approved" || x.status === "approved_restricted");
+  const reviewing = subs.find((x) => x.status === "in_review");
+  const candidates = ((approvedSub?.approved_markets ?? approvedSub?.markets) ?? s.rule.markets) as Market[];
+  const eff = sel ?? candidates;
+  const willReset = eff.filter((m) => live[m]?.active);
+  const run = async () => {
+    setBusy(true); setErr(null);
+    try { setDone(await api.paperDemo(s.research_id, s.version, { markets: eff })); wired.reload(); setOpen(false); }
+    catch (x) { setErr(String((x as Error).message ?? x)); }
+    finally { setBusy(false); }
+  };
+
+  // 未获批也放行：后端 paper-demo 会自动补材料、自动提交并走完全部审批（留痕「演示一键接入」）
+  if (appr.loading || appr.error) return null;
+  return (
+    <div className="border border-line rounded p-3 flex flex-col gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="label">接入模拟盘</span>
+        {approvedSub ? <>
+          <Badge tone="good">审批已获批</Badge>
+          <span className="text-xs text-faint">已获批市场：{(approvedSub.approved_markets ?? approvedSub.markets).map((m) => MARKET_LABEL[m as Market] ?? m).join("、")}</span>
+          <Link className="text-accent text-xs" to={`/approvals?sid=${approvedSub.id}`}>审批台 →</Link>
+        </> : reviewing ? <>
+          <Badge tone="accent">审批中</Badge>
+          <span className="text-xs text-faint">接入前会自动走完剩余审批步骤</span>
+          <Link className="text-accent text-xs" to={`/approvals?sid=${reviewing.id}`}>审批台 →</Link>
+        </> : <>
+          <Badge tone="muted">未提交审批</Badge>
+          <span className="text-xs text-faint">接入前会自动补材料、提交并走完全部审批（留痕「演示一键接入」）</span>
+        </>}
+        <div ref={popRef} className="relative ml-auto">
+          <button className="btn" disabled={busy} onClick={() => setOpen((v) => !v)}>
+            {busy ? "接入中…" : "一键接入模拟盘"}<span className="text-faint text-[10px]">▼</span>
+          </button>
+          {open && (
+            <div className="absolute right-0 top-full mt-1.5 z-30 min-w-60 bg-bg-2 border border-line-2 rounded p-2.5 flex flex-col gap-1.5 shadow-lg">
+              {candidates.map((m) => (
+                <label key={m} className="flex items-center gap-1.5 cursor-pointer select-none text-sm py-0.5">
+                  <input type="checkbox" checked={eff.includes(m)}
+                    onChange={(e) => setSel(e.target.checked ? [...eff, m] : eff.filter((x) => x !== m))} />
+                  <span className="size-2 rounded-full" style={{ background: cssVar(`--${m}`) }} />
+                  {MARKET_LABEL[m]}
+                  {live[m]?.active && <Badge tone="warn">运行中{live[m]!.mode === "longport" ? "·长桥" : "·影子"}</Badge>}
+                </label>
+              ))}
+              <div className="flex items-center gap-2 pt-1.5 border-t border-line">
+                <span className="text-[11px] text-faint">
+                  {willReset.length > 0 ? `将重置：${willReset.map((m) => MARKET_LABEL[m]).join("、")}` : "未勾选的市场保持现状"}
+                </span>
+                <button className="btn btn-primary ml-auto" disabled={busy || eff.length === 0} onClick={run}>
+                  {busy ? "接入中…" : `接入所选（${eff.length} 个市场）`}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+      {err && <p className="text-xs text-bad">{err}</p>}
+      {done && (
+        <div className="flex flex-col gap-1.5">
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <Badge tone="good">审批{done.submission.status_zh}</Badge>
+            <span className="text-muted">{done.submission.id}</span>
+            <span className="text-xs text-faint">获批市场：{done.submission.markets.map((m) => MARKET_LABEL[m as Market] ?? m).join("、")}</span>
+            <Link className="text-accent text-xs" to={`/approvals?sid=${done.submission.id}`}>审批台 →</Link>
+            <Link className="text-accent text-xs" to="/signals">信号目录 →</Link>
+          </div>
+          {done.log.length > 0 && (
+            <ul className="text-xs text-muted flex flex-col gap-0.5">{done.log.map((l, i) => <li key={i}>· {l}</li>)}</ul>
+          )}
+          {done.signals.map((x) => (
+            <div key={x.signal_id} className="flex flex-wrap items-center gap-2 text-xs">
+              <Badge tone={x.selected === false ? "muted" : x.reset ? "warn" : x.enrolled ? "good" : "bad"}>
+                {x.market_zh}{x.selected === false ? "未选择（保持现状）" : x.reset ? "已重置（从头开始）" : x.already ? "已接入（保持现状）" : x.enrolled ? "已接入" : "未接入"}
+              </Badge>
+              <span className="num text-faint">{x.signal_id}</span>
+              {x.error && <span className="text-warn">{x.error}</span>}
+              {x.job && <span className="text-faint">推进任务已排队（{x.job.state_zh}）</span>}
+            </div>
+          ))}
+        </div>
+      )}
+      <p className="text-[11px] text-faint">
+        未提交审批时点击会自动补材料、自动提交并走完全部审批（留痕「演示一键接入」）；审批门槛只看「有采纳轮次」，不要求研究结论通过——判定为否定的版本获批后同样可接入持续观察。
+        点击「一键接入模拟盘」后勾选市场（可多选或只选一个）：只勾一个就只接入该市场模拟盘，全选则接入全部；勾选了运行中的市场会重置该市场模拟盘（清空旧状态从头开始），未勾选的市场保持现状；接入后约 1–3 分钟出第一轮模拟盘报告，之后每日自动推进。
+      </p>
+    </div>
   );
 }
 

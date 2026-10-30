@@ -19,5 +19,9 @@ dependencies = [
     "pyyaml",
 ]
 
+[project.optional-dependencies]
+# 模拟盘长桥通道（factopia.paper.broker）：影子撮合模式不需要该依赖
+paper = ["longport"]
+
 [tool.uv]
 package = false

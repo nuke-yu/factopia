@@ -13,6 +13,7 @@
 任务状态：queued 排队 → running 运行中 → done 完成 / failed 失败 / cancelled 已停止 / budget_stopped 超出预算停止。
 """
 import json
+import math
 import os
 import secrets
 from datetime import datetime, timezone
@@ -35,6 +36,22 @@ def _atomic_write(path: Path, text: str) -> None:
     tmp = path.with_suffix(path.suffix + f".tmp{secrets.token_hex(3)}")
     tmp.write_text(text, encoding="utf-8")
     tmp.replace(path)
+
+
+def _json_safe(obj):
+    """递归把 NaN/Inf 换成 None：RD-Agent 失败时 cost 汇总会产生 NaN，
+    落盘为 NaN 字面量后 API 响应序列化会 500（Out of range float values are not JSON compliant）。"""
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_json_safe(v) for v in obj]
+    if isinstance(obj, float) and not math.isfinite(obj):
+        return None
+    return obj
+
+
+def _dumps(obj, indent: int | None = None) -> str:
+    return json.dumps(_json_safe(obj), ensure_ascii=False, indent=indent, allow_nan=False)
 
 
 # ── 研究规格版本 ─────────────────────────────────────────────
@@ -82,7 +99,7 @@ def create_jobs(research_id: str, version: int, markets: list[str], horizon: int
                "run_id": None, "cost_usd": 0.0, "rounds": 0, "error": None}
         if kind:
             job |= {"kind": kind, "loops": 1, "budget_usd": 0.0}
-        _atomic_write(JOBS_DIR / f"{job['job_id']}.json", json.dumps(job, ensure_ascii=False, indent=2))
+        _atomic_write(JOBS_DIR / f"{job['job_id']}.json", _dumps(job, indent=2))
         jobs.append(job)
     return {"batch_id": batch, "jobs": jobs}
 
@@ -112,8 +129,20 @@ def create_monitor_job(signal_id: str, market: str) -> dict:
     return job
 
 
+def create_paper_job(signal_id: str, market: str) -> dict:
+    """模拟盘推进任务（factopia/paper/engine.py）：结算挂单、重算信号、月度调仓并出报告，不调用大模型。"""
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    rid, ver = signal_id.rsplit(".", 2)[0], int(signal_id.rsplit(".", 2)[1][1:])
+    job = {"job_id": f"{stamp}_{secrets.token_hex(2)}_0_{market}", "batch_id": f"{stamp}_p", "kind": "paper",
+           "research_id": rid, "version": ver, "market": market, "horizon": 0, "loops": 0, "budget_usd": 0.0,
+           "target_signal": signal_id, "state": "queued", "created_at": now(), "started_at": None, "ended_at": None,
+           "run_id": None, "cost_usd": 0.0, "rounds": 0, "error": None}
+    write_job(job)
+    return job
+
+
 def write_job(job: dict) -> None:
-    _atomic_write(JOBS_DIR / f"{job['job_id']}.json", json.dumps(job, ensure_ascii=False, indent=2))
+    _atomic_write(JOBS_DIR / f"{job['job_id']}.json", _dumps(job, indent=2))
 
 
 def load_job(job_id: str) -> dict:
@@ -145,7 +174,7 @@ def log_path(job_id: str) -> Path:
 
 
 def write_live(job_id: str, state: dict) -> None:
-    _atomic_write(JOBS_DIR / f"{job_id}.live.json", json.dumps(state, ensure_ascii=False))
+    _atomic_write(JOBS_DIR / f"{job_id}.live.json", _dumps(state))
 
 
 def load_live(job_id: str) -> dict | None:
@@ -208,6 +237,9 @@ def retry_job(job: dict) -> dict:
     """失败或停止的任务：用同一版本、市场与参数重新排队（新的批次）。"""
     if job.get("kind") == "monitor":
         new = create_monitor_job(job["target_signal"], job["market"])
+        return {"batch_id": new["batch_id"], "jobs": [new]}
+    if job.get("kind") == "paper":
+        new = create_paper_job(job["target_signal"], job["market"])
         return {"batch_id": new["batch_id"], "jobs": [new]}
     if job.get("kind") == "validate":
         run = json.loads((RUNTIME / "results" / "runs" / job["target_run"] / "run.json").read_text(encoding="utf-8"))

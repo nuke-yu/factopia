@@ -54,6 +54,10 @@ RDAGENT_UI_MARKET=hk docker compose -f docker-compose.yml -f compose.local.yml -
 
 # 查看命名卷中的文件
 docker compose run --rm rdagent ls /workspace/runtime
+
+# 模拟盘：每日推进（结算挂单 → 重算信号 → 月度调仓 → 出报告），加参数 report 只重算报告
+docker compose -f docker-compose.yml -f compose.local.yml exec runner python -m factopia.paper
+# 长桥模拟盘需在 .env 填 LONGPORT_APP_KEY / LONGPORT_APP_SECRET / LONGPORT_ACCESS_TOKEN（港股走长桥，UK/FR 自动影子撮合）
 ```
 
 ## Factopia Web 界面
@@ -124,7 +128,7 @@ $DC run --rm app python -m factopia.export.alpha158
 | `factopia/text/` | 多语言公告与文本信号：法国 AMF 真实公告、香港 / 英国模拟数据，概念标签 / 译文 / 置信度、语言专家复核、按实际可获取时间生成信号、三市场检验、带引用的检索与 AI 摘要（Spec 第 14.9 节）；`python -m factopia.text all`，页面「情报台」；`text/research.py` 为文本信号研究（研究规格信号来源选"文本"后由后台运行器执行，输出与 RD-Agent 相同格式的结果，第 14.17 节） |
 | `factopia/research/regions.py`、`library.py`、`semantic.py` | 地区差异清单；内部因子库（Alpha158、获批信号、团队专有因子接入口 `configs/factor_library/`）；知识检索（大模型三语改写 + BM25）（Spec 第 14.18 节）；页面「因子库」 |
 | `factopia/access.py` | 演示用地区视角（不是登录鉴权）：按 `configs/access/regions.yaml` 过滤数据与信号，越权留痕（Spec 第 14.20 节）；页面顶部"地区视角" |
-| `factopia/ideas/` | 研究线索池（首页"00 线索池"）：投资假设、论文 / 研报、研究员经验、人工反馈，以及监控预警、组合归因、审批退回自动回流；敏感信息拦截、论文许可与候选因子抽取、防泄漏提示、转研究立项并可追溯（Spec 第 17 章） |
+| `factopia/ideas/` | 研究线索池（首页"00 线索池"）：投资假设、论文 / 研报、研究员经验、人工反馈，以及监控预警、组合归因、审批退回、模拟盘反馈自动回流；敏感信息拦截、论文许可与候选因子抽取、防泄漏提示、转研究立项并可追溯（Spec 第 17 章） |
 | `factopia/refdata/vendor.py` | 数据商参考数据导入：历史成分股与合并 / 配股 / 退市等公司行动，统一 CSV 模板（`configs/refdata/vendor_templates/`），逐行校验，`python -m factopia.refdata import-membership / import-actions`（Spec 第 14.21 节） |
 | `factopia/sources.py` | 行情来源：真实标准化行情与指数，或模拟文本数据集的模拟行情（等权基准）；运行结果记录来源，诊断、组合、监控按运行读取 |
 | `configs/text/glossary.yaml` | 四类风险概念与中 / 英 / 法术语表（带版本） |
@@ -134,6 +138,7 @@ $DC run --rm app python -m factopia.export.alpha158
 | `factopia/portfolio/` | 授权组合与研究报告：月度只做多组合（约束逐条注明来源）、多币种回测与汇率拆分、Brinson 归因、反馈闭环；中文主报告 + 英文 / 法文证据附件（Spec 第 14.13 节）；页面「组合台」 |
 | `factopia/approval/` | 跨地区审批与审计：提交前置检查、冻结提交材料与指纹、六类角色按序审批、例外处理、获批锁定、哈希链留痕、审计证据包（Spec 第 14.14 节）；页面「审批台」 |
 | `factopia/signals/` | 信号目录与上线后监控：按研究版本 × 市场分版本、标签、逐市场暂停 / 恢复 / 停用；冻结因子代码重算上线期信号，11 类监控指标与预警（Spec 第 14.15 节）；页面「信号目录」「总览」 |
+| `factopia/paper/` | 模拟盘：默认影子撮合（T 日收盘截面决策、T+1 开盘成交、规则包成本），可选长桥 LongPort 模拟账户（仅港股，非港股信号自动影子撮合、可与长桥共存）；月度 TOP 20% 等权调仓，报告含缺口感知年化波动、对等权基准的超额、rank IC 复检与预警建议；运行建议经"模拟盘反馈"渠道回流线索池（同监控口径）；`python -m factopia.paper`，页面「信号目录」接入 / 停止 |
 | `factopia/acceptance/` | 验收：8 条成功标准自动核对、4 个量化目标度量（人工基线 `configs/acceptance/baseline.yaml`）、17 项红队测试（Spec 第 14.16 节）；页面「验收」 |
 | `configs/refdata/`、`configs/universe/membership/` | 市场规则、数据字典、人工确认；成分股起止日期（目前为当前名单） |
 | `configs/mandates/` | 模拟客户授权（不含真实客户信息） |

@@ -10,7 +10,9 @@ ARG RDAGENT_VERSION=v1.0.0
 FROM node:22-slim AS web
 ARG RDAGENT_VERSION
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/*
-RUN git clone --depth 1 --branch ${RDAGENT_VERSION} https://github.com/microsoft/RD-Agent.git /src
+# 走代理克隆 GitHub 仓库时 HTTP/2 多路复用流易被中断（curl 92），强制 HTTP/1.1 提高稳定性
+RUN git config --global http.version HTTP/1.1
+RUN ok=0; for i in $(seq 1 12); do echo "clone attempt $i"; rm -rf /src; if git clone --depth 1 --branch ${RDAGENT_VERSION} https://github.com/microsoft/RD-Agent.git /src; then ok=1; break; fi; sleep 25; done; [ "$ok" = 1 ]
 WORKDIR /src/web
 # 上游 v1.0.0 的 package.json 中 vite@8 与 @vitejs/plugin-vue@5（声明支持 vite 5/6）版本声明冲突，npm 严格校验会拒绝安装
 RUN npm ci --legacy-peer-deps && npm run build:flask   # 输出到 /src/git_ignore_folder/static
@@ -33,14 +35,16 @@ RUN mkdir -p /tmp/vendor && cd /tmp/vendor && npm init -y >/dev/null \
 FROM condaforge/miniforge3:latest
 
 RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
+# 走代理克隆 GitHub 仓库时 HTTP/2 多路复用流易被中断（curl 92），强制 HTTP/1.1 提高稳定性
+RUN git config --global http.version HTTP/1.1
 
 RUN conda create -y -n rdagent python=3.11 && conda clean -afy
 ENV CONDA_DEFAULT_ENV=rdagent \
     PATH=/opt/conda/envs/rdagent/bin:$PATH
 
 ARG RDAGENT_VERSION
-RUN git clone --depth 1 --branch ${RDAGENT_VERSION} https://github.com/microsoft/RD-Agent.git /opt/rdagent-src \
-    && pip install --no-cache-dir -e /opt/rdagent-src tables \
+RUN ok=0; for i in $(seq 1 12); do echo "clone attempt $i"; rm -rf /opt/rdagent-src; if git clone --depth 1 --branch ${RDAGENT_VERSION} https://github.com/microsoft/RD-Agent.git /opt/rdagent-src; then ok=1; break; fi; sleep 25; done; [ "$ok" = 1 ]
+RUN pip install --no-cache-dir -e /opt/rdagent-src tables longport \
     && echo ${RDAGENT_VERSION} > /opt/rdagent-src/.factopia_version \
     && cp -a /opt/rdagent-src /opt/rdagent-src-image
 

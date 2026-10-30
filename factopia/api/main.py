@@ -8,6 +8,7 @@
 发起运行只新建任务文件（/workspace/runtime/jobs），由后台运行器（runner 服务）执行。
 """
 import json
+import math
 import os
 import re
 from datetime import datetime, timedelta, timezone
@@ -75,7 +76,18 @@ def _json(path: Path):
 
 @lru_cache(maxsize=64)
 def _cached_json(path: Path, mtime: float):  # 文件更新后 mtime 变化，缓存自动失效
-    return json.loads(path.read_text(encoding="utf-8"))
+    return _json_safe(json.loads(path.read_text(encoding="utf-8")))
+
+
+def _json_safe(obj):
+    """递归把 NaN/Inf 换成 None：历史 run.json/rounds.json 里的 NaN 字面量会让响应序列化 500。"""
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_json_safe(v) for v in obj]
+    if isinstance(obj, float) and not math.isfinite(obj):
+        return None
+    return obj
 
 
 def _run_dir(run_id: str) -> Path:
@@ -265,8 +277,8 @@ def _run_state(run: dict, job: dict | None = None) -> str:
 def _run_summary(run: dict, how: str, jobs_by_run: dict) -> dict:
     job = jobs_by_run.get(run["run_id"])
     return {
-        "run_id": run["run_id"], "market": run["market"], "rounds": run["rounds"], "adopted": run["adopted"],
-        "cost_usd": run["cost_usd"], "started_at": run["started_at"], "state": _run_state(run, job),
+        "run_id": run["run_id"], "market": run["market"], "rounds": run.get("rounds"), "adopted": run.get("adopted"),
+        "cost_usd": run.get("cost_usd"), "started_at": run.get("started_at"), "state": _run_state(run, job),
         "context_leak": run.get("context_leak"), "linked": how,
         "version": ((run.get("research") or {}).get("version")),
         "job_id": job["job_id"] if job else None, "job_state": job["state"] if job else None,
@@ -302,11 +314,11 @@ def projects():
             rid = (run.get("research") or {}).get("id")
             if rid == spec["id"]:
                 linked.append(_run_summary(run, "记录", jobs_by_run))
-            elif spec["example"] and rid is None and run["market"] == spec["market"] and run["horizon"] == spec.get("horizon", 20):
+            elif spec["example"] and rid is None and run["market"] == spec["market"] and run.get("horizon", 20) == spec.get("horizon", 20):
                 linked.append(_run_summary(run, "推断", jobs_by_run))
         exported = {r["run_id"] for r in linked}
         pending = [_job_public(j) for j in reversed(all_jobs)
-                   if j["research_id"] == spec["id"] and j.get("kind") not in ("validate", "monitor") and j.get("run_id") not in exported
+                   if j["research_id"] == spec["id"] and j.get("kind") not in ("validate", "monitor", "paper") and j.get("run_id") not in exported
                    and j["state"] in ("queued", "running", "failed")]
         states = [r["state"] for r in linked] + [j["state_zh"] for j in pending]
         status = ("运行中" if "运行中" in states else "排队中" if "排队中" in states else "已完成" if "已完成" in states
@@ -968,7 +980,7 @@ def study(research_id: str, version: int):
     rule = verdict.rules(spec)
     runs = [r for r in (_json(p) for p in sorted((RESULTS / "runs").glob("*/run.json"), reverse=True))
             if (r.get("research") or {}).get("id") == research_id and (r.get("research") or {}).get("version") == version]
-    jobs = [j for j in store.list_jobs() if j["research_id"] == research_id and j["version"] == version and j.get("kind") != "monitor"]
+    jobs = [j for j in store.list_jobs() if j["research_id"] == research_id and j["version"] == version and j.get("kind") not in ("monitor", "paper")]
     markets = {m: _study_market(m, runs, jobs, rule) for m in rule["markets"]}
     diags = {m: (e.get("focus") or {}).get("diagnostics") for m, e in markets.items()}
     exp = store.RESEARCH_DIR / research_id / f"explain_v{version}.json"
@@ -1040,6 +1052,53 @@ def portfolio_series(research_id: str, version: int):
             "port": [round(float(x), 6) for x in (1 + d["port"]).cumprod()],
             "bench": [round(float(x), 6) for x in (1 + d["bench"]).cumprod()],
             "weights": {m: [round(float(x), 4) for x in d[f"{m}_w"]] for m in ms}}
+
+
+@app.get("/api/research/{research_id}/versions/{version}/portfolio/rebalances")
+def portfolio_rebalances(research_id: str, version: int):
+    """调仓明细（PORT-04 运营视角）：相邻两次调仓的逐股持仓变化（买 / 卖，市场内权重），
+    附最近数次的执行参数（换手、成本、α、事前跟踪误差）——来自 summary.rebalances。"""
+    access.require_cross_region("多市场授权组合")
+    get_version(research_id, version)
+    P = _portfolio_mod()
+    wpath = P.out_dir(research_id, version) / "weights.parquet"
+    if not wpath.exists():
+        raise HTTPException(404, "尚未构建组合")
+    w = pd.read_parquet(wpath)
+    w["date"] = w["date"].astype(str)
+    execs = {r["date"]: r["markets"] for r in ((P.load(research_id, version) or {}).get("rebalances") or [])}
+    out: list[dict] = []
+    prev: dict[str, dict[str, float]] = {}
+    for d in sorted(w["date"].unique()):
+        day = w[w["date"] == d]
+        cur = {m: {s: float(v) for s, v in g.set_index("symbol")["weight_in_market"].items()} for m, g in day.groupby("market")}
+        markets = {}
+        for m, new in cur.items():
+            old = prev.get(m, {})
+            def _delta(s: str) -> float:
+                return (new.get(s) or 0.0) - (old.get(s) or 0.0)
+            symbols = sorted(set(old) | set(new), key=lambda s: -abs(_delta(s)))
+            changes, nb, ns, nh = [], 0, 0, 0
+            for s in symbols:
+                o, n = old.get(s), new.get(s)
+                delta = _delta(s)
+                if o is None:
+                    act = "buy"; nb += 1
+                elif n is None:
+                    act = "sell"; ns += 1
+                elif abs(delta) > 1e-9:
+                    act = "buy" if delta > 0 else "sell"
+                    nb, ns = (nb + 1, ns) if delta > 0 else (nb, ns + 1)
+                else:
+                    nh += 1
+                    continue
+                changes.append({"symbol": s, "action": act, "old_w": None if o is None else round(o, 6),
+                                "new_w": None if n is None else round(n, 6), "delta": round(delta, 6)})
+            markets[m] = {"exec": execs.get(d, {}).get(m), "changes": changes,
+                          "n_buy": nb, "n_sell": ns, "n_hold": nh}
+        out.append({"date": d, "prev_date": out[-1]["date"] if out else None, "markets": markets})
+        prev = cur
+    return {"rebalances": out}
 
 
 class FeedbackIn(BaseModel):
@@ -1250,6 +1309,125 @@ def approval_evidence(sid: str):
     return Response(data, media_type="application/zip", headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
+# ---------------------------------------------------------------- 一键接入演示线（研究 → 审批 → 信号目录 → 模拟盘）
+
+DEMO_THRESHOLDS = {"rolling_rank_ic_60d_min": -0.05, "drawdown_vs_bench_max": -0.15}
+
+
+class PaperDemoIn(BaseModel):
+    capital: float | None = None
+    markets: list[str] | None = None
+
+
+@app.post("/api/research/{research_id}/versions/{version}/paper-demo")
+def paper_demo(research_id: str, version: int, body: PaperDemoIn | None = None):
+    """研究线结果一键接入演示线：补齐材料（组合 / 报告）→ 提交审批 → 自动走完全部审批步骤 →
+    获批市场生成信号并接入模拟盘（排第一轮推进）。
+
+    body.markets 可选（结果页市场勾选）：传入时只处理所选市场（可多选 / 单选），已接入且运行中的
+    所选市场会被重置（重新接入 = 清空旧状态从头开始），未选择的市场保持现状不接入；
+    不传时保持一键默认：运行中的市场跳过不重置。
+
+    这是人为决策的入口：审批的门槛只看「有采纳轮次」，不看研究结论是否通过（判定否定 ≠ 不能观察），
+    研究员仍可把该版本接入演示线持续观察。全部审批留痕为「演示一键接入」，不构成生产部署。
+    """
+    access.require_cross_region("一键接入演示线")
+    A = _approval_mod()
+    P = _portfolio_mod()
+    S = _signals_mod()
+    spec = get_version(research_id, version)
+    log: list[str] = []
+    # 1) 材料补齐：授权组合与研究报告是提交前置，缺了就先自动生成
+    if P.load(research_id, version) is None:
+        try:
+            P.build(spec, study(research_id, version))
+            log.append("已自动构建授权组合（组合台）")
+        except P.PortfolioError as e:
+            raise HTTPException(422, str(e))
+    if not (list(REPORTS.glob(f"{research_id}_v{version}_*.html")) if REPORTS.exists() else []):
+        make_report(research_id, version)
+        log.append("已自动生成研究报告")
+    m = _materials(research_id, version)
+    bad = A.preconditions(m)
+    if bad:
+        raise HTTPException(422, "还不能接入演示线：" + "；".join(bad))
+    # 2) 选择提交：已获批复用；审批中的继续走完；都没有则自动提交
+    subs = [s for s in A.list_all(research_id) if s["version"] == version]
+    sub = next((A.load(s["id"]) for s in subs if s["status"] in ("approved", "approved_restricted")), None)
+    if sub:
+        log.append(f"该版本已获批，复用提交 {sub['id']}")
+    else:
+        cur = next((s for s in subs if s["status"] == "in_review"), None)
+        sub = A.submit(m, SUBMITTER, "演示一键接入：自动提交") if cur is None else A.load(cur["id"])
+        log.append(f"{'已自动提交审批 ' + sub['id'] if cur is None else '已有审批中的提交 ' + sub['id'] + '，继续自动完成'}")
+    # 3) 自动审批：逐步骤确认命中与模型例外 → 批准 → 运营完成部署核对（阈值与 seed 演示一致）
+    BY = "演示一键接入（自动审批）"
+    guard = 0
+    try:
+        while sub["status"] == "in_review" and guard < 24:
+            guard += 1
+            step = sub["steps"][sub["current"]]
+            role, sid = step["role"], sub["id"]
+            for h in list(step["hits"]) + [f"MODEL@{x}" for x in step["model_exceptions"]]:
+                if f"{role}|{h}" not in sub["rule_decisions"]:
+                    sub = A.act(sid, role, BY, "acknowledge", "演示一键接入：自动确认", h)
+            if role == "运营 / 技术负责人":
+                sub = A.act(sid, role, BY, "complete", "演示一键接入：完成部署核对", None,
+                            sub["approved_markets"], DEMO_THRESHOLDS,
+                            A.current_fingerprint(sid, {"portfolio": P.load(research_id, version)}))
+            else:
+                sub = A.act(sid, role, BY, "approve", "演示一键接入：批准")
+    except A.ApprovalError as e:
+        raise HTTPException(422, f"自动审批中断（可到审批台手动处理）：{e}")
+    if sub["status"] not in ("approved", "approved_restricted"):
+        raise HTTPException(422, "自动审批未完成，请到审批台手动处理")
+    # 4) 获批市场逐个接入模拟盘并排第一轮推进（个别市场失败不影响其他市场，原因如实返回）
+    #    body.markets 传入时按勾选处理：所选市场接入（运行中 = 重置，从头开始），未选市场保持现状；
+    #    不传 markets 时保持一键默认：运行中的市场跳过不重置（非破坏性）
+    from factopia.paper import engine
+    selected = body.markets if body and body.markets is not None else None
+    if selected is not None:
+        bad = [m for m in selected if m not in (sub.get("approved_markets") or [])]
+        if bad:
+            raise HTTPException(422, "所选市场未获批：" + "、".join(MARKET_ZH.get(m, m) for m in bad))
+    live = {r["signal_id"] for r in engine.enrolled() if r.get("active")}
+    out = []
+    for mkt in sub.get("approved_markets") or []:
+        sid = f"{research_id}.v{version}.{mkt}"
+        rec = {"signal_id": sid, "market": mkt, "market_zh": MARKET_ZH[mkt],
+               "selected": selected is None or mkt in selected,
+               "enrolled": False, "already": False, "reset": False, "error": None, "job": None}
+        if selected is not None and mkt not in selected:
+            log.append(f"{MARKET_ZH[mkt]}未选择，保持现状")
+            out.append(rec)
+            continue
+        if sid in live and selected is None:
+            rec["enrolled"], rec["already"] = True, True
+            log.append(f"{MARKET_ZH[mkt]}已接入模拟盘（保持现状，不重置）")
+            out.append(rec)
+            continue
+        was_live = sid in live
+        try:
+            e = S.entry(sid)
+            if e.get("simulated"):
+                rec["error"] = "行情来自模拟数据集（虚构行情），不能接入模拟盘"
+            else:
+                engine.enroll(sid, body.capital if body else None)
+                rec["enrolled"], rec["reset"] = True, was_live
+        except S.CatalogError as x:
+            rec["error"] = str(x)
+        except engine.PaperError as x:
+            rec["error"] = str(x)
+        if rec["enrolled"]:
+            busy = [j for j in store.list_jobs() if j.get("kind") == "paper" and j.get("target_signal") == sid and j["state"] in ("queued", "running")]
+            rec["job"] = _job_public(busy[-1] if busy else store.create_paper_job(sid, mkt))
+            log.append(f"{MARKET_ZH[mkt]}{'已重置模拟盘' if was_live else '已接入模拟盘'}并排入第一轮推进")
+        out.append(rec)
+    return {"submission": {"id": sub["id"], "status": sub["status"], "status_zh": A.STATUS_ZH[sub["status"]],
+                           "markets": sub.get("approved_markets") or [], "thresholds": DEMO_THRESHOLDS},
+            "signals": out, "log": log, "report": m["report"]["name"] if m["report"] else None}
+
+
 # ---------------------------------------------------------------- 信号目录、监控与管理总览（第 14.15 节）
 
 def _signals_mod():
@@ -1260,11 +1438,20 @@ def _signals_mod():
 @app.get("/api/signals")
 def list_signals():
     S = _signals_mod()
-    jobs = [j for j in store.list_jobs() if j.get("kind") == "monitor"]
+    jobs = [j for j in store.list_jobs() if j.get("kind") in ("monitor", "paper")]
     items = [e for e in S.catalog() if access.can(e["market"])]                    # 地区视角
+    from factopia.paper import engine as paper_engine, report as paper_report
+    enrolled = {r["signal_id"]: r for r in paper_engine.enrolled()}
     for e in items:
         j = next((x for x in reversed(jobs) if x.get("target_signal") == e["signal_id"]), None)
         e["monitor_job"] = _job_public(j) if j else None
+        r = enrolled.get(e["signal_id"])
+        if r:
+            res = paper_report.result(e["signal_id"]) or {}
+            e["paper"] = {"active": bool(r.get("active")), "mode": r.get("mode"),
+                          "nav_last": (res.get("nav") or {}).get("last"), "suggestion": res.get("suggestion")}
+        else:
+            e["paper"] = None
     return {"items": items, "state_zh": S.STATE_ZH}
 
 
@@ -1276,8 +1463,12 @@ def get_signal(signal_id: str):
         e = S.entry(signal_id)
     except S.CatalogError as x:
         raise HTTPException(404, str(x))
-    jobs = [j for j in store.list_jobs() if j.get("kind") == "monitor" and j.get("target_signal") == signal_id]
-    return {"entry": e, "monitor": S.monitor_result(signal_id), "job": _job_public(jobs[-1]) if jobs else None}
+    jobs = [j for j in store.list_jobs() if j.get("kind") in ("monitor", "paper") and j.get("target_signal") == signal_id]
+    from factopia.paper import engine as paper_engine, report as paper_report
+    enrolled = next((r for r in paper_engine.enrolled() if r["signal_id"] == signal_id), None)
+    return {"entry": e, "monitor": S.monitor_result(signal_id), "job": _job_public(jobs[-1]) if jobs else None,
+            "paper": paper_report.result(signal_id),
+            "paper_enrolled": {k: enrolled.get(k) for k in ("signal_id", "mode", "capital", "active", "enrolled_at", "stopped_at")} if enrolled else None}
 
 
 @app.post("/api/signals/{signal_id}/monitor")
@@ -1295,6 +1486,71 @@ def start_monitor(signal_id: str):
     if busy:
         return _job_public(busy[-1])
     return _job_public(store.create_monitor_job(signal_id, e["market"]))
+
+
+class PaperEnrollIn(BaseModel):
+    capital: float | None = None
+
+
+@app.post("/api/signals/{signal_id}/paper")
+def enroll_paper(signal_id: str, body: PaperEnrollIn):
+    """接入模拟盘（影子撮合默认；配置了 LONGPORT_* 环境变量时走长桥通道）并立即排入一轮推进。
+
+    同一信号重复接入 = 重置：清空旧状态从头开始（BR-24 同款语义：只影响该市场版本）。
+    """
+    access.require(signal_id.rsplit(".", 1)[-1], f"模拟盘接入 {signal_id}")
+    S = _signals_mod()
+    try:
+        e = S.entry(signal_id)
+    except S.CatalogError as x:
+        raise HTTPException(404, str(x))
+    if e["state"] not in ("active", "paused"):
+        raise HTTPException(422, f"「{e['state_zh']}」的版本不能接入模拟盘：只有获批版本可以")
+    if e.get("simulated"):
+        raise HTTPException(422, "行情来自模拟数据集（虚构行情）的信号不能接入模拟盘")
+    from factopia.paper import engine
+    try:
+        rec = engine.enroll(signal_id, body.capital)
+    except engine.PaperError as x:
+        raise HTTPException(422, str(x))
+    busy = [j for j in store.list_jobs() if j.get("kind") == "paper" and j.get("target_signal") == signal_id and j["state"] in ("queued", "running")]
+    if busy:
+        return {"enrolled": rec, "job": _job_public(busy[-1])}
+    return {"enrolled": rec, "job": _job_public(store.create_paper_job(signal_id, e["market"]))}
+
+
+class PaperStopIn(BaseModel):
+    reason: str = ""
+
+
+@app.post("/api/signals/{signal_id}/paper/stop")
+def stop_paper(signal_id: str, body: PaperStopIn):
+    """停用模拟盘：长桥在途挂单撤销、本地挂单留痕取消；报告与历史保留，可重新接入（重置）。"""
+    access.require(signal_id.rsplit(".", 1)[-1], f"停用模拟盘 {signal_id}")
+    from factopia.paper import engine
+    rec = next((r for r in engine.enrolled() if r["signal_id"] == signal_id), None)
+    if rec is None:
+        raise HTTPException(404, f"模拟盘未接入：{signal_id}")
+    try:
+        return engine.unenroll(signal_id, body.reason)
+    except engine.PaperError as x:
+        raise HTTPException(422, str(x))
+
+
+@app.post("/api/signals/{signal_id}/paper/advance")
+def advance_paper(signal_id: str):
+    """手动推进一轮模拟盘（结算挂单、重算信号、按需调仓并出报告）：每日定时调度之外的补充入口。"""
+    access.require(signal_id.rsplit(".", 1)[-1], f"模拟盘推进 {signal_id}")
+    from factopia.paper import engine
+    rec = next((r for r in engine.enrolled() if r["signal_id"] == signal_id), None)
+    if rec is None:
+        raise HTTPException(404, f"模拟盘未接入：{signal_id}")
+    if not rec.get("active"):
+        raise HTTPException(422, "模拟盘已停用，重新接入后才能推进")
+    busy = [j for j in store.list_jobs() if j.get("kind") == "paper" and j.get("target_signal") == signal_id and j["state"] in ("queued", "running")]
+    if busy:
+        return {"job": _job_public(busy[-1])}
+    return {"job": _job_public(store.create_paper_job(signal_id, rec["market"]))}
 
 
 class SignalActIn(BaseModel):
@@ -1321,7 +1577,7 @@ def management_overview():
     S = _signals_mod()
     jobs = store.list_jobs()
     runs = [_json(p) for p in (RESULTS / "runs").glob("*/run.json")]
-    research = [j for j in jobs if j.get("kind") not in ("validate", "monitor")]
+    research = [j for j in jobs if j.get("kind") not in ("validate", "monitor", "paper")]
     regions = {}
     for m in access.markets():                  # 地区视角
         mr = [r for r in runs if r["market"] == m]

@@ -46,8 +46,8 @@ def past_runs(markets: list[str], horizon: int) -> list[dict]:
     items = []
     for p in sorted(RUNS_DIR.glob("*/run.json")):
         run = json.loads(p.read_text(encoding="utf-8"))
-        if run["market"] not in markets or run["horizon"] != horizon or run.get("context_leak") or run.get("kind") == "text":
-            continue
+        if run.get("market") not in markets or run.get("horizon") != horizon or run.get("context_leak") or run.get("kind") == "text":
+            continue                                   # 缺 market/horizon 的 run.json（旧格式或精简产物）跳过
         rounds = json.loads((p.parent / "rounds.json").read_text(encoding="utf-8"))
         for r in rounds:
             if r.get("hypothesis") and r.get("decision") is not None:

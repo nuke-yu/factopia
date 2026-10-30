@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api, MARKETS, type Job, type LiveState, type Market, type Round, type RunEvent } from "../api";
 import { cssVar, fix, MARKET_LABEL, pct, reducedMotion, useAsync } from "../lib";
-import { Badge, ErrorBox, Loading, Notice, Panel, Seg } from "../components/ui";
+import { Badge, ErrorBox, Loading, Notice, Panel, Seg, Tex, TexVars } from "../components/ui";
 import ResearchTrail from "../components/charts/ResearchTrail";
 import NavChart from "../components/charts/NavChart";
 import LiveStatus from "../components/LiveStatus";
@@ -216,7 +216,7 @@ function Replay({ runId }: { runId: string }) {
           </div>
         </Panel>
         <Panel eyebrow="最新在上" title="过程记录">
-          <Feed events={visible} onPrompt={setPrompt} />
+          <Feed events={visible} rounds={rounds} onPrompt={setPrompt} />
         </Panel>
       </div>
 
@@ -316,18 +316,18 @@ function IdleLane({ market }: { market: Market }) {
   );
 }
 
-function Feed({ events, onPrompt }: { events: RunEvent[]; onPrompt: (i: number) => void }) {
+function Feed({ events, rounds, onPrompt }: { events: RunEvent[]; rounds: Round[]; onPrompt: (i: number) => void }) {
   const shown = events.filter((e) => e.kind !== "cost" && !(e.kind === "llm" && e.purpose === "编写 / 检查代码") && !(e.kind === "step" && (e.phase === "end" || e.name === "记录")));
   const recent = shown.slice(-60).reverse();
   return (
     <ol className="flex flex-col gap-2 h-[560px] overflow-y-auto pr-1" aria-live="polite">
       {recent.length === 0 && <li className="text-muted text-sm">等待第一轮开始…</li>}
-      {recent.map((e, i) => <FeedItem key={e.index} e={e} fresh={i === 0} onPrompt={onPrompt} />)}
+      {recent.map((e, i) => <FeedItem key={e.index} e={e} rounds={rounds} fresh={i === 0} onPrompt={onPrompt} />)}
     </ol>
   );
 }
 
-function FeedItem({ e, fresh, onPrompt }: { e: RunEvent; fresh: boolean; onPrompt: (i: number) => void }) {
+function FeedItem({ e, rounds, fresh, onPrompt }: { e: RunEvent; rounds: Round[]; fresh: boolean; onPrompt: (i: number) => void }) {
   const head = (label: string, tone?: string) => (
     <div className="flex items-center gap-2 text-xs">
       <span className="num text-faint w-14">{mmss(e.t)}</span>
@@ -359,7 +359,29 @@ function FeedItem({ e, fresh, onPrompt }: { e: RunEvent; fresh: boolean; onPromp
       return (
         <li className={box} style={{ borderColor: cssVar("--line-2") }}>
           {head(`定义 ${e.factors.length} 个因子`)}
-          <div className="flex flex-wrap gap-1.5 mt-1">{e.factors.map((f) => <span key={f.name} title={f.description}><Badge tone="accent">{f.name}</Badge></span>)}</div>
+          <div className="flex flex-col gap-2 mt-1.5">
+            {e.factors.map((f) => {
+              // 公式：新事件自带；历史运行（事件未带 formulation）从 rounds.json 兜底
+              const rf = rounds.find((r) => r.loop === e.loop)?.factors.find((x) => x.name === f.name);
+              const tex = f.formulation ?? rf?.formulation ?? null;
+              const vars = f.variables ?? rf?.variables ?? null;
+              return (
+                <div key={f.name} className="border border-line rounded p-2">
+                  <div className="flex items-baseline gap-2">
+                    <Badge tone="accent">{f.name}</Badge>
+                    <span className="text-xs text-muted truncate" title={f.description}>{f.description}</span>
+                  </div>
+                  <Tex tex={tex} display className="block mt-1 overflow-x-auto" />
+                  {vars && Object.keys(vars).length > 0 && (
+                    <details className="mt-1">
+                      <summary className="text-xs text-muted cursor-pointer">变量说明</summary>
+                      <TexVars vars={vars} />
+                    </details>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </li>
       );
     case "check":

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { Badge, ErrorBox, Loading, Notice, Panel, Seg, Stat } from "../components/ui";
 import EChart from "../components/EChart";
-import { api, visibleMarkets, type CurrencyView, type MonitorPeriod, type MonitorResult, type SignalEntry } from "../api";
+import { api, visibleMarkets, type CurrencyView, type MonitorPeriod, type MonitorResult, type PaperResult, type SignalEntry } from "../api";
 import { cssVar, fix, MARKET_LABEL, marketColor, pct, signed, useAsync, useThemeVersion } from "../lib";
 
 // 信号目录与监控（Spec 第 14.15 节；BR-24、30、31、41、42）
@@ -82,6 +82,140 @@ function CurrencyTable({ m, ccy }: { m: MonitorResult; ccy: "local" | "base" }) 
   );
 }
 
+function PaperNavChart({ p }: { p: PaperResult }) {
+  const theme = useThemeVersion();
+  const s = p.nav.series;
+  const option = useMemo(() => {
+    const muted = cssVar("--muted"), line = cssVar("--line"), accent = cssVar("--accent");
+    const hasBench = s.benchmark.length === s.dates.length && s.benchmark.some((x) => x > 0);
+    return {
+      animationDuration: 700,
+      legend: { top: 0, right: 8, textStyle: { color: muted }, data: hasBench ? ["模拟盘", "股票池等权"] : ["模拟盘"] },
+      grid: { left: 56, right: 16, top: 30, bottom: 28 },
+      tooltip: { trigger: "axis", valueFormatter: (x: number) => x.toFixed(2) },
+      xAxis: { type: "category", data: s.dates, axisLabel: { color: muted }, axisLine: { lineStyle: { color: line } } },
+      yAxis: { type: "value", scale: true, axisLabel: { color: muted }, splitLine: { lineStyle: { color: line, opacity: 0.35 } } },
+      series: [
+        { name: "模拟盘", type: "line", data: s.nav, showSymbol: false, lineStyle: { width: 2, color: accent }, itemStyle: { color: accent } },
+        ...(hasBench ? [{ name: "股票池等权", type: "line", data: s.benchmark, showSymbol: false,
+          lineStyle: { width: 1.5, type: "dashed", color: muted }, itemStyle: { color: muted } }] : []),
+      ],
+      title: { text: p.capital ? `净值（起始 ${(p.capital / 1e6).toFixed(p.capital % 1e6 ? 2 : 0)} 百万）` : "净值", left: 0, top: 0,
+        textStyle: { color: muted, fontSize: 12, fontWeight: "normal" } },
+    };
+  }, [s, p, theme]);
+  return <EChart option={option} notMerge className="h-[280px]" />;
+}
+
+/** 模拟盘（实盘前验证）：接入/停用操作 + 净值曲线、持仓、成交流水、rank IC、预警与建议（报告来自 paper.json，每轮推进后更新）。 */
+function PaperPanel({ sid, e, p, enrolled, job, reload, onChanged }: {
+  sid: string; e: SignalEntry; p: PaperResult | null;
+  enrolled: { mode: string; capital: number; active: boolean; enrolled_at: string } | null;
+  job: { kind?: string; state: string; state_zh: string; error: string | null } | null;
+  reload: () => void; onChanged: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [capital, setCapital] = useState("");
+  const [stopReason, setStopReason] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+
+  if (!enrolled) {
+    if (e.state !== "active" && e.state !== "paused") return null;
+    return (
+      <Panel eyebrow="获批版本可接入；影子撮合或长桥通道，按月调仓，每日收盘后由后台推进" title="模拟盘（未接入）">
+        {e.simulated ? (
+          <p className="text-sm text-muted">该信号的行情来自模拟数据集（虚构行情），不能接入模拟盘。</p>
+        ) : (
+          <div className="flex flex-wrap items-center gap-2">
+            <input id="paper-capital" className="field" style={{ width: "12rem" }} type="number" min="1" inputMode="decimal"
+              placeholder="初始资金（默认 1,000,000）" value={capital} onChange={(x) => setCapital(x.target.value)} aria-label="初始资金" />
+            <button className="btn btn-primary" disabled={busy} onClick={async () => {
+              setBusy(true); setErr(null);
+              try { await api.enrollPaper(sid, capital ? Number(capital) : undefined); setCapital(""); await reload(); onChanged(); }
+              catch (x) { setErr((x as Error).message); } finally { setBusy(false); }
+            }}>{busy ? "接入中…" : "接入模拟盘"}</button>
+            <span className="text-xs text-faint">重复接入 = 重置：清空旧状态从头开始。</span>
+          </div>
+        )}
+        {err && <div className="mt-2"><ErrorBox error={err} /></div>}
+      </Panel>
+    );
+  }
+
+  const running = job?.kind === "paper" && ["queued", "running"].includes(job.state);
+  const mil = (x: number | null) => (x == null ? "—" : `${(x / 1e6).toFixed(2)}M`);
+  return (
+    <Panel eyebrow={`${enrolled.mode === "longport" ? "长桥通道（市价单实际成交，按每手取整）" : "影子撮合（T+1 开盘价成交，含交易成本）"} · 接入于 ${enrolled.enrolled_at.slice(0, 10)}`}
+      title="模拟盘"
+      actions={<Badge tone={enrolled.active ? "good" : "muted"}>{enrolled.active ? "运行中" : "已停用"}</Badge>}>
+      {!enrolled.active && <p className="text-sm text-muted mb-2">已停用：报告与历史保留，重新接入将从头开始。</p>}
+      {!p ? (
+        <p className="text-sm text-muted">{running ? `推进中（${job!.state_zh}），完成后此处更新。` : "已接入，尚未生成报告：等待后台推进或点下方「推进一轮」。"}</p>
+      ) : (
+        <>
+          <div className="panel p-4 grid gap-4 grid-cols-2 lg:grid-cols-6">
+            <Stat label="账户价值" value={mil(p.nav.last)} sub={`起始 ${mil(p.nav.first)} · ${p.days} 天`} />
+            <Stat label="累计收益" value={signed(p.nav.total_return, 1)} sub={`年化 ${p.nav.ann_return == null ? "不足 30 天不年化" : signed(p.nav.ann_return, 1)}`} />
+            <Stat label="年化超额" value={signed(p.excess.ann, 1)} sub={`等权基准年化 ${signed(p.excess.benchmark_ann, 1)}`} />
+            <Stat label="夏普" value={fix(p.nav.sharpe, 2)} sub={`年化波动 ${pct(p.nav.ann_vol, 1)}`} />
+            <Stat label="最大回撤" value={pct(p.nav.max_drawdown, 1)} sub={`在途挂单 ${p.positions.pending}`} />
+            <Stat label="持仓 / 现金" value={`${p.positions.count} 只`} sub={`${mil(p.positions.cash)} 现金 · ${mil(p.positions.value)} 持仓`} />
+          </div>
+          <div className="grid gap-5 xl:grid-cols-[minmax(0,7fr)_minmax(0,5fr)] mt-4">
+            <Panel eyebrow={`${p.start ?? "—"} 至 ${p.end ?? "—"} · ${running ? "推进中，约每轮更新" : `更新于 ${p.computed_at.slice(0, 16).replace("T", " ")} UTC`}`} title="净值曲线">
+              <PaperNavChart p={p} />
+              <p className="text-xs text-faint mt-1">{p.excess.note}</p>
+            </Panel>
+            <Panel eyebrow="orders.jsonl 只追加，全部留痕" title="成交流水与信号">
+              <table className="w-full text-sm num">
+                <tbody>
+                  <tr className="border-b border-line"><td className="py-1.5 font-sans">成交笔数</td><td className="text-right">{p.trades.fills}</td></tr>
+                  <tr className="border-b border-line"><td className="py-1.5 font-sans">买入金额</td><td className="text-right">{(p.trades.buy_value / 1e6).toFixed(2)}M</td></tr>
+                  <tr className="border-b border-line"><td className="py-1.5 font-sans">卖出金额</td><td className="text-right">{(p.trades.sell_value / 1e6).toFixed(2)}M</td></tr>
+                  <tr><td className="py-1.5 font-sans">交易成本</td><td className="text-right">{(p.trades.costs / 1e3).toFixed(1)}K</td></tr>
+                </tbody>
+              </table>
+              <div className="label mt-3 mb-1">模拟盘期间 rank IC</div>
+              <p className="text-sm num">{fix(p.rank_ic.mean, 4)}（t {fix(p.rank_ic.t, 2)} · {p.rank_ic.n} 日）· 滚动 60 日 {fix(p.rank_ic.rolling_60d_last, 4)}</p>
+              <div className="label mt-3 mb-1">预警（{p.alerts.length}）</div>
+              {p.alerts.length === 0 ? <p className="text-sm text-muted">没有预警。</p> : (
+                <ul className="flex flex-col gap-1.5 text-sm">
+                  {p.alerts.map((a) => (
+                    <li key={a.title} className={`border-l-2 pl-3 ${a.level === "alert" ? "border-l-bad" : "border-l-warn"}`}>
+                      <span className="font-medium">{a.title}</span>
+                      <div className="text-xs text-muted">{a.detail}</div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <p className="text-xs mt-3"><Badge tone={SUG_TONE[p.suggestion]}>{p.suggestion_zh}</Badge></p>
+            </Panel>
+          </div>
+          <p className="text-xs text-faint mt-3">{p.note}</p>
+        </>
+      )}
+      {err && <div className="mt-2"><ErrorBox error={err} /></div>}
+      {job?.kind === "paper" && job.state === "failed" && <p className="text-xs text-bad mt-2">上次推进失败：{job.error}</p>}
+      {enrolled.active && (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <button className="btn btn-primary" disabled={busy || running} onClick={async () => {
+            setBusy(true); setErr(null);
+            try { await api.advancePaper(sid); await reload(); onChanged(); }
+            catch (x) { setErr((x as Error).message); } finally { setBusy(false); }
+          }}>{running ? "推进中…" : "推进一轮"}</button>
+          <input id="paper-stop-reason" className="field flex-1 min-w-[14rem]" placeholder="停用原因（可选）" value={stopReason}
+            onChange={(x) => setStopReason(x.target.value)} />
+          <button className="btn" disabled={busy} onClick={async () => {
+            setBusy(true); setErr(null);
+            try { await api.stopPaper(sid, stopReason); setStopReason(""); await reload(); onChanged(); }
+            catch (x) { setErr((x as Error).message); } finally { setBusy(false); }
+          }}>{busy ? "处理中…" : "停用模拟盘"}</button>
+        </div>
+      )}
+    </Panel>
+  );
+}
+
 function Detail({ sid, onChanged }: { sid: string; onChanged: () => void }) {
   const [data, setData] = useState<Awaited<ReturnType<typeof api.signal>> | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -97,12 +231,12 @@ function Detail({ sid, onChanged }: { sid: string; onChanged: () => void }) {
   }, [data]); // eslint-disable-line react-hooks/exhaustive-deps
   if (error && !data) return <ErrorBox error={error} />;
   if (!data) return <Loading what="信号" />;
-  const { entry: e, monitor: m, job } = data;
+  const { entry: e, monitor: m, job, paper, paper_enrolled } = data;
   const act = async (action: string) => {
     setError(null);
     try { await api.signalAct(sid, { action, role, note }); setNote(""); await load(); onChanged(); } catch (x) { setError((x as Error).message); }
   };
-  const running = job && ["queued", "running"].includes(job.state);
+  const running = job && job.kind !== "paper" && ["queued", "running"].includes(job.state); // paper 任务在模拟盘面板内单独提示
   return (
     <div className="flex flex-col gap-5">
       <Panel eyebrow={`${e.signal_id} · 来自审批 ${e.submission}`} title={`${e.title} · ${e.market_zh}`}
@@ -140,7 +274,7 @@ function Detail({ sid, onChanged }: { sid: string; onChanged: () => void }) {
           </div>
         )}
         {error && <div className="mt-2"><ErrorBox error={error} /></div>}
-        {job?.state === "failed" && <p className="text-xs text-bad mt-2">上次监控失败：{job.error}</p>}
+        {job?.state === "failed" && job.kind !== "paper" && <p className="text-xs text-bad mt-2">上次监控失败：{job.error}</p>}
       </Panel>
       {m && (
         <>
@@ -192,6 +326,7 @@ function Detail({ sid, onChanged }: { sid: string; onChanged: () => void }) {
           </Panel>
         </>
       )}
+      <PaperPanel sid={sid} e={e} p={paper} enrolled={paper_enrolled} job={job} reload={load} onChanged={onChanged} />
       {e.events.length > 0 && (
         <Panel eyebrow="只追加，哈希链" title="状态变更记录">
           <ul className="text-sm flex flex-col gap-1">{e.events.map((x) => (
@@ -204,13 +339,16 @@ function Detail({ sid, onChanged }: { sid: string; onChanged: () => void }) {
 
 export default function SignalsPage() {
   const [params, setParams] = useSearchParams();
+  const [q, setQ] = useState("");
   const list = useAsync(() => api.signals(), []);
   if (list.loading) return <Loading what="信号目录" />;
   if (list.error || !list.data) return <ErrorBox error={list.error ?? "无数据"} />;
   const all = list.data.items;
   const fm = params.get("market") ?? "all", fd = params.get("mandate") ?? "all";
   const mandates = [...new Map(all.filter((x) => x.mandate).map((x) => [x.mandate!, x.labels.mandate])).entries()];
-  const items = all.filter((x) => (fm === "all" || x.market === fm) && (fd === "all" || x.mandate === fd));
+  const qs = q.toLowerCase().split(/\s+/).filter(Boolean);
+  const items = all.filter((x) => (fm === "all" || x.market === fm) && (fd === "all" || x.mandate === fd)
+    && (qs.length === 0 || qs.every((w) => [x.research_id, `v${x.version}`, x.title, x.signal_id, x.market_zh, x.state_zh].some((s) => (s ?? "").toLowerCase().includes(w)))));
   const setFilter = (k: string, v: string) => { const p = new URLSearchParams(params); if (v === "all") p.delete(k); else p.set(k, v); p.delete("sid"); setParams(p); };
   const sid = params.get("sid") ?? items.find((x) => x.production)?.signal_id ?? items[0]?.signal_id ?? "";
   const groups = items.reduce<Record<string, SignalEntry[]>>((g, x) => { (g[`${x.research_id} v${x.version}`] ??= []).push(x); return g; }, {});
@@ -233,6 +371,8 @@ export default function SignalsPage() {
                 <option value="all">全部授权</option>
                 {mandates.map(([k, v]) => <option key={k} value={k}>{v}</option>)}
               </select>}
+              <input id="sig-search" aria-label="搜索信号" className="field text-sm" placeholder="模糊搜索：编号 / 标题 / 版本 / 市场，空格分词（如 hk_adj v3 香港）" value={q}
+                onChange={(x) => setQ(x.target.value)} />
             </div>
             {items.length === 0 && <p className="text-sm text-muted">没有符合筛选条件的信号。</p>}
             <div className="flex flex-col gap-4">
@@ -249,7 +389,8 @@ export default function SignalsPage() {
                           <Badge tone={STATE_TONE[x.state]}>{x.state_zh}</Badge>
                           {x.resubmission?.status === "in_review" && <span className="text-xs text-accent">重新审批中</span>}
                           {x.monitor && <Badge tone={SUG_TONE[x.monitor.suggestion]}>{x.monitor.suggestion === "ok" ? "正常" : x.monitor.suggestion === "watch" ? "观察" : "建议暂停"}</Badge>}
-                          {x.monitor_job && ["queued", "running"].includes(x.monitor_job.state) && <span className="text-xs text-accent">计算中</span>}
+                          {x.paper && <Badge tone={x.paper.active ? "accent" : "muted"}>模拟盘{!x.paper.active ? "·停用" : ""}</Badge>}
+                          {x.monitor_job && ["queued", "running"].includes(x.monitor_job.state) && <span className="text-xs text-accent">{x.monitor_job.kind === "paper" ? "模拟盘推进中" : "计算中"}</span>}
                         </button>
                       </li>
                     ))}

@@ -27,6 +27,14 @@ services:
     volumes:
       - ./configs:/workspace/configs:ro
       - ./factopia:/workspace/factopia/factopia:ro
+    # 长桥行情 WS：容器内直连该域名遭遇 DNS 污染 + TLS 层 SNI 阻断，且 SDK 不支持代理。
+    # 把域名固定解析到本容器 127.0.0.1，由 factopia.longport_fwd 转发器经 Clash
+    # （host.docker.internal:7897）的 CONNECT 隧道转发到真实端点；TLS 由 SDK 端到端完成。
+    # 仅本地 override：云端 compose.cloud.yml 不加此项（海外直连本就通）。
+    # 行情再断时先确认宿主机 Clash 是否常开。
+    extra_hosts:
+      - "openapi-quote.longportapp.com:127.0.0.1"
+    command: ["sh", "-c", "while true; do python -m factopia.longport_fwd; sleep 5; done & exec python -m factopia.runner"]
   exporter:
     volumes:
       - .:/workspace

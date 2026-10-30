@@ -13,7 +13,7 @@ export type Metrics = {
   information_ratio_with_cost: number | null;
 };
 
-export type Factor = { name: string; description: string; formulation: string; variables: unknown; code: string | null };
+export type Factor = { name: string; description: string; formulation: string; variables: Record<string, string> | null; code: string | null };
 
 export type Round = {
   loop: number;
@@ -150,7 +150,7 @@ export type Spec = {
 };
 export type JobState = "queued" | "running" | "done" | "failed" | "cancelled" | "budget_stopped";
 export type Job = {
-  kind?: "validate" | "monitor" | "text"; target_run?: string; loop?: number; placebo_n?: number;
+  kind?: "validate" | "monitor" | "paper" | "text"; target_run?: string; loop?: number; placebo_n?: number;
   job_id: string; batch_id: string; research_id: string; version: number; market: Market; horizon: number; loops: number;
   budget_usd: number; state: JobState; state_zh: string; created_at: string; started_at: string | null; ended_at: string | null;
   run_id: string | null; cost_usd: number; rounds: number; error: string | null;
@@ -251,7 +251,7 @@ type EventBase = { index: number; t: number; loop: number; step: string; has_pro
 export type RunEvent = EventBase & (
   | { kind: "step"; name: string; phase: "start" | "end" }
   | { kind: "hypothesis"; text: string; reason: string }
-  | { kind: "factors"; factors: { name: string; description: string }[] }
+  | { kind: "factors"; factors: { name: string; description: string; formulation?: string | null; variables?: Record<string, string> | null }[] }
   | { kind: "llm"; purpose: string; seconds: number | null; prompt_chars: number; response: string }
   | { kind: "check"; attempt: number; items: { name: string; ok: boolean; message: string }[] }
   | { kind: "coded"; passed: number; total: number }
@@ -441,6 +441,14 @@ export type PortfolioSummary = {
 };
 export type PortfolioResp = { summary: PortfolioSummary | null; feedback: FeedbackDecision[] };
 export type PortfolioSeries = { dates: string[]; port: number[]; bench: number[]; weights: Record<string, number[]> };
+// 调仓明细（PORT-04 运营视角）：相邻调仓的逐股持仓变化 + 执行参数（仅最近数次有）
+export type RebalanceExec = { eligible?: number; scored?: number; alpha?: number; n_signal?: number; te_ex_ante?: number;
+  te_ok?: boolean; turnover_target?: number; turnover_scale?: number; market_weight?: number; holdings?: number;
+  cost?: number; max_weight?: number };
+export type RebalanceChange = { symbol: string; action: "buy" | "sell"; old_w: number | null; new_w: number | null; delta: number };
+export type RebalanceMarket = { exec: RebalanceExec | null; changes: RebalanceChange[]; n_buy: number; n_sell: number; n_hold: number };
+export type Rebalance = { date: string; prev_date: string | null; markets: Record<string, RebalanceMarket> };
+export type RebalancesResp = { rebalances: Rebalance[] };
 export type ReportRef = { name: string; url: string; bytes: number; has_portfolio?: boolean };
 
 // 跨地区审批与审计（Spec 第 14.14 节；BR-22、23、29、47）
@@ -480,6 +488,22 @@ export type SignalEntry = {
   run: { run_id: string | null; loop: number | string | null; rank_ic: number | null; rank_ic_t: number | null; credibility: string | null };
   thresholds: Record<string, number>; monitor: { computed_at: string; suggestion: string; suggestion_zh: string; alerts: number } | null;
   events: { action: string; role: string; note: string; at: string; hash: string }[]; monitor_job?: Job | null;
+  paper?: { active: boolean; mode: string; nav_last: number | null; suggestion: string | null } | null;
+};
+// 模拟盘报告（factopia/paper/report.py 写入 runtime/signals/<sid>/paper.json；详情接口返回完整报告）
+export type PaperResult = {
+  signal_id: string; market: Market; mode: string; active: boolean; computed_at: string;
+  start: string | null; end: string | null; days: number; capital: number | null;
+  nav: { last: number | null; first: number | null; total_return: number | null; ann_return: number | null;
+    ann_vol: number | null; sharpe: number | null; max_drawdown: number | null;
+    series: { dates: string[]; nav: number[]; benchmark: number[] } };
+  excess: { ann: number | null; benchmark_ann: number | null; note: string };
+  rank_ic: { mean: number | null; std: number | null; t: number | null; n: number; rolling_60d_last: number | null;
+    monthly: Record<string, number> };
+  trades: { fills: number; buy_value: number; sell_value: number; costs: number };
+  positions: { count: number; cash: number; value: number; pending: number };
+  alerts: { kind: string; level: string; title: string; detail: string }[];
+  suggestion: string; suggestion_zh: string; thresholds: Record<string, number>; note: string;
 };
 export type MonitorPeriod = { start: string; end: string; days: number; rank_ic: number | null; rank_ic_t: number | null;
   rolling_rank_ic_60d_last: number | null; rolling_rank_ic_60d_min: number | null; monthly_rank_ic: Record<string, number | null>;
@@ -634,6 +658,14 @@ export type Complement = {
 };
 export type InternalEvidence = { kind: string; kind_zh: string; id: string; title: string; score: number; prompt: string; ref: string };
 
+/** 一键接入演示线（研究 → 审批 → 信号目录 → 模拟盘）的结果：自动补材料、自动审批、按勾选市场接入/重置 */
+export type PaperDemoResult = {
+  submission: { id: string; status: string; status_zh: string; markets: string[]; thresholds: Record<string, number> };
+  signals: { signal_id: string; market: string; market_zh: string; selected: boolean; enrolled: boolean; already?: boolean; reset?: boolean; error: string | null; job: Job | null }[];
+  log: string[];
+  report: string | null;
+};
+
 export const api = {
   access: () => get<AccessInfo>("/access"),
   library: () => get<Library>("/library"),
@@ -645,9 +677,14 @@ export const api = {
   acceptance: () => get<Acceptance>("/acceptance"),
   redteam: () => post<RedTeam>("/acceptance/redteam", {}),
   signals: () => get<{ items: SignalEntry[]; state_zh: Record<string, string> }>("/signals"),
-  signal: (sid: string) => get<{ entry: SignalEntry; monitor: MonitorResult | null; job: Job | null }>(`/signals/${sid}`),
+  signal: (sid: string) => get<{ entry: SignalEntry; monitor: MonitorResult | null; job: Job | null; paper: PaperResult | null;
+    paper_enrolled: { signal_id: string; mode: string; capital: number; active: boolean; enrolled_at: string; stopped_at: string | null } | null }>(`/signals/${sid}`),
   startMonitor: (sid: string) => post<Job>(`/signals/${sid}/monitor`, {}),
   signalAct: (sid: string, body: { action: string; role: string; note: string }) => post<SignalEntry>(`/signals/${sid}/actions`, body),
+  enrollPaper: (sid: string, capital?: number) => post<{ enrolled: { signal_id: string; mode: string; capital: number }; job: Job }>(
+    `/signals/${sid}/paper`, capital ? { capital } : {}),
+  stopPaper: (sid: string, reason = "") => post<{ signal_id: string; active: boolean }>(`/signals/${sid}/paper/stop`, { reason }),
+  advancePaper: (sid: string) => post<Job>(`/signals/${sid}/paper/advance`, {}),
   management: () => get<Management>("/overview/management"),
   approvals: (researchId?: string) => get<{ items: ApprovalSummary[]; roles: string[] }>(`/approvals${researchId ? `?research_id=${researchId}` : ""}`),
   approval: (sid: string) => get<ApprovalDetail>(`/approvals/${sid}`),
@@ -655,9 +692,12 @@ export const api = {
   approvalAct: (sid: string, body: ApprovalAct) => post<ApprovalDetail>(`/approvals/${sid}/actions`, body),
   submissionCheck: (id: string, v: number) => get<{ ready: boolean; missing: string[]; report: string | null; open: ApprovalSummary[] }>(
     `/research/${id}/versions/${v}/submission-check`),
+  paperDemo: (id: string, v: number, body?: { capital?: number; markets?: Market[] }) => post<PaperDemoResult>(
+    `/research/${id}/versions/${v}/paper-demo`, body ?? {}),
   portfolio: (id: string, v: number) => get<PortfolioResp>(`/research/${id}/versions/${v}/portfolio`),
   buildPortfolio: (id: string, v: number) => post<PortfolioResp>(`/research/${id}/versions/${v}/portfolio`, {}),
   portfolioSeries: (id: string, v: number) => get<PortfolioSeries>(`/research/${id}/versions/${v}/portfolio/series`),
+  portfolioRebalances: (id: string, v: number) => get<RebalancesResp>(`/research/${id}/versions/${v}/portfolio/rebalances`),
   portfolioFeedback: (id: string, v: number, body: { market: Market; action: string; note: string }) =>
     post<FeedbackDecision[]>(`/research/${id}/versions/${v}/portfolio/feedback`, body),
   makeReport: (id: string, v: number) => post<ReportRef>(`/research/${id}/versions/${v}/report`, {}),

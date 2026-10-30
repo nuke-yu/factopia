@@ -75,10 +75,74 @@ function FeedbackBlock({ pf, decisions, onSave }: { pf: PortfolioSummary; decisi
   );
 }
 
+// 调仓明细（PORT-04 运营视角）：相邻调仓的逐股持仓变化（买 / 卖，市场内权重）+ 执行参数
+function RebalancePanel({ id, version, builtAt, markets }: { id: string; version: number; builtAt: string; markets: Market[] }) {
+  const [sel, setSel] = useState<string>("");
+  const [open, setOpen] = useState<Record<string, boolean>>({});
+  const { data, error, loading } = useAsync(() => api.portfolioRebalances(id, version), [id, version, builtAt]);
+  if (loading) return <Panel eyebrow="PORT-04：相邻调仓的逐股持仓变化" title="调仓明细"><Loading what="调仓明细" /></Panel>;
+  if (error || !data || data.rebalances.length === 0)
+    return <Panel eyebrow="PORT-04：相邻调仓的逐股持仓变化" title="调仓明细">{error ? <ErrorBox error={error} /> : <p className="text-sm text-muted">无调仓记录</p>}</Panel>;
+  const list = data.rebalances;
+  const cur = list.find((r) => r.date === sel) ?? list[list.length - 1];
+  const N = 12;
+  return (
+    <Panel eyebrow="PORT-04：相邻调仓的逐股持仓变化（市场内权重）" title="调仓明细">
+      <div className="flex flex-wrap items-center gap-3 mb-3">
+        <label htmlFor="rebal-date" className="label">调仓日</label>
+        <select id="rebal-date" className="field w-auto" value={cur.date} aria-label="选择调仓日"
+          onChange={(e) => { setSel(e.target.value); setOpen({}); }}>
+          {[...list].reverse().map((r) => <option key={r.date} value={r.date}>{r.date}{r.prev_date ? "" : "（建仓）"}</option>)}
+        </select>
+        <span className="text-xs text-faint">{cur.prev_date ? `对比上一调仓日 ${cur.prev_date}` : "首次建仓，全部为买入"}</span>
+      </div>
+      <div className="grid gap-4 xl:grid-cols-3">
+        {markets.filter((m) => cur.markets[m]).map((m) => {
+          const mk = cur.markets[m];
+          const e = mk.exec;
+          const shown = open[m] ? mk.changes : mk.changes.slice(0, N);
+          return (
+            <div key={m} className="rounded border border-line p-3">
+              <div className="flex items-baseline justify-between">
+                <span className="font-medium" style={{ color: marketColor(m) }}>{MARKET_LABEL[m]}</span>
+                <span className="text-xs text-faint">买 {mk.n_buy} · 卖 {mk.n_sell} · 持有 {mk.n_hold}</span>
+              </div>
+              <div className="text-xs text-muted mt-1">
+                {e ? `换手 ${pct(e.turnover_target, 1)}${e.turnover_scale != null && e.turnover_scale < 1 ? `（按 ${fix(e.turnover_scale, 2)} 缩减）` : ""} · 成本 ${pct(e.cost, 3)} · α ${fix(e.alpha, 2)} · 事前TE ${pct(e.te_ex_ante, 2)}${e.te_ok ? "" : "（超限）"} · 持仓 ${e.holdings} 只（市场权重 ${pct(e.market_weight, 0)}）` : "执行参数仅保留最近数次"}
+              </div>
+              <table className="w-full text-xs num mt-2">
+                <thead className="label text-left"><tr><th className="py-1">股票</th><th>动作</th><th className="text-right">旧权重</th><th className="text-right">新权重</th><th className="text-right">变化</th></tr></thead>
+                <tbody>
+                  {shown.map((c) => (
+                    <tr key={c.symbol} className="border-t border-line">
+                      <td className="py-1 font-sans">{c.symbol}</td>
+                      <td><Badge tone={c.action === "buy" ? "good" : "bad"}>{c.action === "buy" ? "买入" : "卖出"}</Badge></td>
+                      <td className="text-right">{c.old_w == null ? "—" : pct(c.old_w, 2)}</td>
+                      <td className="text-right">{c.new_w == null ? "—" : pct(c.new_w, 2)}</td>
+                      <td className="text-right">{signed(c.delta, 2)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {mk.changes.length > N && (
+                <button className="text-xs text-accent mt-2" onClick={() => setOpen((o) => ({ ...o, [m]: !o[m] }))}>
+                  {open[m] ? "收起" : `显示全部 ${mk.changes.length} 笔`}
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      <p className="text-xs text-faint mt-2">权重为市场内目标权重；「买入 / 卖出」含新开仓、加仓 / 减仓与清仓，按权重变化从大到小排序。</p>
+    </Panel>
+  );
+}
+
 function Detail({ id, version }: { id: string; version: number }) {
   const [state, setState] = useState<{ summary?: PortfolioSummary | null; feedback: FeedbackDecision[]; error?: string; loading: boolean }>({ feedback: [], loading: true });
   const [series, setSeries] = useState<PortfolioSeries | null>(null);
   const [building, setBuilding] = useState(false);
+  const [buildErr, setBuildErr] = useState<string | null>(null);
   const [report, setReport] = useState<{ busy: boolean; error?: string }>({ busy: false });
   const reports = useAsync(() => api.reports(id, version), [id, version]);
 
@@ -95,11 +159,12 @@ function Detail({ id, version }: { id: string; version: number }) {
 
   async function build() {
     setBuilding(true);
+    setBuildErr(null);
     try {
       const r = await api.buildPortfolio(id, version);
       setState({ summary: r.summary, feedback: r.feedback, loading: false });
       setSeries(await api.portfolioSeries(id, version));
-    } catch (e) { setState((s) => ({ ...s, error: (e as Error).message })); } finally { setBuilding(false); }
+    } catch (e) { setBuildErr((e as Error).message); } finally { setBuilding(false); }
   }
   async function makeReport() {
     setReport({ busy: true });
@@ -122,6 +187,11 @@ function Detail({ id, version }: { id: string; version: number }) {
     <div className="flex flex-col gap-5">
       {actions}
       {state.error && <ErrorBox error={state.error} />}
+      {buildErr && (
+        <Notice tone="accent" title="还不能构建组合">
+          {buildErr}。可切换上方「研究项目 / 版本」到有采纳轮次的版本，或先在 04 运行中完成挖掘。
+        </Notice>
+      )}
       {report.error && <ErrorBox error={report.error} />}
       {!pf ? <Notice tone="accent" title="尚未构建授权组合">按授权条款与规则包，用各市场采纳轮次的打分构建月度只做多组合并回测（约数秒）。</Notice> : (
         <>
@@ -175,6 +245,7 @@ function Detail({ id, version }: { id: string; version: number }) {
               </table>
             </div>
           </Panel>
+          <RebalancePanel id={id} version={version} builtAt={pf.built_at} markets={pf.markets} />
           <div className="grid gap-5 xl:grid-cols-2">
             <Panel eyebrow={pf.attribution.method} title="Brinson 归因">
               <table className="w-full text-sm num">
