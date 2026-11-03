@@ -2,10 +2,11 @@ import { useMemo } from "react";
 import EChart from "../EChart";
 import type { Quantiles } from "../../api";
 import { cssVar, useThemeVersion } from "../../lib";
+import { t, tf } from "../../i18n";
 
 /** 第 1 组（打分最低）到第 5 组（打分最高）的颜色：低分偏红，高分偏绿。 */
 const groupColors = () => [cssVar("--bad"), cssVar("--warn"), cssVar("--muted"), cssVar("--accent"), cssVar("--good")];
-const groupName = (g: number, n: number) => `第 ${g} 组${g === 1 ? "（打分最低）" : g === n ? "（打分最高）" : ""}`;
+const groupName = (g: number, n: number) => tf("第 {g} 组{k}", { g, k: g === 1 ? t("（打分最低）") : g === n ? t("（打分最高）") : "" });
 const pctLabel = (v: number | null | undefined, nd = 2) => (v == null ? "—" : `${(v * 100).toFixed(nd)}%`);
 
 function axisStyle() {
@@ -25,16 +26,16 @@ export function QuantileBars({ q }: { q: Quantiles }) {
       animationDuration: 1200,
       tooltip: { ...s.tooltip, trigger: "axis", valueFormatter: (v: number) => pctLabel(v) },
       grid: { left: 52, right: 88, top: 24, bottom: 40 },
-      xAxis: { type: "category", data: q.mean.map((_, i) => `第 ${i + 1} 组`), axisLabel: s.axisLabel, axisLine: s.axisLine },
+      xAxis: { type: "category", data: q.mean.map((_, i) => tf("第 {i} 组", { i: i + 1 })), axisLabel: s.axisLabel, axisLine: s.axisLine },
       yAxis: { type: "value", axisLabel: { ...s.axisLabel, formatter: (v: number) => `${(v * 100).toFixed(1)}%` }, splitLine: s.splitLine },
       series: [{
-        name: `平均未来 ${q.horizon} 日收益`, type: "bar", barWidth: "52%",
+        name: tf("平均未来 {h} 日收益", { h: q.horizon }), type: "bar", barWidth: "52%",
         data: q.mean.map((v, i) => ({ value: v, itemStyle: { color: colors[i], borderRadius: 2 } })),
         label: { show: true, position: "top", color: cssVar("--text"), fontSize: 11, formatter: (p: { value: number }) => pctLabel(p.value) },
         markLine: {
           symbol: "none", silent: true, data: [{ yAxis: q.universe_mean }],
           lineStyle: { color: cssVar("--muted"), type: "dashed" },
-          label: { formatter: "全部股票平均", color: cssVar("--muted"), position: "end" },
+          label: { formatter: t("全部股票平均"), color: cssVar("--muted"), position: "end" },
         },
       }],
     };
@@ -59,7 +60,7 @@ export function QuantileNav({ q }: { q: Quantiles }) {
           name: groupName(i + 1, q.groups), type: "line", data, symbolSize: 4,
           lineStyle: { width: i === 0 || i === q.groups - 1 ? 2.2 : 1.2, color: colors[i] }, itemStyle: { color: colors[i] },
         })),
-        { name: "全部股票平均", type: "line", data: q.nav_universe, showSymbol: false,
+        { name: t("全部股票平均"), type: "line", data: q.nav_universe, showSymbol: false,
           lineStyle: { width: 1.2, type: "dashed", color: muted }, itemStyle: { color: muted } },
       ],
     };

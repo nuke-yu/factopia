@@ -14,6 +14,7 @@ import { QuantileBars, QuantileNav } from "../components/charts/QuantileChart";
 import StudyPanel from "../components/StudyPanel";
 import ValidationPanel from "../components/ValidationPanel";
 import PitNotice from "../components/PitNotice";
+import { t, tf, joinList } from "../i18n";
 
 export default function ResultsPage() {
   const runs = useAsync(() => api.runs(), []);
@@ -25,14 +26,14 @@ export default function ResultsPage() {
     <div className="flex flex-col gap-5">
       <div className="flex flex-wrap items-end gap-4">
         <div>
-          <div className="label">05 · 结果</div>
-          <h1 className="font-display text-2xl font-semibold tracking-wide mt-1">挖掘与验证结果</h1>
+          <div className="label">{t("05 · 结果")}</div>
+          <h1 className="font-display text-2xl font-semibold tracking-wide mt-1">{t("挖掘与验证结果")}</h1>
         </div>
         <div className="ml-auto flex items-center gap-2">
-          <label htmlFor="run" className="label whitespace-nowrap">运行</label>
+          <label htmlFor="run" className="label whitespace-nowrap">{t("运行")}</label>
           <select id="run" className="field w-auto num text-sm" value={runId} onChange={(e) => setParams({ run: e.target.value })}>
             {runs.data?.map((r) => (
-              <option key={r.run_id} value={r.run_id}>{r.run_id} · {MARKET_LABEL[r.market]} · {r.rounds} 轮</option>
+              <option key={r.run_id} value={r.run_id}>{tf("{a} · {b} · {c} 轮", { a: r.run_id, b: MARKET_LABEL[r.market], c: r.rounds })}</option>
             ))}
           </select>
         </div>
@@ -40,16 +41,16 @@ export default function ResultsPage() {
       <PitNotice />
       {runs.error && <ErrorBox error={runs.error} />}
       {runs.data && runs.data.length === 0 && (
-        <Notice tone="accent" title="还没有导出的运行结果">先运行 factopia.export.rdagent_run 与 factopia.export.backtests（见 README）。</Notice>
+        <Notice tone="accent" title={t("还没有导出的运行结果")}>{t("先运行 factopia.export.rdagent_run 与 factopia.export.backtests（见 README）。")}</Notice>
       )}
       {research?.id && research.version != null && (
         <StudyPanel key={`${research.id}-${research.version}`} researchId={research.id} version={research.version} current={runId} />
       )}
       {runId && <RunSection key={runId} runId={runId} />}
-      <Panel eyebrow="Alpha158 · 三市场" title="迁移性立方体" className="min-w-0">
+      <Panel eyebrow={t("Alpha158 · 三市场")} title={t("迁移性立方体")} className="min-w-0">
         <CubeSection />
       </Panel>
-      <Panel eyebrow="Alpha158 · 时间维度" title="因子时间曲面">
+      <Panel eyebrow={t("Alpha158 · 时间维度")} title={t("因子时间曲面")}>
         <IcSurface horizon={20} />
       </Panel>
     </div>
@@ -59,7 +60,7 @@ export default function ResultsPage() {
 function CubeSection() {
   const cube = useAsync(() => api.cube(20), []);
   if (cube.error) return <ErrorBox error={cube.error} />;
-  if (!cube.data) return <div className="h-[460px]"><Loading what="迁移性立方体" /></div>;
+  if (!cube.data) return <div className="h-[460px]"><Loading what={t("迁移性立方体")} /></div>;
   return <TransferCube cube={cube.data} />;
 }
 
@@ -75,7 +76,7 @@ function RunSection({ runId }: { runId: string }) {
   }, [detail.data]);
 
   if (detail.error) return <ErrorBox error={detail.error} />;
-  if (!detail.data) return <Loading what="运行结果" />;
+  if (!detail.data) return <Loading what={t("运行结果")} />;
   const { run, rounds, verdicts } = detail.data;
   const best = rounds.filter((r) => r.decision).at(-1);
   const posKey = selected === "baseline" ? (best ? String(best.loop) : "0") : selected;
@@ -84,45 +85,45 @@ function RunSection({ runId }: { runId: string }) {
     <>
       <div className="flex flex-col gap-2">
         {run.context_leak && (
-          <Notice tone="bad" title="此次运行受数据泄漏影响，结果仅用于展示流程">
-            运行时提供给 AI 的已有发现包含测试期（2022–2023）的评估结论（MINE-11 修复前），不能作为研究结论。
+          <Notice tone="bad" title={t("此次运行受数据泄漏影响，结果仅用于展示流程")}>
+            {t("运行时提供给 AI 的已有发现包含测试期（2022–2023）的评估结论（MINE-11 修复前），不能作为研究结论。")}
           </Notice>
         )}
-        <Notice title="回测结果可信度待排查（Spec 第 8 章 #21）">
-          多次运行中出现 rank IC 为负、收益却高于起点，原因未明（三市场研究中香港、法国都出现）；比较基准为 RD-Agent 默认的 20 个基础因子，而非完整 Alpha158。
+        <Notice title={t("回测结果可信度待排查（Spec 第 8 章 #21）")}>
+          {t("多次运行中出现 rank IC 为负、收益却高于起点，原因未明（三市场研究中香港、法国都出现）；比较基准为 RD-Agent 默认的 20 个基础因子，而非完整 Alpha158。")}
         </Notice>
       </div>
 
       <div>
-        <Panel eyebrow={`${MARKET_LABEL[run.market]} · 预测周期 ${run.horizon} 个交易日`} title="本次运行">
+        <Panel eyebrow={tf("{m} · 预测周期 {h} 个交易日", { m: MARKET_LABEL[run.market], h: run.horizon })} title={t("本次运行")}>
           <div className="grid gap-6 lg:grid-cols-[minmax(0,4fr)_minmax(0,8fr)]">
             <div className="flex flex-col gap-4">
               <div className="grid grid-cols-2 gap-4">
-                <Stat label="轮数 / 采纳" value={`${run.rounds} / ${run.adopted}`} />
-                <Stat label="大模型费用" value={`$${run.cost_usd.toFixed(2)}`} sub="DeepSeek" />
-                <Stat label="起点（扣成本年化）" value={pct(run.baseline?.metrics?.annual_return_with_cost)} sub="20 个基础因子" />
-                <Stat label="最好（扣成本年化）" value={pct(best?.metrics?.annual_return_with_cost ?? run.baseline?.metrics?.annual_return_with_cost)}
-                  tone={cssVar("--good")} sub={best ? `第 ${best.loop} 轮` : "没有采纳"} />
+                <Stat label={t("轮数 / 采纳")} value={`${run.rounds} / ${run.adopted}`} />
+                <Stat label={t("大模型费用")} value={`$${run.cost_usd.toFixed(2)}`} sub="DeepSeek" />
+                <Stat label={t("起点（扣成本年化）")} value={pct(run.baseline?.metrics?.annual_return_with_cost)} sub={t("20 个基础因子")} />
+                <Stat label={t("最好（扣成本年化）")} value={pct(best?.metrics?.annual_return_with_cost ?? run.baseline?.metrics?.annual_return_with_cost)}
+                  tone={cssVar("--good")} sub={best ? tf("第 {n} 轮", { n: best.loop }) : t("没有采纳")} />
               </div>
               <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs">
-                <dt className="text-faint">训练</dt><dd className="num">{run.settings.train_start} 至 {run.settings.train_end}</dd>
-                <dt className="text-faint">验证</dt><dd className="num">{run.settings.valid_start} 至 {run.settings.valid_end}</dd>
-                <dt className="text-faint">测试（回测）</dt><dd className="num">{run.settings.test_start} 至 {run.settings.test_end}</dd>
+                <dt className="text-faint">{t("训练")}</dt><dd className="num">{tf("{a} 至 {b}", { a: run.settings.train_start, b: run.settings.train_end })}</dd>
+                <dt className="text-faint">{t("验证")}</dt><dd className="num">{tf("{a} 至 {b}", { a: run.settings.valid_start, b: run.settings.valid_end })}</dd>
+                <dt className="text-faint">{t("测试（回测）")}</dt><dd className="num">{tf("{a} 至 {b}", { a: run.settings.test_start, b: run.settings.test_end })}</dd>
               </dl>
-              <p className="text-xs text-muted leading-relaxed">净值为各轮在测试期的扣成本后超额收益累计，虚线为基准指数。回撤是累计超额收益从此前最高点回落的幅度，最低点就是表中的最大回撤。模型训练不使用测试期数据，但 AI 每轮会看到测试期成绩来决定是否采纳，因此仍需在 2024 年以后的数据上复核。</p>
-              <Link className="btn self-start" to={`/run?run=${run.run_id}`}>回放研究过程 →</Link>
+              <p className="text-xs text-muted leading-relaxed">{t("净值为各轮在测试期的扣成本后超额收益累计，虚线为基准指数。回撤是累计超额收益从此前最高点回落的幅度，最低点就是表中的最大回撤。模型训练不使用测试期数据，但 AI 每轮会看到测试期成绩来决定是否采纳，因此仍需在 2024 年以后的数据上复核。")}</p>
+              <Link className="btn self-start" to={`/run?run=${run.run_id}`}>{t("回放研究过程 →")}</Link>
             </div>
             <div>
-              <div className="label mb-1">回测净值（测试期，扣成本后超额）</div>
+              <div className="label mb-1">{t("回测净值（测试期，扣成本后超额）")}</div>
               {backtest.data && Object.keys(backtest.data).length === 0 ? (
-                <div className="text-sm text-muted py-10">逐日回测明细尚未导出：运行结束后由 exporter 服务自动导出（约 1 分钟），起点轮次没有逐日结果。</div>
+                <div className="text-sm text-muted py-10">{t("逐日回测明细尚未导出：运行结束后由 exporter 服务自动导出（约 1 分钟），起点轮次没有逐日结果。")}</div>
               ) : backtest.data ? (
                 <>
                   <NavChart backtest={backtest.data} rounds={rounds} selected={selected} className="h-[290px]" />
-                  <div className="label mt-2 mb-1">回撤（选中轮次为红色面积）</div>
+                  <div className="label mt-2 mb-1">{t("回撤（选中轮次为红色面积）")}</div>
                   <DrawdownChart backtest={backtest.data} rounds={rounds} selected={selected} />
                 </>
-              ) : <Loading what="回测" />}
+              ) : <Loading what={t("回测")} />}
             </div>
           </div>
         </Panel>
@@ -131,33 +132,33 @@ function RunSection({ runId }: { runId: string }) {
       {best && <ValidationPanel runId={run.run_id} loop={best.loop} />}
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]">
-        <Panel eyebrow="RD-Agent · 逐轮" title="AI 研究轨迹" actions={<ViewToggle precise={precise} onChange={setPrecise} />}>
+        <Panel eyebrow={t("RD-Agent · 逐轮")} title={t("AI 研究轨迹")} actions={<ViewToggle precise={precise} onChange={setPrecise} />}>
           {precise ? <RoundTable run={run} rounds={rounds} verdicts={verdicts} selected={selected} onSelect={setSelected} /> : (
             <div className="h-[520px] -mx-1">
               <ResearchTrail run={run} rounds={rounds} selected={selected} onSelect={setSelected} />
             </div>
           )}
           <p className="text-xs text-muted mt-2">
-            每个节点是一轮：绿色为被采纳，红色为未采纳；竖线长度为扣成本后年化超额收益；虚线表示该轮与当时的最好结果比较。点击节点查看详情。
+            {t("每个节点是一轮：绿色为被采纳，红色为未采纳；竖线长度为扣成本后年化超额收益；虚线表示该轮与当时的最好结果比较。点击节点查看详情。")}
           </p>
         </Panel>
-        <Panel eyebrow="详情" title={selected === "baseline" ? "起点（基础因子）" : `第 ${selected} 轮`}>
+        <Panel eyebrow={t("详情")} title={selected === "baseline" ? t("起点（基础因子）") : tf("第 {n} 轮", { n: selected })}>
           <RoundDetail run={run} round={rounds.find((r) => String(r.loop) === selected)} verdict={verdicts?.find((v) => String(v.loop) === selected)} />
         </Panel>
       </div>
 
-      <Panel eyebrow={`第 ${posKey} 轮 · 测试期`} title="分组收益">
+      <Panel eyebrow={tf("第 {n} 轮 · 测试期", { n: posKey })} title={t("分组收益")}>
         {quantiles.error ? <ErrorBox error={quantiles.error} />
-          : !quantiles.data ? <Loading what="分组收益" />
+          : !quantiles.data ? <Loading what={t("分组收益")} />
           : quantiles.data[posKey] ? <QuantileSection q={quantiles.data[posKey]} />
-          : <div className="text-muted text-sm">该轮没有分组收益数据（先运行 factopia.export.backtests）。</div>}
+          : <div className="text-muted text-sm">{t("该轮没有分组收益数据（先运行 factopia.export.backtests）。")}</div>}
       </Panel>
 
-      <Panel eyebrow={`第 ${posKey} 轮 · 测试期`} title="月度收益">
+      <Panel eyebrow={tf("第 {n} 轮 · 测试期", { n: posKey })} title={t("月度收益")}>
         <MonthlyReturns runId={run.run_id} roundKey={posKey} />
       </Panel>
 
-      <Panel eyebrow={`第 ${posKey} 轮 · 测试期`} title="持仓轮动">
+      <Panel eyebrow={tf("第 {n} 轮 · 测试期", { n: posKey })} title={t("持仓轮动")}>
         <PositionsBars runId={run.run_id} roundKey={posKey} />
       </Panel>
     </>
@@ -169,29 +170,27 @@ function QuantileSection({ q }: { q: Quantiles }) {
   return (
     <div className="flex flex-col gap-4">
       <p className="text-sm text-muted leading-relaxed max-w-[110ch]">
-        每个交易日按模型打分把股票从低到高平均分成 {n} 组，看每组接下来 {q.horizon} 个交易日的实际涨跌。打分有效时，柱子应从左到右逐级升高，
-        右图 {n} 条线像扇子一样展开、第 {n} 组在最上面。这是判断因子好坏最直观的图，与持仓数、交易成本无关。
+        {tf("每个交易日按模型打分把股票从低到高平均分成 {n} 组，看每组接下来 {h} 个交易日的实际涨跌。打分有效时，柱子应从左到右逐级升高，右图 {n} 条线像扇子一样展开、第 {n} 组在最上面。这是判断因子好坏最直观的图，与持仓数、交易成本无关。", { n, h: q.horizon })}
       </p>
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <Stat label={`第 ${n} 组减第 1 组`} value={signed(q.spread_mean, 2)} tone={(q.spread_mean ?? 0) > 0 ? cssVar("--good") : cssVar("--bad")}
-          sub={`平均未来 ${q.horizon} 日收益之差`} />
-        <Stat label={`第 ${n} 组跑赢第 1 组`} value={pct(q.spread_positive_share)} sub={`占 ${q.days} 个交易日`} />
-        <Stat label="全部股票平均" value={pct(q.universe_mean, 2)} sub={`未来 ${q.horizon} 日收益`} />
-        <Stat label="打分完全相同的股票" value={pct(q.tie_share, 0)} sub="每日最大同分组占比（中位数）" />
+        <Stat label={tf("第 {n} 组减第 1 组", { n })} value={signed(q.spread_mean, 2)} tone={(q.spread_mean ?? 0) > 0 ? cssVar("--good") : cssVar("--bad")}
+          sub={tf("平均未来 {h} 日收益之差", { h: q.horizon })} />
+        <Stat label={tf("第 {n} 组跑赢第 1 组", { n })} value={pct(q.spread_positive_share)} sub={tf("占 {d} 个交易日", { d: q.days })} />
+        <Stat label={t("全部股票平均")} value={pct(q.universe_mean, 2)} sub={tf("未来 {h} 日收益", { h: q.horizon })} />
+        <Stat label={t("打分完全相同的股票")} value={pct(q.tie_share, 0)} sub={t("每日最大同分组占比（中位数）")} />
       </div>
       {(q.tie_share ?? 0) > 0.2 && (
-        <Notice title="模型打分区分度不足">
-          每天约 {pct(q.tie_share, 0)} 的股票得到完全相同的打分，只能放进同一组，所以各组股票数不等（平均 {q.size.map((s) => s.toFixed(0)).join(" / ")} 只），
-          部分交易日有的组没有股票（累计收益里按持有现金计）。这与第 8 章 #21（打分几乎相同、IC 为负）是同一个问题。
+        <Notice title={t("模型打分区分度不足")}>
+          {tf("每天约 {p} 的股票得到完全相同的打分，只能放进同一组，所以各组股票数不等（平均 {s} 只），部分交易日有的组没有股票（累计收益里按持有现金计）。这与第 8 章 #21（打分几乎相同、IC 为负）是同一个问题。", { p: pct(q.tie_share, 0), s: q.size.map((s) => s.toFixed(0)).join(" / ") })}
         </Notice>
       )}
       <div className="grid gap-5 lg:grid-cols-2">
         <div>
-          <div className="label mb-1">各组平均未来 {q.horizon} 日收益</div>
+          <div className="label mb-1">{tf("各组平均未来 {h} 日收益", { h: q.horizon })}</div>
           <QuantileBars q={q} />
         </div>
         <div>
-          <div className="label mb-1">各组累计收益（每 {q.horizon} 个交易日调仓）</div>
+          <div className="label mb-1">{tf("各组累计收益（每 {h} 个交易日调仓）", { h: q.horizon })}</div>
           <QuantileNav q={q} />
         </div>
       </div>
@@ -202,32 +201,32 @@ function QuantileSection({ q }: { q: Quantiles }) {
 function VerdictBadge({ v }: { v?: RoundVerdict }) {
   if (!v || v.passed == null) return <span className="text-faint">—</span>;
   const failed = v.checks.filter((c) => c.ok === false).map((c) => c.label).join("、");
-  return <span title={failed ? `未满足：${failed}` : "满足全部条件"}><Badge tone={v.passed ? "good" : "bad"}>{v.passed ? "通过" : "未通过"}</Badge></span>;
+  return <span title={failed ? tf("未满足：{f}", { f: joinList(v.checks.filter((c) => c.ok === false).map((c) => t(c.label))) }) : t("满足全部条件")}><Badge tone={v.passed ? "good" : "bad"}>{v.passed ? t("通过") : t("未通过")}</Badge></span>;
 }
 
 function RoundTable({ run, rounds, verdicts, selected, onSelect }: {
   run: Run; rounds: Round[]; verdicts: RoundVerdict[] | null; selected: string; onSelect: (k: string) => void;
 }) {
   const rows: { key: string; name: string; m: Metrics | null | undefined; r?: Round }[] = [
-    { key: "baseline", name: "起点", m: run.baseline?.metrics }, ...rounds.map((r) => ({ key: String(r.loop), name: `第 ${r.loop} 轮`, m: r.metrics, r })),
+    { key: "baseline", name: t("起点"), m: run.baseline?.metrics }, ...rounds.map((r) => ({ key: String(r.loop), name: tf("第 {n} 轮", { n: r.loop }), m: r.metrics, r })),
   ];
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-sm">
         <thead className="text-xs text-muted"><tr>
-          <th className="text-left py-1.5">轮次</th><th className="text-left">假设（AI 原文）</th>
-          <th className="text-right">rank IC</th><th className="text-right">扣成本年化</th><th className="text-right">最大回撤</th><th className="text-right">RD-Agent</th>
-          {verdicts && <th className="text-right pl-2" title="按研究规格中运行前锁定的可证伪测试判定">可证伪测试</th>}
+          <th className="text-left py-1.5">{t("轮次")}</th><th className="text-left">{t("假设（AI 原文）")}</th>
+          <th className="text-right">rank IC</th><th className="text-right">{t("扣成本年化")}</th><th className="text-right">{t("最大回撤")}</th><th className="text-right">RD-Agent</th>
+          {verdicts && <th className="text-right pl-2" title={t("按研究规格中运行前锁定的可证伪测试判定")}>{t("可证伪测试")}</th>}
         </tr></thead>
         <tbody>
           {rows.map(({ key, name, m, r }) => (
             <tr key={key} onClick={() => onSelect(key)} className={`border-t border-line cursor-pointer ${selected === key ? "bg-accent/8" : "hover:bg-bg-3"}`}>
               <td className="py-2 pr-3 whitespace-nowrap">{name}</td>
-              <td className="pr-3 text-muted max-w-[420px] truncate" title={r?.hypothesis ?? ""}>{r?.hypothesis ?? "20 个基础因子"}</td>
+              <td className="pr-3 text-muted max-w-[420px] truncate" title={r?.hypothesis ?? ""}>{r?.hypothesis ?? t("20 个基础因子")}</td>
               <td className="num text-right pr-3">{fix(m?.rank_ic)}</td>
               <td className="num text-right pr-3">{pct(m?.annual_return_with_cost)}</td>
               <td className="num text-right pr-3">{pct(m?.max_drawdown_with_cost)}</td>
-              <td className="text-right">{r ? (r.decision ? <Badge tone="good">采纳</Badge> : <Badge tone="bad">未采纳</Badge>) : <Badge>起点</Badge>}</td>
+              <td className="text-right">{r ? (r.decision ? <Badge tone="good">{t("采纳")}</Badge> : <Badge tone="bad">{t("未采纳")}</Badge>) : <Badge>{t("起点")}</Badge>}</td>
               {verdicts && <td className="text-right pl-2">{r ? <VerdictBadge v={verdicts.find((v) => v.loop === r.loop)} /> : null}</td>}
             </tr>
           ))}
@@ -240,12 +239,12 @@ function RoundTable({ run, rounds, verdicts, selected, onSelect }: {
 function Compare({ cur, ref_ }: { cur: Metrics | null | undefined; ref_: Metrics | null | undefined }) {
   const rows: [string, keyof Metrics, (x: number | null | undefined) => string][] = [
     ["IC", "ic", (x) => fix(x)], ["RankIC", "rank_ic", (x) => fix(x)],
-    ["扣成本年化超额", "annual_return_with_cost", (x) => pct(x)], ["扣成本前年化超额", "annual_return_without_cost", (x) => pct(x)],
-    ["最大回撤（扣成本）", "max_drawdown_with_cost", (x) => pct(x)], ["信息比率（扣成本）", "information_ratio_with_cost", (x) => fix(x, 2)],
+    [t("扣成本年化超额"), "annual_return_with_cost", (x) => pct(x)], [t("扣成本前年化超额"), "annual_return_without_cost", (x) => pct(x)],
+    [t("最大回撤（扣成本）"), "max_drawdown_with_cost", (x) => pct(x)], [t("信息比率（扣成本）"), "information_ratio_with_cost", (x) => fix(x, 2)],
   ];
   return (
     <table className="w-full text-sm">
-      <thead className="text-xs text-muted"><tr><th className="text-left py-1">指标</th><th className="text-right">本轮</th><th className="text-right">当时最好</th></tr></thead>
+      <thead className="text-xs text-muted"><tr><th className="text-left py-1">{t("指标")}</th><th className="text-right">{t("本轮")}</th><th className="text-right">{t("当时最好")}</th></tr></thead>
       <tbody>
         {rows.map(([n, k, f]) => (
           <tr key={k} className="border-t border-line">
@@ -262,28 +261,28 @@ function RoundDetail({ run, round, verdict }: { run: Run; round?: Round; verdict
   if (!round) {
     return (
       <div className="flex flex-col gap-3 text-sm">
-        <p className="text-muted">RD-Agent 的起点：Alpha158 中的 20 个基础因子（ALPHA20），由 LightGBM 训练后在测试期回测。后续每一轮都在此基础上加入 AI 的新因子。</p>
+        <p className="text-muted">{t("RD-Agent 的起点：Alpha158 中的 20 个基础因子（ALPHA20），由 LightGBM 训练后在测试期回测。后续每一轮都在此基础上加入 AI 的新因子。")}</p>
         <Compare cur={run.baseline?.metrics} ref_={null} />
-        <p className="text-xs text-faint">起点的回测由 RD-Agent 缓存，没有保留逐日结果，因此净值图中不显示起点曲线。</p>
+        <p className="text-xs text-faint">{t("起点的回测由 RD-Agent 缓存，没有保留逐日结果，因此净值图中不显示起点曲线。")}</p>
       </div>
     );
   }
   return (
     <div className="flex flex-col gap-4 text-sm max-h-[560px] overflow-y-auto pr-1">
       <div className="flex flex-wrap gap-2">
-        {round.decision ? <Badge tone="good">RD-Agent 采纳</Badge> : <Badge tone="bad">RD-Agent 未采纳</Badge>}
-        {verdict?.passed != null && <Badge tone={verdict.passed ? "good" : "bad"}>可证伪测试{verdict.passed ? "通过" : "未通过"}</Badge>}
-        <Badge>编码尝试 {round.coding_attempts} 次</Badge>
-        <Badge>费用 ${round.cost_usd.toFixed(3)}</Badge>
-        <Badge>耗时 {Math.round(totalTime)} 秒</Badge>
+        {round.decision ? <Badge tone="good">{t("RD-Agent 采纳")}</Badge> : <Badge tone="bad">{t("RD-Agent 未采纳")}</Badge>}
+        {verdict?.passed != null && <Badge tone={verdict.passed ? "good" : "bad"}>{verdict.passed ? t("可证伪测试通过") : t("可证伪测试未通过")}</Badge>}
+        <Badge>{tf("编码尝试 {n} 次", { n: round.coding_attempts })}</Badge>
+        <Badge>{tf("费用 {c}", { c: `$${round.cost_usd.toFixed(3)}` })}</Badge>
+        <Badge>{tf("耗时 {s} 秒", { s: Math.round(totalTime) })}</Badge>
       </div>
       <section>
-        <div className="label mb-1">假设（AI 原文）</div>
+        <div className="label mb-1">{t("假设（AI 原文）")}</div>
         <p className="leading-relaxed">{round.hypothesis}</p>
         <p className="text-muted text-xs leading-relaxed mt-1">{round.reason}</p>
       </section>
       <section>
-        <div className="label mb-1">因子（{round.factors.length}）</div>
+        <div className="label mb-1">{tf("因子（{n}）", { n: round.factors.length })}</div>
         <ul className="flex flex-col gap-2">
           {round.factors.map((f) => (
             <li key={f.name} className="border border-line rounded p-2">
@@ -292,13 +291,13 @@ function RoundDetail({ run, round, verdict }: { run: Run; round?: Round; verdict
               <div className="mt-1 overflow-x-auto"><Tex tex={f.formulation} display /></div>
               {f.variables && Object.keys(f.variables).length > 0 && (
                 <details className="mt-1">
-                  <summary className="text-xs text-muted cursor-pointer">变量说明</summary>
+                  <summary className="text-xs text-muted cursor-pointer">{t("变量说明")}</summary>
                   <TexVars vars={f.variables} />
                 </details>
               )}
               {f.code && (
                 <details className="mt-1">
-                  <summary className="text-xs text-muted cursor-pointer">查看代码</summary>
+                  <summary className="text-xs text-muted cursor-pointer">{t("查看代码")}</summary>
                   <pre className="num text-[11px] mt-1 p-2 bg-bg rounded overflow-x-auto max-h-64">{f.code}</pre>
                 </details>
               )}
@@ -308,27 +307,27 @@ function RoundDetail({ run, round, verdict }: { run: Run; round?: Round; verdict
       </section>
       {verdict && verdict.checks.length > 0 && (
         <section>
-          <div className="label mb-1">按可证伪测试判定</div>
+          <div className="label mb-1">{t("按可证伪测试判定")}</div>
           <ul className="flex flex-col gap-1">
             {verdict.checks.map((c) => (
               <li key={c.key} className="flex items-baseline gap-2 text-xs">
                 <span className="num w-3 text-center" style={{ color: cssVar(c.ok ? "--good" : c.ok === false ? "--bad" : "--muted") }}>{c.ok ? "✓" : c.ok === false ? "✗" : "—"}</span>
-                <span className="text-muted">{c.label}</span>
-                <span className="num ml-auto">{c.key === "rank_ic" ? fix(c.value, 4) : `${pct(c.value)}（起点 ${pct(c.ref)}）`}</span>
+                <span className="text-muted">{t(c.label)}</span>
+                <span className="num ml-auto">{c.key === "rank_ic" ? fix(c.value, 4) : tf("{v}（起点 {r}）", { v: pct(c.value), r: pct(c.ref) })}</span>
               </li>
             ))}
           </ul>
         </section>
       )}
       <section>
-        <div className="label mb-1">Qlib 回测成绩</div>
+        <div className="label mb-1">{t("Qlib 回测成绩")}</div>
         <Compare cur={round.metrics} ref_={round.sota_before} />
       </section>
       {round.feedback && (
         <section>
-          <div className="label mb-1">AI 评审（原文）</div>
+          <div className="label mb-1">{t("AI 评审（原文）")}</div>
           <p className="text-muted leading-relaxed">{round.feedback.observations}</p>
-          <div className="label mt-2 mb-1">下一轮方向</div>
+          <div className="label mt-2 mb-1">{t("下一轮方向")}</div>
           <p className="text-muted leading-relaxed">{round.feedback.new_hypothesis}</p>
         </section>
       )}

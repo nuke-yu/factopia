@@ -15,6 +15,8 @@ from pathlib import Path
 
 import yaml
 
+from factopia.lang import role_label, t
+
 CONFIGS = Path(os.environ.get("FACTOPIA_CONFIGS_DIR", "/workspace/configs"))
 RUNTIME = Path(os.environ.get("FACTOPIA_RUNTIME", "/workspace/runtime"))
 LOG = RUNTIME / "access" / "events.jsonl"
@@ -78,7 +80,7 @@ def _log(ev: dict) -> None:
 def deny(what: str, market: str | None = None) -> None:
     r = role()
     _log({"role": r["code"], "role_name": r["name"], "denied": what, "market": market})
-    raise Denied(f"当前地区角色「{r['name']}」无权查看：{what}（演示用地区视角，见 configs/access/regions.yaml）")
+    raise Denied(t("当前地区角色「{role}」无权查看：{what}（演示用地区视角，见 configs/access/regions.yaml）", role=role_label(r["code"], r["name"]), what=what))
 
 
 def require(market: str | None, what: str) -> None:
@@ -88,7 +90,7 @@ def require(market: str | None, what: str) -> None:
 
 def require_cross_region(what: str) -> None:
     if not cross_region():
-        deny(f"{what}（跨地区内容只对总部开放）")
+        deny(t("{what}（跨地区内容只对总部开放）", what=what))
 
 
 def info() -> dict:

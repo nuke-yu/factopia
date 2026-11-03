@@ -24,6 +24,7 @@ import pandas as pd
 
 from factopia import sources
 from factopia.paper import engine
+from factopia.lang import t
 
 PAPER = engine.PAPER
 SIGNALS = engine.SIGNALS
@@ -185,13 +186,13 @@ def _alerts(m: dict, rank_ic: dict, thresholds: dict, s: pd.Series, bm):
     last_roll = rank_ic.get("rolling_60d_last")
     if min_ic is not None and last_roll is not None and float(last_roll) < float(min_ic):
         stat_alert = True
-        alerts.append({"kind": "statistical", "level": "alert", "title": "滚动 60 日 rank IC 低于获批阈值",
-                       "detail": f"最近滚动 60 日均值 {float(last_roll):.4f}，低于获批阈值 {float(min_ic):.4f}。"})
+        alerts.append({"kind": "statistical", "level": "alert", "title": t("滚动 60 日 rank IC 低于获批阈值"),
+                       "detail": t("最近滚动 60 日均值 {last}，低于获批阈值 {min}。", last=f"{float(last_roll):.4f}", min=f"{float(min_ic):.4f}")})
     t_val = rank_ic.get("t")
     if t_val is not None and float(t_val) < -2:
         stat_alert = True
-        alerts.append({"kind": "statistical", "level": "alert", "title": "模拟盘期间 rank IC 显著为负（方向反转）",
-                       "detail": f"模拟盘期间 rank IC 均值的 t 值 {float(t_val):.2f}。"})
+        alerts.append({"kind": "statistical", "level": "alert", "title": t("模拟盘期间 rank IC 显著为负（方向反转）"),
+                       "detail": t("模拟盘期间 rank IC 均值的 t 值 {t}。", t=f"{float(t_val):.2f}")})
     ann = m.get("ann_return")
     if ann is not None and float(ann) < 0:
         dd_bench = None
@@ -200,11 +201,11 @@ def _alerts(m: dict, rank_ic: dict, thresholds: dict, s: pd.Series, bm):
         lim = thresholds.get("drawdown_vs_bench_max")
         if lim is not None and dd_bench is not None and dd_bench < float(lim):
             econ_alert = True
-            alerts.append({"kind": "economic", "level": "alert", "title": "模拟盘净值跑输基准并触及获批回撤上限",
-                           "detail": f"对等权基准最大相对回撤 {dd_bench:.2%}，低于获批阈值 {float(lim):.2%}；年化收益 {float(ann):.2%}。"})
+            alerts.append({"kind": "economic", "level": "alert", "title": t("模拟盘净值跑输基准并触及获批回撤上限"),
+                           "detail": t("对等权基准最大相对回撤 {dd}，低于获批阈值 {lim}；年化收益 {ann}。", dd=f"{dd_bench:.2%}", lim=f"{float(lim):.2%}", ann=f"{float(ann):.2%}")})
         else:
-            alerts.append({"kind": "economic", "level": "watch", "title": "模拟盘年化收益为负",
-                           "detail": f"年化收益 {float(ann):.2%}，注意观察是否持续。"})
+            alerts.append({"kind": "economic", "level": "watch", "title": t("模拟盘年化收益为负"),
+                           "detail": t("年化收益 {ann}，注意观察是否持续。", ann=f"{float(ann):.2%}")})
     # suggestion 由 report() 汇总，这里只返回事件
     return alerts, stat_alert, econ_alert
 
@@ -213,10 +214,10 @@ def report(signal_id: str, log=print) -> dict:
     """汇总模拟盘运行报告，原子写入 SIGNALS/<signal_id>/paper.json 并返回。"""
     rec = engine._read(PAPER / signal_id / "enrolled.json")
     if rec is None:
-        raise engine.PaperError(f"模拟盘未接入：{signal_id}")
+        raise engine.PaperError(t("模拟盘未接入：{signal_id}", signal_id=signal_id))
     state = engine._read(PAPER / signal_id / "state.json")
     if state is None:
-        raise engine.PaperError("没有模拟盘状态（先接入并推进一轮）")
+        raise engine.PaperError(t("没有模拟盘状态（先接入并推进一轮）"))
 
     horizon = int(rec.get("horizon") or 20)
     thresholds = rec.get("thresholds") or {}
@@ -264,8 +265,8 @@ def report(signal_id: str, log=print) -> dict:
 
     positions = {k: v for k, v in (state.get("positions") or {}).items() if float(v) > 1e-9}
     mode_note = {
-        "shadow": "影子撮合：T 日收盘截面决策、T+1 开盘价成交（开盘缺失用收盘价兜底），允许碎股，单边成本按规则包扣减。",
-        "longport": "长桥演示通道：市价单实际成交，持仓与现金按成交回报本地记账，按每手 100 股取整。",
+        "shadow": t("影子撮合：T 日收盘截面决策、T+1 开盘价成交（开盘缺失用收盘价兜底），允许碎股，单边成本按规则包扣减。"),
+        "longport": t("长桥演示通道：市价单实际成交，持仓与现金按成交回报本地记账，按每手 100 股取整。"),
     }
     out = {
         "signal_id": signal_id,
@@ -286,7 +287,7 @@ def report(signal_id: str, log=print) -> dict:
         "excess": {
             "ann": engine._r(excess_ann),
             "benchmark_ann": engine._r(bm_ann),
-            "note": "基准为股票池等权（未扣成本），模拟盘已含交易成本，两者口径不完全可比。",
+            "note": t("基准为股票池等权（未扣成本），模拟盘已含交易成本，两者口径不完全可比。"),
         },
         "rank_ic": rank_ic,
         "trades": trades,
@@ -298,9 +299,9 @@ def report(signal_id: str, log=print) -> dict:
         },
         "alerts": alerts,
         "suggestion": suggestion,
-        "suggestion_zh": SUGGESTION_ZH[suggestion],
+        "suggestion_zh": t(SUGGESTION_ZH[suggestion]),
         "thresholds": thresholds,
-        "note": mode_note.get(rec.get("mode"), "") + f" 基准为股票池等权（未扣成本）；rank IC 含最后 {horizon} 日的未来收益。",
+        "note": mode_note.get(rec.get("mode"), "") + " " + t("基准为股票池等权（未扣成本）；rank IC 含最后 {horizon} 日的未来收益。", horizon=horizon),
     }
     engine._write_json(SIGNALS / signal_id / "paper.json", out)
     log(f"[paper] {signal_id} 模拟盘报告已更新")

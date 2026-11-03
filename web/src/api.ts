@@ -1,5 +1,7 @@
 // 后端接口与数据类型。前端只读取后端导出的结果，不做研究计算（Spec UI-07）。
 
+import { tf, IS_ZH } from "./i18n";
+
 export type Market = "hk" | "uk" | "fr";
 export const MARKETS: Market[] = ["hk", "uk", "fr"];
 
@@ -275,7 +277,7 @@ export type TextDataset = {
   dataset: string; market: Market; market_zh: string; simulated: boolean; source: string; licence: string;
   processing_delay_min: number; ready: boolean; n_filings: number; n_companies: number; n_changes: number;
   hold_days: number | null; evaluation: TextEval | null;
-  truth: { label: string; rule: string; expected: string; companies: number; filings: number } | null;
+  truth: { label: string; rule: string; expected: string; effect: number; effect_days: number; companies: number; filings: number } | null;
   sensitivity?: { rows: { delay_min: number; hold_days: number; rank_ic_mean: number | null; rank_ic_t: number | null; event_diff_t: number | null;
     n_days: number; verdict: string; baseline: boolean }[]; stable: boolean; verdicts: string[]; note: string } | null;
 };
@@ -571,8 +573,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`/api${path}`, init);
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    const detail = Array.isArray(body.detail) ? body.detail.map((d: { msg: string }) => d.msg).join("；") : body.detail;
-    throw new Error(detail ?? `请求失败：${res.status} ${path}`);
+    const detail = Array.isArray(body.detail) ? body.detail.map((d: { msg: string }) => d.msg).join(IS_ZH ? "；" : "; ") : body.detail;
+    throw new Error(detail ?? tf("请求失败：{s} {p}", { s: res.status, p: path }));
   }
   return res.json() as Promise<T>;
 }
@@ -620,7 +622,7 @@ export type IdeaSuggestion = { id: string; channel: IdeaChannel; title: string; 
   table?: { angle: string; market: Market; score: number; by_market: Partial<Record<Market, number>>; detail: Record<string, { points: number; note: string }>;
     counts: { studies: number; rounds: number; adopted: number; exclusions: number; ideas: number }; groups: string[]; keywords: string;
     skipped: boolean; top: boolean; chance: number | null; selected: boolean }[];
-  inputs?: { used: { name: string; source: string; count: number; use: string; items: string[] }[]; not_used: { name: string; why: string }[];
+  inputs?: { used: { name: string; source: string; count: number; use: string; use_n?: number; items: string[] }[]; not_used: { name: string; why: string }[];
     avoid_n: number; session_avoid_n: number };
   prompt?: string };
 export type IdeaGround = { kind: string; text: string };
@@ -718,7 +720,7 @@ export const api = {
   textOverview: () => get<TextOverview>("/text/overview"),
   textFilings: (ds: string, instrument?: string) =>
     get<{ dataset: string; simulated: boolean; source: string; licence: string; total: number; items: TextFiling[];
-      excluded?: { id: string; instrument: string; company: string; title: string; language: string; published_at: string; n_paragraphs: number; reason: string }[];
+      excluded?: { id: string; instrument: string; company: string; title: string; language: string; published_at: string; n_paragraphs: number; reason: string | { code: string; n?: number; min?: number } }[];
       cleaning?: { table_paragraphs: number; series_filter: { datasets: string[]; min_paragraphs: number; notice_max_paragraphs: number }; table_rows: { enabled: boolean; numeric_share: number } } }>(
       `/text/${ds}/filings${instrument ? `?instrument=${encodeURIComponent(instrument)}` : ""}`),
   textDoc: (ds: string, id: string) => get<TextDoc>(`/text/${ds}/filings/${id}`),

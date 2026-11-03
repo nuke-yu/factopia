@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import EChart from "../EChart";
 import type { Columns, Round } from "../../api";
 import { cssVar, useThemeVersion } from "../../lib";
+import { t, tf } from "../../i18n";
 
 /** 各轮扣成本后的累计超额净值与基准指数净值（测试期）。 */
 export default function NavChart({ backtest, rounds, selected, className = "h-[400px]" }: {
@@ -25,11 +26,11 @@ export default function NavChart({ backtest, rounds, selected, className = "h-[4
       yAxis: { type: "value", scale: true, axisLabel: { color: muted }, splitLine: { lineStyle: { color: line, opacity: 0.4 } } },
       series: [
         ...keys.map((k) => ({
-          name: `第 ${k} 轮${decision(k) ? "（采纳）" : ""}`, type: "line", showSymbol: false, data: backtest[k].nav_with_cost,
+          name: tf("第 {i} 轮{k}", { i: k, k: decision(k) ? t("（采纳）") : "" }), type: "line", showSymbol: false, data: backtest[k].nav_with_cost,
           lineStyle: { width: k === selected ? 2.5 : 1.2, color: colorOf(k) }, itemStyle: { color: colorOf(k) },
           z: k === selected ? 5 : 2,
         })),
-        { name: "基准指数", type: "line", showSymbol: false, data: first.nav_bench, lineStyle: { width: 1.2, type: "dashed", color: muted }, itemStyle: { color: muted } },
+        { name: t("基准指数"), type: "line", showSymbol: false, data: first.nav_bench, lineStyle: { width: 1.2, type: "dashed", color: muted }, itemStyle: { color: muted } },
       ],
     };
   }, [backtest, rounds, selected, theme]);

@@ -8,6 +8,7 @@ import re
 
 import pandas as pd
 
+from factopia import lang
 from factopia.text import review
 from factopia.text.common import DATASETS, LANG_ZH, concept_names, ds_dir, fold, query_concepts, read_json
 
@@ -68,7 +69,7 @@ def search(query: str, datasets: list[str] | None = None, concepts: list[str] | 
 
 
 SUMMARY_PROMPT = """You are a research assistant on a cross-border equity research platform. Using ONLY the numbered excerpts
-below (original language plus translations), answer the researcher's question in Simplified Chinese.
+below (original language plus translations), answer the researcher's question in {language}.
 Rules: every sentence must end with one or more citations like [1] or [2][5] that point to the excerpts supporting it;
 do not state anything the excerpts do not support; say which market/company each point is about; if excerpts are marked
 SIMULATED, say the point comes from simulated demo data. Do not give investment advice.
@@ -92,7 +93,7 @@ def summarize(query: str, hits: list[dict], max_items: int = 12) -> dict:
         lines.append(f"[{n}]{sim} {h['company']} ({h['instrument']}), {h['title']}, published {h['published_at']}, "
                      f"language {h['language']}: {h['original']}" + (f" | zh: {tr['zh']}" if tr.get("zh") else ""))
     cfg = draft.llm_config()
-    text, usage = draft._chat(SUMMARY_PROMPT.format(query=query, excerpts="\n".join(lines)), cfg, "公告检索摘要")
+    text, usage = draft._chat(SUMMARY_PROMPT.format(query=query, excerpts="\n".join(lines), language=lang.llm_language()), cfg, "公告检索摘要")
     raw = json.loads(text).get("sentences") or []
     kept, dropped = [], 0
     for s in raw:

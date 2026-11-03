@@ -3,8 +3,9 @@ import EChart from "../EChart";
 import { api, type Monthly, type PeriodReturn } from "../../api";
 import { cssVar, reducedMotion, useAsync, useThemeVersion } from "../../lib";
 import { ErrorBox, Loading, ViewToggle } from "../ui";
+import { t, tf } from "../../i18n";
 
-const MONTHS = Array.from({ length: 12 }, (_, i) => `${i + 1} 月`);
+const MONTHS = Array.from({ length: 12 }, (_, i) => tf("{n} 月", { n: i + 1 }));
 const pctLabel = (v: number | null | undefined, nd = 1) => (v == null ? "—" : `${v >= 0 ? "+" : ""}${(v * 100).toFixed(nd)}%`);
 
 /** 月度收益：3D 视图为年 × 月的涨跌柱，精确视图为带数值的热力图（含全年列）。绿色为跑赢基准，红色为跑输。 */
@@ -22,21 +23,21 @@ export default function MonthlyReturns({ runId, roundKey }: { runId: string; rou
     const bound = Math.max(0.01, ...cells.map((c) => Math.abs(c.excess)));
     const visualMap = { show: false, dimension: 2, min: -bound, max: bound, inRange: { color: [cssVar("--bad"), cssVar("--bg-3"), cssVar("--good")] } };
     const tip = (year: number, label: string, r: { days: number; excess: number; bench: number }) =>
-      `<b>${year} 年 ${label}</b>（${r.days} 个交易日）<br/>超额收益（扣成本）${pctLabel(r.excess, 2)}<br/>基准指数 ${pctLabel(r.bench, 2)}`;
+      `<b>${tf("{year} 年 {label}", { year, label })}</b>${tf("（{days} 个交易日）", { days: r.days })}<br/>${t("超额收益（扣成本）")}${pctLabel(r.excess, 2)}<br/>${t("基准指数")}${pctLabel(r.bench, 2)}`;
     const tooltip = { backgroundColor: cssVar("--bg-2"), borderColor: line, textStyle: { color: text } };
 
     if (precise) {
-      const yearCells = data.years.map((y, i) => ({ value: [12, i, y.excess], r: y, label: "全年" }));
+      const yearCells = data.years.map((y, i) => ({ value: [12, i, y.excess], r: y, label: t("全年") }));
       return {
         tooltip: { ...tooltip, formatter: (p: { data: { value: number[]; r: PeriodReturn; label: string } }) =>
           tip(Number(years[p.data.value[1]]), p.data.label, p.data.r) },
         visualMap,
         grid: { left: 56, right: 12, top: 8, bottom: 28 },
-        xAxis: { type: "category", data: [...MONTHS, "全年"], axisLabel: { color: muted }, axisLine: { lineStyle: { color: line } }, splitArea: { show: false } },
+        xAxis: { type: "category", data: [...MONTHS, t("全年")], axisLabel: { color: muted }, axisLine: { lineStyle: { color: line } }, splitArea: { show: false } },
         yAxis: { type: "category", data: years, inverse: true, axisLabel: { color: muted }, axisLine: { lineStyle: { color: line } } },
         series: [{
           type: "heatmap",
-          data: [...cells.map((c) => ({ value: [c.x, c.y, c.excess], r: c, label: `${c.month} 月` })), ...yearCells],
+          data: [...cells.map((c) => ({ value: [c.x, c.y, c.excess], r: c, label: tf("{n} 月", { n: c.month }) })), ...yearCells],
           label: { show: true, color: text, fontSize: 11, formatter: (p: { value: number[] }) => pctLabel(p.value[2]) },
           itemStyle: { borderColor: cssVar("--bg-2"), borderWidth: 2 },
         }],
@@ -45,7 +46,7 @@ export default function MonthlyReturns({ runId, roundKey }: { runId: string; rou
     return {
       tooltip: { ...tooltip, formatter: (p: { value: number[] }) => {
         const c = cells.find((x) => x.x === p.value[0] && x.y === p.value[1]);
-        return c ? tip(c.year, `${c.month} 月`, c) : "";
+        return c ? tip(c.year, tf("{n} 月", { n: c.month }), c) : "";
       } },
       visualMap,
       grid3D: {
@@ -64,25 +65,24 @@ export default function MonthlyReturns({ runId, roundKey }: { runId: string; rou
   }, [data, precise, theme]);
 
   if (all.error) return <ErrorBox error={all.error} />;
-  if (!all.data) return <div className="h-[320px]"><Loading what="月度收益" /></div>;
-  if (!data) return <div className="text-muted text-sm">该轮没有逐日回测数据。</div>;
+  if (!all.data) return <div className="h-[320px]"><Loading what={t("月度收益")} /></div>;
+  if (!data) return <div className="text-muted text-sm">{t("该轮没有逐日回测数据。")}</div>;
   const wins = data.months.filter((m) => m.excess > 0).length;
   return (
     <div className="flex flex-col gap-2">
       <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-sm">
         {data.years.map((y) => (
           <span key={y.year} className="text-muted">
-            {y.year} 年 <span className="num" style={{ color: y.excess >= 0 ? cssVar("--good") : cssVar("--bad") }}>{pctLabel(y.excess)}</span>
-            <span className="text-faint">（基准 {pctLabel(y.bench)}）</span>
+            {tf("{y} 年", { y: y.year })} <span className="num" style={{ color: y.excess >= 0 ? cssVar("--good") : cssVar("--bad") }}>{pctLabel(y.excess)}</span>
+            <span className="text-faint">{tf("（基准 {v}）", { v: pctLabel(y.bench) })}</span>
           </span>
         ))}
-        <span className="text-muted">跑赢基准的月份 <span className="num text-text">{wins} / {data.months.length}</span></span>
+        <span className="text-muted">{t("跑赢基准的月份")} <span className="num text-text">{wins} / {data.months.length}</span></span>
         <div className="ml-auto"><ViewToggle precise={precise} onChange={setPrecise} /></div>
       </div>
       <EChart option={option} notMerge className={precise ? "h-[160px]" : "h-[340px]"} />
       <p className="text-xs text-muted">
-        每格是一个月的扣成本后超额收益（相对基准指数，按日复利），绿色跑赢、红色跑输。月份颜色是否集中在某个时段，能看出策略是否只靠少数行情赚钱。
-        首尾月份交易日不完整，以提示中的交易日数为准。
+        {t("每格是一个月的扣成本后超额收益（相对基准指数，按日复利），绿色跑赢、红色跑输。月份颜色是否集中在某个时段，能看出策略是否只靠少数行情赚钱。首尾月份交易日不完整，以提示中的交易日数为准。")}
       </p>
     </div>
   );

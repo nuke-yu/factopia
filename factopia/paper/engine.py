@@ -30,6 +30,7 @@ from pathlib import Path
 import pandas as pd
 
 from factopia import rules, sources
+from factopia.lang import t
 from factopia.paper import broker
 
 RUNTIME = Path(os.environ.get("FACTOPIA_RUNTIME", "/workspace/runtime"))
@@ -95,18 +96,18 @@ def enroll(signal_id: str, capital: float | None = None) -> dict:
     except signals.CatalogError as e:
         raise PaperError(str(e)) from e
     if ent["state"] not in ("active", "paused"):
-        raise PaperError(f"信号当前状态为「{ent['state_zh']}」，仅生产中 / 已暂停的信号可接入模拟盘")
+        raise PaperError(t("信号当前状态为「{state}」，仅生产中 / 已暂停的信号可接入模拟盘", state=ent["state_zh"]))
     entry = signals.monitor_entry(signal_id)
     m = entry["market"]
     if entry.get("price_dataset") in sources.SIMULATED:
-        raise PaperError("该信号的行情来自模拟数据集（虚构行情），不能接入模拟盘；真实行情的信号才能接入")
+        raise PaperError(t("该信号的行情来自模拟数据集（虚构行情），不能接入模拟盘；真实行情的信号才能接入"))
     mode = "longport" if (broker.mode() == "longport" and m == "hk") else "shadow"
     try:
         cap = DEFAULT_CAPITAL if capital is None else float(capital)
     except (TypeError, ValueError) as e:
-        raise PaperError(f"初始资金无效：{e}") from e
+        raise PaperError(t("初始资金无效：{e}", e=e)) from e
     if not 0 < cap <= 1e12:
-        raise PaperError("初始资金必须为 (0, 1e12] 中的正数")
+        raise PaperError(t("初始资金必须为 (0, 1e12] 中的正数"))
     d = _dir(signal_id)
     if d.exists():
         shutil.rmtree(d)                    # 重复接入 = 重置
@@ -131,7 +132,7 @@ def unenroll(signal_id: str, reason: str = "") -> dict:
     d = _dir(signal_id)
     rec = _read(d / "enrolled.json")
     if rec is None:
-        raise PaperError(f"信号 {signal_id} 没有接入模拟盘")
+        raise PaperError(t("信号 {signal_id} 没有接入模拟盘", signal_id=signal_id))
     state = _read(d / "state.json") or {}
     pending = state.get("pending") or []
     if pending and rec.get("mode") == "longport":
@@ -169,17 +170,17 @@ def cycle(signal_id: str, log=print) -> dict:
     d = _dir(signal_id)
     rec = _read(d / "enrolled.json")
     if rec is None or not rec.get("active"):
-        raise PaperError(f"信号 {signal_id} 没有接入中的模拟盘")
+        raise PaperError(t("信号 {signal_id} 没有接入中的模拟盘", signal_id=signal_id))
     state = _read(d / "state.json") or {}
     entry = signals.monitor_entry(signal_id)          # 每轮重取：审批材料与阈值可能变化
     m = entry["market"]
     if entry.get("price_dataset") in sources.SIMULATED:
-        raise PaperError("该信号的行情变成模拟数据（不能继续推进模拟盘）")
+        raise PaperError(t("该信号的行情变成模拟数据（不能继续推进模拟盘）"))
     if rec["mode"] == "longport" and m != "hk":
-        raise PaperError("长桥模式仅支持港股，该信号已不适用")
+        raise PaperError(t("长桥模式仅支持港股，该信号已不适用"))
     close = sources.close(m, entry.get("price_dataset"))
     if close.empty:
-        raise PaperError("行情数据为空")
+        raise PaperError(t("行情数据为空"))
     last = close.index[-1]
     costs = rules.costs(m)
     # 1) 结算历史挂单（先卖后买在结算顺序中生效）
@@ -372,11 +373,11 @@ def _rebalance(sid: str, score: pd.DataFrame, state: dict, close: pd.DataFrame, 
     """
     avail = score.loc[:last].dropna(how="all")
     if avail.empty:
-        raise PaperError("信号没有任何可用值，无法调仓")
+        raise PaperError(t("信号没有任何可用值，无法调仓"))
     rdate = avail.index[-1]
     row = avail.loc[rdate].dropna()
     if len(row) < MIN_STABLE:
-        raise PaperError(f"最新截面可用股票只有 {len(row)} 只（< {MIN_STABLE}），本月不调仓")
+        raise PaperError(t("最新截面可用股票只有 {n} 只（< {m}），本月不调仓", n=len(row), m=MIN_STABLE))
     n = max(1, int(len(row) * TOP))
     targets = list(row.sort_values(ascending=False).index[:n])
     px = close.ffill().loc[rdate]

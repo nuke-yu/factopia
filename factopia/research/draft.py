@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from factopia.research import evidence, mandates, regions
+from factopia.lang import llm_language
 
 PROMPT_VERSION = "rs-draft-v3"   # v3：加入内部知识检索结果（因子库、以往研究、字段口径，只含名称与说明）
 PROMPT_FILE = Path(__file__).parent / "prompts" / f"{PROMPT_VERSION}.md"
@@ -210,7 +211,7 @@ def make_draft(inputs: dict) -> dict:
     past = evidence.past_runs(inputs["markets"], inputs["horizon"]) if inputs.get("include_past_runs", True) else []
     internal = internal_knowledge(inputs["hypothesis"] + " " + (inputs.get("direction") or ""))
     prompt = PROMPT_FILE.read_text(encoding="utf-8").format(
-        internal="\n".join(f"- [{x['kind']}] {x['title']}: {x['prompt']}" for x in internal) or "- none",
+        internal="\n".join(f"- [{x['kind']}] {x['title']}: {x['prompt']}" for x in internal) or "- none", language=llm_language(),
         markets=", ".join(inputs["markets"]), horizon=inputs["horizon"],
         direction=inputs.get("direction") or "(not given)", hypothesis=inputs["hypothesis"],
         mandate_name=mandate["name"],

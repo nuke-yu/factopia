@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import EChart from "../EChart";
 import type { Columns, Round } from "../../api";
 import { cssVar, useThemeVersion } from "../../lib";
+import { t, tf } from "../../i18n";
 
 /** 各轮扣成本后超额收益的回撤（与 Qlib 最大回撤指标同一算法），选中轮次用面积突出。 */
 export default function DrawdownChart({ backtest, rounds, selected }: { backtest: Record<string, Columns>; rounds: Round[]; selected: string }) {
@@ -24,7 +25,7 @@ export default function DrawdownChart({ backtest, rounds, selected }: { backtest
         const on = k === selected;
         const color = on ? bad : decision(k) ? cssVar("--good") : cssVar("--faint");
         return {
-          name: `第 ${k} 轮${decision(k) ? "（采纳）" : ""}`, type: "line", showSymbol: false, data: backtest[k].drawdown_with_cost,
+          name: tf("第 {i} 轮{k}", { i: k, k: decision(k) ? t("（采纳）") : "" }), type: "line", showSymbol: false, data: backtest[k].drawdown_with_cost,
           lineStyle: { width: on ? 1.8 : 1, color, opacity: on ? 1 : 0.6 }, itemStyle: { color },
           areaStyle: on ? { color: bad, opacity: 0.18 } : undefined, z: on ? 5 : 2,
         };

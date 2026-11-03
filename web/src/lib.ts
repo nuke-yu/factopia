@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import type { Market } from "./api";
+import { t } from "./i18n";
 
-export const MARKET_LABEL: Record<Market, string> = { hk: "香港", uk: "英国", fr: "法国" };
+export const MARKET_LABEL: Record<Market, string> = { hk: t("香港"), uk: t("英国"), fr: t("法国") };
 export const MARKET_CITY: Record<Market, string> = { hk: "HONG KONG", uk: "LONDON", fr: "PARIS" };
 
 /** 读取当前主题下的 CSS 变量（图表库需要具体颜色值）。 */

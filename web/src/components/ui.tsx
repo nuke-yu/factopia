@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import katex from "katex";
 import "katex/dist/katex.min.css";
+import { t, tf } from "../i18n";
 
 export function Panel({ title, eyebrow, actions, children, className = "" }: {
   title: string; eyebrow?: string; actions?: ReactNode; children: ReactNode; className?: string;
@@ -36,8 +37,8 @@ export function Seg<T extends string | number>({ value, options, onChange, label
 /** 3D 视图与精确视图（2D 表格 / 平面图）切换：审核与汇报时使用精确视图。 */
 export function ViewToggle({ precise, onChange }: { precise: boolean; onChange: (v: boolean) => void }) {
   return (
-    <Seg label="视图" value={precise ? "2d" : "3d"} onChange={(v) => onChange(v === "2d")}
-      options={[{ value: "3d", label: "3D 视图" }, { value: "2d", label: "精确视图" }]} />
+    <Seg label={t("视图")} value={precise ? "2d" : "3d"} onChange={(v) => onChange(v === "2d")}
+      options={[{ value: "3d", label: t("3D 视图") }, { value: "2d", label: t("精确视图") }]} />
   );
 }
 
@@ -74,11 +75,11 @@ export function Stat({ label, value, sub, tone }: { label: string; value: ReactN
 }
 
 export function Loading({ what }: { what: string }) {
-  return <div className="h-full min-h-40 grid place-items-center label">正在载入{what}…</div>;
+  return <div className="h-full min-h-40 grid place-items-center label">{tf("正在载入{what}…", { what })}</div>;
 }
 
 export function ErrorBox({ error }: { error: string }) {
-  return <Notice tone="bad" title="数据载入失败">{error}</Notice>;
+  return <Notice tone="bad" title={t("数据载入失败")}>{error}</Notice>;
 }
 
 /** LaTeX 数学公式渲染（RD-Agent 生成的因子 formulation、变量名）。公式非法时降级为原文显示。 */

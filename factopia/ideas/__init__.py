@@ -23,6 +23,8 @@ from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
+from factopia import lang
+
 RUNTIME = Path(os.environ.get("FACTOPIA_RUNTIME", "/workspace/runtime"))
 DIR = RUNTIME / "ideas"
 PROMPT_VERSION = "idea-paper-v1"
@@ -343,13 +345,13 @@ def extract(iid: str, by: str = SYSTEM_BY) -> dict:
         used += len(line)
     prompt = PROMPT_FILE.read_text(encoding="utf-8").format(
         title=idea["title"], note=idea["body"][:1500] or "(none)", paragraphs="\n".join(numbered),
-        truncated="yes" if len(numbered) < len(paras) else "no")
+        truncated="yes" if len(numbered) < len(paras) else "no", language=lang.llm_language())
     cfg = drafting.llm_config()
     try:
         text, usage = drafting._chat(prompt, cfg, "论文因子抽取")
         raw = json.loads(text)
     except json.JSONDecodeError as e:
-        raise IdeaError(f"大模型输出不是合法 JSON：{e}") from e
+        raise IdeaError(lang.t("大模型输出不是合法 JSON：{e}", e=e)) from e
     except drafting.DraftError as e:
         raise IdeaError(str(e)) from e
     n = len(numbered)

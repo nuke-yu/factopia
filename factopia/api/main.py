@@ -21,6 +21,7 @@ from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from factopia import access
+from factopia.lang import joinlist, market_label, t
 from factopia import sources as srcs
 from factopia.research import draft as drafting
 from factopia.research import evidence, mandates, regions, store, verdict
@@ -65,12 +66,12 @@ def access_info():
 @app.exception_handler(PermissionError)
 def _storage_not_ready(request, exc: PermissionError):
     from fastapi.responses import JSONResponse
-    return JSONResponse(status_code=503, content={"detail": "研究存储目录尚未初始化：请先启动后台运行器（runner 服务）"})
+    return JSONResponse(status_code=503, content={"detail": t("研究存储目录尚未初始化：请先启动后台运行器（runner 服务）")})
 
 
 def _json(path: Path):
     if not path.exists():
-        raise HTTPException(404, f"结果文件不存在：{path.name}（先运行 factopia.export）")
+        raise HTTPException(404, t("结果文件不存在：{name}（先运行 factopia.export）", name=path.name))
     return _cached_json(path, path.stat().st_mtime)
 
 
@@ -92,8 +93,8 @@ def _json_safe(obj):
 
 def _run_dir(run_id: str) -> Path:
     if not RUN_ID.match(run_id) or not (RESULTS / "runs" / run_id / "run.json").exists():
-        raise HTTPException(404, f"运行不存在：{run_id}")
-    access.require(run_id.split("_", 1)[0], f"运行 {run_id}")       # 地区视角：运行编号以市场开头
+        raise HTTPException(404, t("运行不存在：{run_id}", run_id=run_id))
+    access.require(run_id.split("_", 1)[0], t("运行 {run_id}", run_id=run_id))       # 地区视角：运行编号以市场开头
     return RESULTS / "runs" / run_id
 
 
@@ -134,7 +135,7 @@ def cube(horizon: int):
 def surface(horizon: int, market: str | None = Query(None, pattern="^(hk|uk|fr)$")):
     data = _json(RESULTS / "alpha158" / f"h{horizon}" / "surface.json")
     if market:
-        access.require(market, f"{market} 市场的因子评估")
+        access.require(market, t("{market} 市场的因子评估", market=market_label(market)))
         return {**data, "markets": {market: data["markets"][market]}}
     return {**data, "markets": {m: v for m, v in data["markets"].items() if access.can(m)}}
 
@@ -217,10 +218,10 @@ def quantiles(run_id: str):
 def positions(run_id: str, key: str, step: int = Query(5, ge=1, le=60)):
     """持仓矩阵：每隔 step 个交易日取一次，股票按持有天数排序。"""
     if not ROUND_KEY.match(key):
-        raise HTTPException(404, "轮次不存在")
+        raise HTTPException(404, t("轮次不存在"))
     path = _run_dir(run_id) / "positions" / f"{key}.parquet"
     if not path.exists():
-        raise HTTPException(404, "该轮没有持仓记录")
+        raise HTTPException(404, t("该轮没有持仓记录"))
     df = pd.read_parquet(path)
     dates = sorted(df["date"].unique())[::step]
     df = df[df["date"].isin(dates)]
@@ -245,7 +246,7 @@ def run_events(run_id: str):
 def run_event_prompt(run_id: str, index: int):
     events = _json(_run_dir(run_id) / "events.json")
     if not 0 <= index < len(events) or not events[index].get("user"):
-        raise HTTPException(404, "该事件没有保存提示词")
+        raise HTTPException(404, t("该事件没有保存提示词"))
     e = events[index]
     return {"system": e["system"], "user": e["user"], "response": e.get("response")}
 
@@ -355,7 +356,7 @@ class DraftIn(BaseModel):
 
 def _check_markets(markets: list[str]) -> None:
     if not markets or any(m not in MARKETS for m in markets):
-        raise HTTPException(422, f"市场必须是 {MARKETS} 中的一个或多个")
+        raise HTTPException(422, t("市场必须是 {markets} 中的一个或多个", markets=joinlist(MARKETS)))
 
 
 @app.get("/api/mandates")
@@ -391,11 +392,11 @@ def research_draft(body: DraftIn):
     """AI 起草研究规格（RS-02）：约 30–60 秒。"""
     _check_markets(body.markets)
     if body.horizon not in HORIZONS:
-        raise HTTPException(422, f"预测周期必须是 {HORIZONS} 之一")
+        raise HTTPException(422, t("预测周期必须是 {horizons} 之一", horizons=joinlist(HORIZONS)))
     try:
         return drafting.make_draft(body.model_dump())
     except KeyError:
-        raise HTTPException(404, f"授权不存在：{body.mandate}")
+        raise HTTPException(404, t("授权不存在：{mandate}", mandate=body.mandate))
     except drafting.DraftError as e:
         raise HTTPException(502, str(e))
 
@@ -437,7 +438,7 @@ def _prepare_spec(raw: dict, lock: bool) -> dict:
     spec["horizon"] = int(spec.get("horizon") or 20)
     spec["signal_source"] = spec.get("signal_source") or "price_volume"     # price_volume：RD-Agent；text：文本信号研究（第 14.17 节）
     if spec["signal_source"] not in ("price_volume", "text"):
-        raise HTTPException(422, "信号来源须为 price_volume（量价，RD-Agent）或 text（文本信号）")
+        raise HTTPException(422, t("信号来源须为 price_volume（量价，RD-Agent）或 text（文本信号）"))
     spec["markets"] = spec.get("markets") or []
     _check_markets(spec["markets"])
     ev = spec.get("evidence") or {}
@@ -479,7 +480,7 @@ def lock_version(body: dict):
     pre = rulebook.evaluate(rule_ctx.setup_context(spec), ["setup"])
     if pre["blocked"]:
         hits = [f"{h['rule_id']} {h['title']}（{h['reason']}）" for h in pre["hits"] if h["severity"] == "block"]
-        raise HTTPException(422, "立项预检命中阻断规则，不能锁定：" + "；".join(hits))
+        raise HTTPException(422, t("立项预检命中阻断规则，不能锁定：{hits}", hits="；".join(hits)))
     spec["precheck_setup"] = pre
     saved = store.save_version(spec)
     ad = spec.get("ai_draft") or {}
@@ -538,7 +539,7 @@ class IdeaIn(BaseModel):
 def ideas_create(body: IdeaIn):
     """提交线索；论文渠道文件以 base64 传入（≤ 20 MB），提交后自动抽取候选因子（失败不影响提交）。"""
     for m in body.markets:
-        access.require(m, "在其他地区市场提交线索")
+        access.require(m, t("在其他地区市场提交线索"))
     I = _ideas()
     idea = _idea_call(I.create, body.model_dump())
     if idea["channel"] == "paper":
@@ -612,7 +613,7 @@ def ideas_combine(body: IdeaCombineIn):
     if body.base:
         sp = _json_spec(body.base)
         if not any(access.can(m) for m in sp.get("markets") or []):
-            access.deny(f"研究 {body.base}", (sp.get("markets") or [None])[0])
+            access.deny(t("研究 {rid}", rid=body.base), (sp.get("markets") or [None])[0])
     from factopia.ideas import combine
     try:
         return combine.combine(body.ids, body.by, body.base)
@@ -623,7 +624,7 @@ def ideas_combine(body: IdeaCombineIn):
 def _json_spec(rid: str) -> dict:
     vs = store.versions(rid) if drafting.ID_PATTERN.match(rid) else []
     if not vs:
-        raise HTTPException(404, f"研究不存在或还没有锁定的版本：{rid}")
+        raise HTTPException(404, t("研究不存在或还没有锁定的版本：{rid}", rid=rid))
     return store.load_version(rid, vs[-1])
 
 
@@ -646,7 +647,7 @@ def rule_packs():
     try:
         packs = rulebook.load_packs()
     except rulebook.RuleError as e:
-        raise HTTPException(500, f"规则包格式错误：{e}")
+        raise HTTPException(500, t("规则包格式错误：{e}", e=e))
     return {"packs": list(packs.values()), "sources": rulebook.load_sources(), "disclaimer": rulebook.DISCLAIMER,
             "severity_zh": rulebook.SEVERITY_ZH, "stage_zh": rulebook.STAGE_ZH,
             "category_zh": rulebook.CATEGORY_ZH, "status_zh": rulebook.STATUS_ZH}
@@ -709,14 +710,14 @@ def _rules_view(r: dict) -> dict:
 @app.get("/api/research/{research_id}/versions")
 def list_versions(research_id: str):
     if not drafting.ID_PATTERN.match(research_id):
-        raise HTTPException(404, "研究项目不存在")
+        raise HTTPException(404, t("研究项目不存在"))
     return [store.load_version(research_id, v) for v in store.versions(research_id)]
 
 
 @app.get("/api/research/{research_id}/versions/{version}")
 def get_version(research_id: str, version: int):
     if not drafting.ID_PATTERN.match(research_id) or version not in store.versions(research_id):
-        raise HTTPException(404, "版本不存在")
+        raise HTTPException(404, t("版本不存在"))
     return store.load_version(research_id, version)
 
 
@@ -839,10 +840,10 @@ def start_validation(run_id: str, body: ValidateIn):
     if loop is None:
         focus = verdict.focus_round(rounds)
         if focus is None:
-            raise HTTPException(422, "这次运行没有被采纳的轮次，可在逐轮表中指定轮次")
+            raise HTTPException(422, t("这次运行没有被采纳的轮次，可在逐轮表中指定轮次"))
         loop = focus["loop"]
     if not any(r["loop"] == loop and r.get("metrics") for r in rounds):
-        raise HTTPException(422, f"第 {loop} 轮没有回测结果")
+        raise HTTPException(422, t("第 {loop} 轮没有回测结果", loop=loop))
     existing = _validate_job(run_id, loop)
     if existing and existing["state"] in ("queued", "running"):
         return _job_public(existing)
@@ -964,12 +965,12 @@ def study_view(research_id: str, version: int):
     if access.cross_region():
         return st
     if not any(access.can(m) for m in st["markets"]):
-        access.deny(f"研究 {research_id} v{version}（不涉及本地区市场）")
+        access.deny(t("研究 {rid} v{version}（不涉及本地区市场）", rid=research_id, version=version))
     hidden = {"state": "hidden", "focus": None, "rounds": [], "run_id": None, "attempts": 0, "job": None}
     return {**st, "markets": {m: (e if access.can(m) else {"market": m, "primary": e.get("primary"), **hidden}) for m, e in st["markets"].items()},
-            "transfer": {"label": "跨地区内容，只对总部开放", "statistical": None, "reason": "", "markets": {}, "threshold": None},
+            "transfer": {"label": t("跨地区内容，只对总部开放"), "statistical": None, "reason": "", "markets": {}, "threshold": None},
             "overall": {**st["overall"], "reason": st["overall"]["reason"] if access.can(st["rule"]["primary"]) and "其他市场" not in st["overall"]["reason"]
-                        else "跨地区结论：详细原因涉及其他地区，只对总部开放"},
+                        else t("跨地区结论：详细原因涉及其他地区，只对总部开放")},
             "cross_market": None, "explanation": None, "findings": [f for f in st.get("findings") or [] if any(f["text"].startswith(MARKET_ZH[m]) for m in access.markets())],
             "region_view": access.role()["name"]}
 
@@ -996,7 +997,7 @@ def study(research_id: str, version: int):
 @app.post("/api/research/{research_id}/versions/{version}/explain")
 def explain_study(research_id: str, version: int):
     """AI 解释市场差异（BR-38）：基于平台事实清单，每句必须引用事实编号；存档供研究员确认。"""
-    access.require_cross_region("AI 解释市场差异")
+    access.require_cross_region(t("AI 解释市场差异"))
     from factopia.research import explain as explaining
     st = study(research_id, version)
     diags = {m: (e.get("focus") or {}).get("diagnostics") for m, e in st["markets"].items()}
@@ -1019,7 +1020,7 @@ def _portfolio_mod():
 @app.get("/api/research/{research_id}/versions/{version}/portfolio")
 def get_portfolio(research_id: str, version: int):
     """已构建的授权组合（没有则 summary 为 null）与研究员记录的反馈决定。"""
-    access.require_cross_region("多市场授权组合")
+    access.require_cross_region(t("多市场授权组合"))
     get_version(research_id, version)
     P = _portfolio_mod()
     return {"summary": P.load(research_id, version), "feedback": P.feedback(research_id, version)}
@@ -1028,7 +1029,7 @@ def get_portfolio(research_id: str, version: int):
 @app.post("/api/research/{research_id}/versions/{version}/portfolio")
 def build_portfolio(research_id: str, version: int):
     """按授权构建组合并回测（约数秒）：多币种、汇率拆分、Brinson 归因、反馈建议。"""
-    access.require_cross_region("多市场授权组合")
+    access.require_cross_region(t("多市场授权组合"))
     P = _portfolio_mod()
     spec = get_version(research_id, version)
     try:
@@ -1041,11 +1042,11 @@ def build_portfolio(research_id: str, version: int):
 @app.get("/api/research/{research_id}/versions/{version}/portfolio/series")
 def portfolio_series(research_id: str, version: int):
     """净值序列（基础币种）与各市场权重，供组合台画图。"""
-    access.require_cross_region("多市场授权组合")
+    access.require_cross_region(t("多市场授权组合"))
     get_version(research_id, version)
     p = _portfolio_mod().out_dir(research_id, version) / "daily.parquet"
     if not p.exists():
-        raise HTTPException(404, "尚未构建组合")
+        raise HTTPException(404, t("尚未构建组合"))
     d = pd.read_parquet(p)
     ms = [c[:-2] for c in d.columns if c.endswith("_w")]
     return {"dates": d["date"].dt.strftime("%Y-%m-%d").tolist(),
@@ -1058,12 +1059,12 @@ def portfolio_series(research_id: str, version: int):
 def portfolio_rebalances(research_id: str, version: int):
     """调仓明细（PORT-04 运营视角）：相邻两次调仓的逐股持仓变化（买 / 卖，市场内权重），
     附最近数次的执行参数（换手、成本、α、事前跟踪误差）——来自 summary.rebalances。"""
-    access.require_cross_region("多市场授权组合")
+    access.require_cross_region(t("多市场授权组合"))
     get_version(research_id, version)
     P = _portfolio_mod()
     wpath = P.out_dir(research_id, version) / "weights.parquet"
     if not wpath.exists():
-        raise HTTPException(404, "尚未构建组合")
+        raise HTTPException(404, t("尚未构建组合"))
     w = pd.read_parquet(wpath)
     w["date"] = w["date"].astype(str)
     execs = {r["date"]: r["markets"] for r in ((P.load(research_id, version) or {}).get("rebalances") or [])}
@@ -1111,19 +1112,19 @@ class FeedbackIn(BaseModel):
 @app.post("/api/research/{research_id}/versions/{version}/portfolio/feedback")
 def portfolio_feedback(research_id: str, version: int, body: FeedbackIn):
     """记录研究员对反馈建议的决定（BR-32）：保留 / 进一步研究 / 限定地区 / 重新校准 / 停用。"""
-    access.require_cross_region("组合反馈")
+    access.require_cross_region(t("组合反馈"))
     P = _portfolio_mod()
     if P.load(research_id, version) is None:
-        raise HTTPException(404, "尚未构建组合")
+        raise HTTPException(404, t("尚未构建组合"))
     if body.action not in P.ACTIONS or body.market not in MARKETS:
-        raise HTTPException(422, f"决定须为 {list(P.ACTIONS)} 之一")
+        raise HTTPException(422, t("决定须为 {actions} 之一", actions=joinlist(P.ACTIONS)))
     return P.record_feedback(research_id, version, body.model_dump() | {"action_zh": P.ACTIONS[body.action]})
 
 
 @app.get("/api/complement/{market}")
 def complement(market: str, keys: str | None = None):
     """互补组合（BR-28）：同一市场多个采纳信号的冗余与合成（前半段定权重、后半段评估）。"""
-    access.require(market, f"{market} 市场的互补组合")
+    access.require(market, t("{market} 市场的互补组合", market=market_label(market)))
     from factopia.portfolio import combine
     _check_markets([market])
     cands = combine.candidates(market, study)
@@ -1137,7 +1138,7 @@ REPORT_NAME = re.compile(r"^[a-z][a-z0-9_]{2,39}_v\d+_\d{14}\.html$")
 @app.post("/api/research/{research_id}/versions/{version}/report")
 def make_report(research_id: str, version: int):
     """生成研究报告（BR-40；RPT-01 至 03）：中文主报告 + 英文 / 法文证据附件，单文件 HTML，存档于 runtime/reports。"""
-    access.require_cross_region("研究报告")
+    access.require_cross_region(t("研究报告"))
     from factopia.portfolio import report
     P = _portfolio_mod()
     spec = get_version(research_id, version)
@@ -1161,7 +1162,7 @@ def make_report(research_id: str, version: int):
 
 @app.get("/api/research/{research_id}/versions/{version}/reports")
 def list_reports(research_id: str, version: int):
-    access.require_cross_region("研究报告")
+    access.require_cross_region(t("研究报告"))
     return [{"name": p.name, "url": f"/api/reports/{p.name}", "bytes": p.stat().st_size}
             for p in sorted(REPORTS.glob(f"{research_id}_v{version}_*.html"), reverse=True)] if REPORTS.exists() else []
 
@@ -1169,9 +1170,9 @@ def list_reports(research_id: str, version: int):
 @app.get("/api/reports/{name}")
 def get_report(name: str):
     from fastapi.responses import HTMLResponse
-    access.require_cross_region("研究报告")
+    access.require_cross_region(t("研究报告"))
     if not REPORT_NAME.match(name) or not (REPORTS / name).exists():
-        raise HTTPException(404, "报告不存在")
+        raise HTTPException(404, t("报告不存在"))
     return HTMLResponse((REPORTS / name).read_text(encoding="utf-8"))
 
 
@@ -1210,7 +1211,7 @@ def _materials(research_id: str, version: int) -> dict:
 @app.get("/api/research/{research_id}/versions/{version}/submission-check")
 def submission_check(research_id: str, version: int):
     """WB-05：提交审批前的固定顺序检查。"""
-    access.require_cross_region("提交审批")
+    access.require_cross_region(t("提交审批"))
     A = _approval_mod()
     m = _materials(research_id, version)
     return {"ready": not A.preconditions(m), "missing": A.preconditions(m),
@@ -1237,11 +1238,11 @@ def _role_allowed(role_name: str) -> bool:
 
 @app.post("/api/approvals")
 def submit_approval(body: SubmitIn):
-    access.require_cross_region("提交审批")
+    access.require_cross_region(t("提交审批"))
     A = _approval_mod()
     open_ = [s for s in A.list_all(body.research_id) if s["version"] == body.version and s["status"] == "in_review"]
     if open_:
-        raise HTTPException(422, f"该版本已有审批中的提交：{open_[0]['id']}")
+        raise HTTPException(422, t("该版本已有审批中的提交：{sid}", sid=open_[0]["id"]))
     try:
         return A.submit(_materials(body.research_id, body.version), SUBMITTER, body.note)
     except A.ApprovalError as e:
@@ -1255,12 +1256,12 @@ def _approval_detail(sid: str) -> dict:
     except A.ApprovalError as e:
         raise HTTPException(404, str(e))
     if not any(access.can(m) for m in s["markets"]):
-        access.deny(f"审批提交 {sid}（不涉及本地区市场）")
+        access.deny(t("审批提交 {sid}（不涉及本地区市场）", sid=sid))
     cur = A.current_fingerprint(sid, {"portfolio": _portfolio_mod().load(s["research_id"], s["version"])})
     if not access.cross_region():              # 地区视角：其他地区的结果与多市场组合打码
         mt = s["materials"]
-        s = {**s, "materials": {**mt, "results": {m: (v if access.can(m) else {"hidden": "其他地区，无权查看"}) for m, v in mt["results"].items()},
-                                "portfolio": {"hidden": "多市场组合，只对总部开放"}, "transfer": None}}
+        s = {**s, "materials": {**mt, "results": {m: (v if access.can(m) else {"hidden": t("其他地区，无权查看")}) for m, v in mt["results"].items()},
+                                "portfolio": {"hidden": t("多市场组合，只对总部开放")}, "transfer": None}}
     return {"submission": s, "summary": A.summary(s), "events": A.events(sid), "chain": A.verify_chain(sid),
             "materials_current": cur == s["fingerprint"], "materials_note": None if cur == s["fingerprint"] else cur.split(":", 1)[-1] + "在提交后发生变化",
             "action_zh": A.ACTION_ZH}
@@ -1285,7 +1286,7 @@ def approval_action(sid: str, body: ActIn):
     """审批操作：当前角色才能处理当前步骤；例外须写理由；运营完成部署核对时校验材料指纹与部署范围。"""
     A = _approval_mod()
     if not _role_allowed(body.role):
-        access.deny(f"以「{body.role}」身份审批（不是本地区的审批角色）")
+        access.deny(t("以「{role}」身份审批（不是本地区的审批角色）", role=body.role))
     by = f"模拟用户（{body.role}）"
     try:
         s = A.load(sid)
@@ -1300,7 +1301,7 @@ def approval_action(sid: str, body: ActIn):
 def approval_evidence(sid: str):
     """审计证据包（zip）：提交材料、全部事件（哈希链）、报告、规则包、因子代码、文件清单与说明。"""
     from fastapi.responses import Response
-    access.require_cross_region("审计证据包")
+    access.require_cross_region(t("审计证据包"))
     A = _approval_mod()
     try:
         name, data = A.evidence_zip(sid)
@@ -1331,7 +1332,7 @@ def paper_demo(research_id: str, version: int, body: PaperDemoIn | None = None):
     这是人为决策的入口：审批的门槛只看「有采纳轮次」，不看研究结论是否通过（判定否定 ≠ 不能观察），
     研究员仍可把该版本接入演示线持续观察。全部审批留痕为「演示一键接入」，不构成生产部署。
     """
-    access.require_cross_region("一键接入演示线")
+    access.require_cross_region(t("一键接入演示线"))
     A = _approval_mod()
     P = _portfolio_mod()
     S = _signals_mod()
@@ -1350,7 +1351,7 @@ def paper_demo(research_id: str, version: int, body: PaperDemoIn | None = None):
     m = _materials(research_id, version)
     bad = A.preconditions(m)
     if bad:
-        raise HTTPException(422, "还不能接入演示线：" + "；".join(bad))
+        raise HTTPException(422, t("还不能接入演示线：{bad}", bad="；".join(bad)))
     # 2) 选择提交：已获批复用；审批中的继续走完；都没有则自动提交
     subs = [s for s in A.list_all(research_id) if s["version"] == version]
     sub = next((A.load(s["id"]) for s in subs if s["status"] in ("approved", "approved_restricted")), None)
@@ -1378,9 +1379,9 @@ def paper_demo(research_id: str, version: int, body: PaperDemoIn | None = None):
             else:
                 sub = A.act(sid, role, BY, "approve", "演示一键接入：批准")
     except A.ApprovalError as e:
-        raise HTTPException(422, f"自动审批中断（可到审批台手动处理）：{e}")
+        raise HTTPException(422, t("自动审批中断（可到审批台手动处理）：{e}", e=e))
     if sub["status"] not in ("approved", "approved_restricted"):
-        raise HTTPException(422, "自动审批未完成，请到审批台手动处理")
+        raise HTTPException(422, t("自动审批未完成，请到审批台手动处理"))
     # 4) 获批市场逐个接入模拟盘并排第一轮推进（个别市场失败不影响其他市场，原因如实返回）
     #    body.markets 传入时按勾选处理：所选市场接入（运行中 = 重置，从头开始），未选市场保持现状；
     #    不传 markets 时保持一键默认：运行中的市场跳过不重置（非破坏性）
@@ -1389,7 +1390,7 @@ def paper_demo(research_id: str, version: int, body: PaperDemoIn | None = None):
     if selected is not None:
         bad = [m for m in selected if m not in (sub.get("approved_markets") or [])]
         if bad:
-            raise HTTPException(422, "所选市场未获批：" + "、".join(MARKET_ZH.get(m, m) for m in bad))
+            raise HTTPException(422, t("所选市场未获批：{ms}", ms=joinlist([market_label(m) for m in bad])))
     live = {r["signal_id"] for r in engine.enrolled() if r.get("active")}
     out = []
     for mkt in sub.get("approved_markets") or []:
@@ -1457,7 +1458,7 @@ def list_signals():
 
 @app.get("/api/signals/{signal_id}")
 def get_signal(signal_id: str):
-    access.require(signal_id.rsplit(".", 1)[-1], f"信号 {signal_id}")
+    access.require(signal_id.rsplit(".", 1)[-1], t("信号 {signal_id}", signal_id=signal_id))
     S = _signals_mod()
     try:
         e = S.entry(signal_id)
@@ -1474,14 +1475,14 @@ def get_signal(signal_id: str):
 @app.post("/api/signals/{signal_id}/monitor")
 def start_monitor(signal_id: str):
     """排入监控任务（后台运行器执行，约 1–3 分钟）。只有获批版本（生产中或已暂停）进入监控层（BR-41）。"""
-    access.require(signal_id.rsplit(".", 1)[-1], f"信号 {signal_id}")
+    access.require(signal_id.rsplit(".", 1)[-1], t("信号 {signal_id}", signal_id=signal_id))
     S = _signals_mod()
     try:
         e = S.entry(signal_id)
     except S.CatalogError as x:
         raise HTTPException(404, str(x))
     if e["state"] not in ("active", "paused"):
-        raise HTTPException(422, f"「{e['state_zh']}」的版本不进入监控层：只有获批版本才能上线监控")
+        raise HTTPException(422, t("「{state}」的版本不进入监控层：只有获批版本才能上线监控", state=e["state_zh"]))
     busy = [j for j in store.list_jobs() if j.get("kind") == "monitor" and j.get("target_signal") == signal_id and j["state"] in ("queued", "running")]
     if busy:
         return _job_public(busy[-1])
@@ -1498,16 +1499,16 @@ def enroll_paper(signal_id: str, body: PaperEnrollIn):
 
     同一信号重复接入 = 重置：清空旧状态从头开始（BR-24 同款语义：只影响该市场版本）。
     """
-    access.require(signal_id.rsplit(".", 1)[-1], f"模拟盘接入 {signal_id}")
+    access.require(signal_id.rsplit(".", 1)[-1], t("模拟盘接入 {signal_id}", signal_id=signal_id))
     S = _signals_mod()
     try:
         e = S.entry(signal_id)
     except S.CatalogError as x:
         raise HTTPException(404, str(x))
     if e["state"] not in ("active", "paused"):
-        raise HTTPException(422, f"「{e['state_zh']}」的版本不能接入模拟盘：只有获批版本可以")
+        raise HTTPException(422, t("「{state}」的版本不能接入模拟盘：只有获批版本可以", state=e["state_zh"]))
     if e.get("simulated"):
-        raise HTTPException(422, "行情来自模拟数据集（虚构行情）的信号不能接入模拟盘")
+        raise HTTPException(422, t("行情来自模拟数据集（虚构行情）的信号不能接入模拟盘"))
     from factopia.paper import engine
     try:
         rec = engine.enroll(signal_id, body.capital)
@@ -1526,11 +1527,11 @@ class PaperStopIn(BaseModel):
 @app.post("/api/signals/{signal_id}/paper/stop")
 def stop_paper(signal_id: str, body: PaperStopIn):
     """停用模拟盘：长桥在途挂单撤销、本地挂单留痕取消；报告与历史保留，可重新接入（重置）。"""
-    access.require(signal_id.rsplit(".", 1)[-1], f"停用模拟盘 {signal_id}")
+    access.require(signal_id.rsplit(".", 1)[-1], t("停用模拟盘 {signal_id}", signal_id=signal_id))
     from factopia.paper import engine
     rec = next((r for r in engine.enrolled() if r["signal_id"] == signal_id), None)
     if rec is None:
-        raise HTTPException(404, f"模拟盘未接入：{signal_id}")
+        raise HTTPException(404, t("模拟盘未接入：{signal_id}", signal_id=signal_id))
     try:
         return engine.unenroll(signal_id, body.reason)
     except engine.PaperError as x:
@@ -1540,13 +1541,13 @@ def stop_paper(signal_id: str, body: PaperStopIn):
 @app.post("/api/signals/{signal_id}/paper/advance")
 def advance_paper(signal_id: str):
     """手动推进一轮模拟盘（结算挂单、重算信号、按需调仓并出报告）：每日定时调度之外的补充入口。"""
-    access.require(signal_id.rsplit(".", 1)[-1], f"模拟盘推进 {signal_id}")
+    access.require(signal_id.rsplit(".", 1)[-1], t("模拟盘推进 {signal_id}", signal_id=signal_id))
     from factopia.paper import engine
     rec = next((r for r in engine.enrolled() if r["signal_id"] == signal_id), None)
     if rec is None:
-        raise HTTPException(404, f"模拟盘未接入：{signal_id}")
+        raise HTTPException(404, t("模拟盘未接入：{signal_id}", signal_id=signal_id))
     if not rec.get("active"):
-        raise HTTPException(422, "模拟盘已停用，重新接入后才能推进")
+        raise HTTPException(422, t("模拟盘已停用，重新接入后才能推进"))
     busy = [j for j in store.list_jobs() if j.get("kind") == "paper" and j.get("target_signal") == signal_id and j["state"] in ("queued", "running")]
     if busy:
         return {"job": _job_public(busy[-1])}
@@ -1562,7 +1563,7 @@ class SignalActIn(BaseModel):
 @app.post("/api/signals/{signal_id}/actions")
 def signal_action(signal_id: str, body: SignalActIn):
     """暂停 / 恢复 / 停用一个市场版本（BR-24：只影响该市场，其他市场的版本不变）。"""
-    access.require(signal_id.rsplit(".", 1)[-1], f"变更信号 {signal_id} 的状态")
+    access.require(signal_id.rsplit(".", 1)[-1], t("变更信号 {signal_id} 的状态", signal_id=signal_id))
     S = _signals_mod()
     try:
         return S.act(signal_id, body.action, body.role, body.note)
@@ -1698,7 +1699,7 @@ def _versions_cycle() -> list[dict]:
 
 @app.get("/api/acceptance")
 def acceptance():
-    access.require_cross_region("验收（成功标准与红队测试）")
+    access.require_cross_region(t("验收（成功标准与红队测试）"))
     from factopia import acceptance as AC
     return {"criteria": _criteria(), "targets": AC.targets(_versions_cycle()), "redteam": AC.load_redteam()}
 
@@ -1706,12 +1707,12 @@ def acceptance():
 @app.post("/api/acceptance/redteam")
 def run_redteam():
     """红队测试（约数秒）：审批与目录用例在临时目录中进行，不影响真实记录。"""
-    access.require_cross_region("验收（成功标准与红队测试）")
+    access.require_cross_region(t("验收（成功标准与红队测试）"))
     from factopia import acceptance as AC
     from factopia import approval as A
     sample_id = next((x["research_id"] for x in A.list_all() if x["status"] in ("approved", "approved_restricted")), None)
     if sample_id is None:
-        raise HTTPException(422, "需要至少一个完成审批的研究版本作为样本")
+        raise HTTPException(422, t("需要至少一个完成审批的研究版本作为样本"))
     ver = next(x["version"] for x in A.list_all(sample_id) if x["status"] in ("approved", "approved_restricted"))
     spec = get_version(sample_id, ver)
 
@@ -1795,9 +1796,9 @@ def start_runs(research_id: str, version: int, body: RunIn):
     spec = get_version(research_id, version)
     markets = body.markets or [m for m in spec["markets"] if access.can(m)]
     for m in markets:
-        access.require(m, f"在 {m} 市场发起运行")
+        access.require(m, t("在 {market} 市场发起运行", market=market_label(m)))
     if any(m not in spec["markets"] for m in markets):
-        raise HTTPException(422, f"版本 v{version} 只包含市场 {spec['markets']}")
+        raise HTTPException(422, t("版本 v{version} 只包含市场 {markets}", version=version, markets=joinlist(spec["markets"])))
     kind = "text" if spec.get("signal_source") == "text" else None     # 文本信号研究（第 14.17 节）
     return store.create_jobs(research_id, version, markets, spec["horizon"], body.loops, body.budget_usd, kind)
 
@@ -1812,12 +1813,12 @@ JOB_ID = re.compile(r"^\d{14}_[0-9a-f]{4}_\d+_[a-z]{2}$")
 
 def _load_job(job_id: str) -> dict:
     if not JOB_ID.match(job_id):
-        raise HTTPException(404, "任务不存在")
+        raise HTTPException(404, t("任务不存在"))
     try:
         job = store.load_job(job_id)
     except FileNotFoundError:
-        raise HTTPException(404, "任务不存在")
-    access.require(job["market"], f"任务 {job_id}")
+        raise HTTPException(404, t("任务不存在"))
+    access.require(job["market"], t("任务 {job_id}", job_id=job_id))
     return job
 
 
@@ -1841,7 +1842,7 @@ def job_live(job_id: str):
 def retry_job(job_id: str):
     job = _load_job(job_id)
     if job["state"] not in ("failed", "cancelled", "budget_stopped"):
-        raise HTTPException(409, "只有失败或已停止的任务可以重新运行")
+        raise HTTPException(409, t("只有失败或已停止的任务可以重新运行"))
     return store.retry_job(job)
 
 
@@ -1858,7 +1859,7 @@ def job_resume_info(job_id: str):
 def resume_job(job_id: str, body: ResumeIn):
     """从断点继续：同一任务重新排队，RD-Agent 从最近的检查点续跑剩下的轮数（已完成的轮次与费用保留）。"""
     job = _load_job(job_id)
-    access.require(job["market"], "在该市场继续运行任务")
+    access.require(job["market"], t("在该市场继续运行任务"))
     try:
         job = store.resume_job(job, body.budget_usd)
     except ValueError as e:
@@ -1887,7 +1888,7 @@ def runner_resume():
 def cancel_job(job_id: str):
     job = _load_job(job_id)
     if job["state"] in store.FINAL_STATES:
-        raise HTTPException(409, "任务已结束")
+        raise HTTPException(409, t("任务已结束"))
     store.request_cancel(job_id)
     return {"ok": True}
 
@@ -1905,8 +1906,8 @@ def research_examples():
 def market_context(market: str, lang: str = Query("zh", pattern="^(zh|en)$")):
     """团队审核过的市场介绍（configs/rdagent/context）。"""
     if market not in MARKETS:
-        raise HTTPException(404, "市场不存在")
-    access.require(market, f"{market} 市场介绍")
+        raise HTTPException(404, t("市场不存在"))
+    access.require(market, t("{market} 市场介绍", market=market_label(market)))
     path = CONFIGS / "rdagent" / "context" / f"{market}.{lang}.md"
     return {"market": market, "lang": lang, "markdown": path.read_text(encoding="utf-8")}
 
@@ -1919,8 +1920,8 @@ from factopia.text import search as tsearch            # noqa: E402
 
 def _text_ds(dataset: str) -> Path:
     if dataset not in tcommon.DATASETS:
-        raise HTTPException(404, f"数据集不存在：{dataset}")
-    access.require(tcommon.DATASETS[dataset]["market"], f"公告数据集 {dataset}")
+        raise HTTPException(404, t("数据集不存在：{dataset}", dataset=dataset))
+    access.require(tcommon.DATASETS[dataset]["market"], t("公告数据集 {dataset}", dataset=dataset))
     return tcommon.ds_dir(dataset)
 
 
@@ -1939,7 +1940,7 @@ def text_overview():
         d = tcommon.ds_dir(ds)
         s = tcommon.read_json(d / "summary.json") or {}
         out.append({"dataset": ds, "market": cfg["market"], "market_zh": MARKET_ZH[cfg["market"]],
-                    "simulated": cfg["simulated"], "source": cfg["source"], "licence": cfg["licence"],
+                    "simulated": cfg["simulated"], "source": t(cfg["source"]), "licence": t(cfg["licence"]),
                     "processing_delay_min": cfg["processing_delay_min"], "ready": bool(s),
                     "n_filings": s.get("n_filings", 0), "n_companies": s.get("n_companies", 0),
                     "n_changes": s.get("n_changes", 0), "hold_days": s.get("hold_days"),
@@ -1968,10 +1969,10 @@ def text_overview():
 def text_filings(dataset: str, instrument: str | None = None, limit: int = Query(200, le=2000)):
     s = tcommon.read_json(_text_ds(dataset) / "summary.json")
     if not s:
-        raise HTTPException(404, "该数据集尚未生成文本信号（先运行 python -m factopia.text all）")
+        raise HTTPException(404, t("该数据集尚未生成文本信号（先运行 python -m factopia.text all）"))
     items = [f for f in s["filings"] if not instrument or f["instrument"] == instrument]
     exc = [f for f in s.get("excluded") or [] if not instrument or f["instrument"] == instrument]
-    return {"dataset": dataset, "simulated": s["simulated"], "source": s["source"], "licence": s["licence"],
+    return {"dataset": dataset, "simulated": s["simulated"], "source": t(s["source"]), "licence": t(s["licence"]),
             "total": len(items), "items": items[:limit], "excluded": exc, "cleaning": s.get("cleaning")}
 
 
@@ -1980,10 +1981,10 @@ def text_filing(dataset: str, doc_id: str):
     """一篇公告：原文段落（不改动）+ 各段的概念标签、译文、置信度、复核状态。"""
     d = _text_ds(dataset)
     if not re.fullmatch(r"[A-Za-z0-9_\-]{3,80}", doc_id):
-        raise HTTPException(404, "公告不存在")
+        raise HTTPException(404, t("公告不存在"))
     doc = tcommon.read_json(d / "docs" / f"{doc_id}.json")
     if not doc:
-        raise HTTPException(404, "公告不存在")
+        raise HTTPException(404, t("公告不存在"))
     lab = tcommon.read_json(d / "labels" / f"{doc_id}.json") or {"labels": []}
     s = tcommon.read_json(d / "summary.json") or {"filings": []}
     meta = next((f for f in s["filings"] if f["id"] == doc_id), None)
@@ -2109,7 +2110,7 @@ def _records(df: pd.DataFrame) -> list[dict]:
 def _ref_parquet(name: str) -> pd.DataFrame:
     p = REFDATA / f"{name}.parquet"
     if not p.exists():
-        raise HTTPException(404, "参考数据尚未生成（先运行 python -m factopia.refdata all）")
+        raise HTTPException(404, t("参考数据尚未生成（先运行 python -m factopia.refdata all）"))
     return pd.read_parquet(p)
 
 
@@ -2137,7 +2138,7 @@ def refdata_securities(market: str | None = Query(None, pattern="^(hk|uk|fr)$"))
     sec = _ref_parquet("securities")
     rel = _ref_parquet("relations")
     if market:
-        access.require(market, f"{market} 市场的证券主数据")
+        access.require(market, t("{market} 市场的证券主数据", market=market_label(market)))
         sec = sec[sec["market"] == market]
     sec = sec[sec["market"].isin(access.markets())]           # 地区视角
     multi = sec.groupby("issuer_id")["market"].nunique()

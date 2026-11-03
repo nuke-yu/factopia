@@ -3,6 +3,7 @@ import EChart from "../EChart";
 import type { Market, Surface } from "../../api";
 import { api } from "../../api";
 import { cssVar, MARKET_LABEL, reducedMotion, useAsync, useThemeVersion } from "../../lib";
+import { t, tf } from "../../i18n";
 import { ErrorBox, Loading, Seg, ViewToggle } from "../ui";
 
 const Z = 0.25; // 颜色与高度的显示范围：月均 RankIC ±0.25
@@ -17,17 +18,17 @@ export default function IcSurface({ horizon }: { horizon: number }) {
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-2">
-        <Seg label="市场" value={market} onChange={setMarket}
+        <Seg label={t("市场")} value={market} onChange={setMarket}
           options={(["hk", "uk", "fr"] as Market[]).map((m) => ({ value: m, label: MARKET_LABEL[m] }))} />
-        <Seg label="平滑" value={smooth ? "r6" : "m"} onChange={(v) => setSmooth(v === "r6")}
-          options={[{ value: "r6", label: "6 个月滚动" }, { value: "m", label: "逐月" }]} />
+        <Seg label={t("平滑")} value={smooth ? "r6" : "m"} onChange={(v) => setSmooth(v === "r6")}
+          options={[{ value: "r6", label: t("6 个月滚动") }, { value: "m", label: t("逐月") }]} />
         <div className="ml-auto"><ViewToggle precise={precise} onChange={setPrecise} /></div>
       </div>
-      {!s || !data ? <div className="h-[480px]"><Loading what="因子时间曲面" /></div>
+      {!s || !data ? <div className="h-[480px]"><Loading what={t("因子时间曲面")} /></div>
         : <SurfaceView s={s} boundary={data.test_boundary} smooth={smooth} precise={precise} market={market} />}
       <p className="text-xs text-muted leading-relaxed">
-        横轴为 158 个 Alpha158 因子（按类型分组），纵深为月份，高度与颜色为该因子当月的预测能力（RankIC，预测未来 {horizon} 个交易日收益）。
-        发光的竖直平面是 RD-Agent 回测测试期的起点（{data?.test_boundary ?? "2022-01"}）：平面之前的数据可以提供给 AI，之后的不可以（MINE-11）。
+        {tf("横轴为 158 个 Alpha158 因子（按类型分组），纵深为月份，高度与颜色为该因子当月的预测能力（RankIC，预测未来 {h} 个交易日收益）。", { h: horizon })}
+        {tf("发光的竖直平面是 RD-Agent 回测测试期的起点（{b}）：平面之前的数据可以提供给 AI，之后的不可以（MINE-11）。", { b: data?.test_boundary ?? "2022-01" })}
       </p>
     </div>
   );
@@ -59,9 +60,9 @@ function SurfaceView({ s, boundary, smooth, precise, market }: {
     const tooltip = {
       backgroundColor: cssVar("--bg-2"), borderColor: line, textStyle: { color: text },
       formatter: (p: { value: number[]; seriesIndex: number }) => {
-        if (p.seriesIndex !== 0) return "测试期起点";
+        if (p.seriesIndex !== 0) return t("测试期起点");
         const [fi, mi] = p.value; const v = z[fi]?.[mi];
-        return `<b>${s.factors[fi]}</b><br/>${s.months[mi]}　RankIC ${v == null ? "无数据" : v.toFixed(3)}`;
+        return `<b>${s.factors[fi]}</b><br/>${s.months[mi]}　RankIC ${v == null ? t("无数据") : v.toFixed(3)}`;
       },
     };
     if (precise) {
@@ -94,8 +95,8 @@ function SurfaceView({ s, boundary, smooth, precise, market }: {
         viewControl: { distance: 250, alpha: 28, beta: -32, autoRotate: false },
         axisPointer: { show: false },
       },
-      xAxis3D: { type: "value", name: "因子", min: 0, max: nF - 1, axisLabel: { show: false }, nameTextStyle: { color: muted }, axisLine: { lineStyle: { color: line } }, splitLine: { show: false } },
-      yAxis3D: { type: "value", name: "月份", min: 0, max: nM - 1, nameTextStyle: { color: muted },
+      xAxis3D: { type: "value", name: t("因子"), min: 0, max: nF - 1, axisLabel: { show: false }, nameTextStyle: { color: muted }, axisLine: { lineStyle: { color: line } }, splitLine: { show: false } },
+      yAxis3D: { type: "value", name: t("月份"), min: 0, max: nM - 1, nameTextStyle: { color: muted },
         axisLabel: { color: muted, formatter: (v: number) => s.months[Math.round(v)]?.slice(0, 4) ?? "" }, axisLine: { lineStyle: { color: line } }, splitLine: { lineStyle: { color: line, opacity: 0.25 } } },
       zAxis3D: { type: "value", name: "RankIC", min: -Z, max: Z, nameTextStyle: { color: muted }, axisLabel: { color: muted }, axisLine: { lineStyle: { color: line } }, splitLine: { lineStyle: { color: line, opacity: 0.25 } } },
       series: [
@@ -123,7 +124,7 @@ function SurfaceView({ s, boundary, smooth, precise, market }: {
       {!precise && (
         <div className="absolute left-2 top-2 flex items-center gap-2">
           <button className="btn" disabled={reducedMotion()} onClick={() => { if (shown >= nM) setShown(6); setPlaying((x) => !x); }}>
-            {playing ? "暂停" : "按时间播放"}
+            {playing ? t("暂停") : t("按时间播放")}
           </button>
           <span className="num text-xs text-muted">{s.months[Math.max(0, shown - 1)]}</span>
         </div>
