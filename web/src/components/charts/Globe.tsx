@@ -5,6 +5,7 @@ import { Bloom, EffectComposer } from "@react-three/postprocessing";
 import * as THREE from "three";
 import type { Market, Overview } from "../../api";
 import { cssVar, MARKET_CITY, reducedMotion, useThemeVersion } from "../../lib";
+import { tf } from "../../i18n";
 
 const R = 2;
 // 伦敦与巴黎很近：伦敦标签放左上（右对齐），巴黎放右下，避免重叠
@@ -122,7 +123,7 @@ function Scene({ overview, colors }: { overview: Overview; colors: Record<string
           </mesh>
           <Label position={LABEL_OFFSET[m]} align={m === "uk" ? "right" : "left"} lines={[
             { text: MARKET_CITY[m], color: colors[m], size: 20, font: "'Chakra Petch', sans-serif" },
-            { text: `${overview.markets[m].stocks} 只 · ${overview.markets[m].index}`, color: colors.muted, size: 15, font: "'JetBrains Mono', 'PingFang SC', sans-serif" },
+            { text: tf("{n} 只 · {i}", { n: overview.markets[m].stocks, i: overview.markets[m].index }), color: colors.muted, size: 15, font: "'JetBrains Mono', 'PingFang SC', sans-serif" },
           ]} />
         </group>
       ))}

@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from factopia import ideas as I
+from factopia.lang import llm_language, t
 
 PROMPT_VERSION = "idea-combine-v1"
 PROMPT_FILE = Path(__file__).parent / "prompts" / f"{PROMPT_VERSION}.md"
@@ -39,7 +40,7 @@ def _base(research_id: str) -> dict:
     from factopia.research import store
     vs = store.versions(research_id)
     if not vs:
-        raise I.IdeaError(f"研究不存在或还没有锁定的版本：{research_id}")
+        raise I.IdeaError(t("研究不存在或还没有锁定的版本：{rid}", rid=research_id))
     sp = store.load_version(research_id, vs[-1])
     ad = sp.get("ai_draft") or {}
     inherited = list(dict.fromkeys([*(ad.get("idea_ids") or []), *([ad["idea_id"]] if ad.get("idea_id") else [])]))
@@ -58,7 +59,7 @@ def combine(ids: list[str], by: str, base: str | None = None) -> dict:
         raise I.IdeaError("合并至少选 2 条线索；追加到已有研究至少选 1 条")
     b = _base(base) if base else None
     if b and set(ids) & set(b["inherited"]):
-        raise I.IdeaError("所选线索中有已经属于该研究的：" + "、".join(sorted(set(ids) & set(b["inherited"]))))
+        raise I.IdeaError(t("所选线索中有已经属于该研究的：{ids}", ids="、".join(sorted(set(ids) & set(b["inherited"])))))
     srcs = []
     for n, iid in enumerate(ids, 1):
         idea = I.load(iid)
@@ -72,12 +73,12 @@ def combine(ids: list[str], by: str, base: str | None = None) -> dict:
     base_text = (f"[B] Existing locked study {b['id']} v{b['version']} — {b['title']}\nHypothesis: {b['hypothesis']}\n"
                  f"Directions: {'; '.join(b['directions']) or '-'}\nMarkets: {', '.join(b['markets'])}") if b else "none (this is a new study)"
     prompt = PROMPT_FILE.read_text(encoding="utf-8").format(
-        sources="\n\n".join(blocks), base=base_text, markets=ctx["markets"], data=ctx["data"],
+        sources="\n\n".join(blocks), base=base_text, markets=ctx["markets"], data=ctx["data"], language=llm_language(),
         tags=", ".join(s["tag"] for s in srcs) + (", B" if b else ""))
     raw, usage, model = suggest._chat(prompt, "线索合并")
     cited = str(raw.get("hypothesis") or "").strip()
     if len(cited) < 20:
-        raise I.IdeaError("AI 没有给出完整的合成假设，请再试一次")
+        raise I.IdeaError(t("AI 没有给出完整的合成假设，请再试一次"))
     tags = {s["tag"] for s in srcs}
     used = set(re.findall(r"\[(I\d+)\]", cited)) & tags
     uses = [{"tag": str(u.get("tag")), "how_zh": str(u.get("how_zh") or "")[:300]} for u in raw.get("uses") or [] if str(u.get("tag")) in tags]

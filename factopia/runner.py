@@ -254,6 +254,22 @@ def run_monitor(job: dict) -> None:
     log(f"{job['job_id']}: {job['state']}{'：' + job['error'] if job.get('error') else ''}")
 
 
+def run_paper(job: dict) -> None:
+    """模拟盘推进（第 14.15 节扩展）：结算挂单、重算信号、月度调仓并出报告。"""
+    from factopia.paper import engine
+    job.update(state="running", started_at=store.now())
+    store.write_job(job)
+    log(f"{job['job_id']}: 模拟盘推进 {job['target_signal']}")
+    try:
+        res = engine.cycle(job["target_signal"], log=log)
+        job.update(state="done", summary=res["suggestion_zh"])
+    except Exception as e:
+        job.update(state="failed", error=str(e)[:800])
+    job["ended_at"] = store.now()
+    store.write_job(job)
+    log(f"{job['job_id']}: {job['state']}{'：' + job['error'] if job.get('error') else ''}")
+
+
 def run_text(job: dict) -> None:
     """文本信号研究（第 14.17 节）：检验情报台的文本信号，输出与 RD-Agent 运行相同格式的结果，并直接计算诊断。"""
     from factopia.diagnostics import diagnose_run
@@ -278,7 +294,7 @@ def init_dirs() -> None:
     """研究规格、任务、组合、报告与审批目录由后端写入：交给 api 的用户，运行器以 root 运行仍可读写。"""
     for d in (store.RESEARCH_DIR, store.JOBS_DIR, store.RUNTIME / "portfolio", store.RUNTIME / "reports",
               store.RUNTIME / "approvals", store.RUNTIME / "signals", store.RUNTIME / "acceptance",
-              store.RUNTIME / "access", store.RUNTIME / "ideas"):
+              store.RUNTIME / "access", store.RUNTIME / "ideas", store.RUNTIME / "paper"):
         d.mkdir(parents=True, exist_ok=True)
         os.chown(d, API_UID, API_UID)
         d.chmod(0o775)
@@ -286,11 +302,41 @@ def init_dirs() -> None:
 
 def execute(job: dict) -> None:
     try:
-        {"validate": run_validation, "monitor": run_monitor, "text": run_text}.get(job.get("kind"), run_job)(job)
+        {"validate": run_validation, "monitor": run_monitor, "text": run_text, "paper": run_paper}.get(job.get("kind"), run_job)(job)
     except Exception:
         job.update(state="failed", ended_at=store.now(), error=traceback.format_exc()[-1200:])
         store.write_job(job)
         log(f"{job['job_id']}: 运行器异常\n{job['error']}")
+
+
+PAPER_HOUR_UTC = int(os.environ.get("FACTOPIA_PAPER_ADVANCE_UTC_HOUR", "9"))
+
+
+def schedule_paper_daily() -> None:
+    """每日为接入中的模拟盘排队一轮推进（Spec 14.15：每日收盘后由后台推进）。
+
+    幂等：每个信号每 UTC 日最多自动排一个（以当日已有的 paper 任务为准）；排队暂停时不排；
+    engine.cycle 自身幂等——行情没有新日期时只结算挂单并重算报告。
+    推进时刻由 FACTOPIA_PAPER_ADVANCE_UTC_HOUR 控制（UTC 时，默认 9 = 港股收盘后）。
+    """
+    if store.paused():
+        return
+    now_dt = datetime.now(timezone.utc)
+    if now_dt.hour < PAPER_HOUR_UTC:
+        return
+    from factopia.paper import engine
+    jobs = [j for j in store.list_jobs() if j.get("kind") == "paper"]
+    for rec in engine.enrolled():
+        if not rec.get("active"):
+            continue
+        sid = rec["signal_id"]
+        if any(j.get("target_signal") == sid and j["state"] in ("queued", "running") for j in jobs):
+            continue
+        last = max((j.get("created_at") or "" for j in jobs if j.get("target_signal") == sid), default="")
+        if last[:10] >= now_dt.strftime("%Y-%m-%d"):
+            continue
+        store.create_paper_job(sid, rec["market"])
+        log(f"{sid}: 每日推进已排队")
 
 
 def main() -> None:
@@ -298,9 +344,16 @@ def main() -> None:
     recover()
     log(f"等待任务（最多同时运行 {MAX_PARALLEL} 个）")
     active: dict[str, threading.Thread] = {}
+    sched_at = 0.0
     while True:
         for jid in [j for j, th in active.items() if not th.is_alive()]:
             del active[jid]
+        if time.time() - sched_at > 60:
+            sched_at = time.time()
+            try:
+                schedule_paper_daily()
+            except Exception:
+                log(f"每日推进调度检查失败\n{traceback.format_exc()[-400:]}")
         job = next_job(set(active)) if len(active) < MAX_PARALLEL else None
         if job is None:
             time.sleep(POLL_S)

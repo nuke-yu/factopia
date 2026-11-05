@@ -1,6 +1,7 @@
 import { Component, lazy, Suspense, useState, type ComponentType, type ReactNode } from "react";
 import { NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { ResearchDraftProvider } from "./draft";
+import { t, tf } from "./i18n";
 import ResearchPage from "./pages/ResearchPage";
 import AuditPage from "./pages/AuditPage";
 import { RegionBanner, RegionSwitch } from "./components/RegionSwitch";
@@ -48,10 +49,10 @@ class PageBoundary extends Component<{ children: ReactNode; resetKey: string }, 
     if (!this.state.error) return this.props.children;
     return (
       <div className="panel p-5 flex flex-col gap-3 max-w-[70ch]">
-        <div className="font-display font-semibold">页面加载失败</div>
-        <p className="text-sm text-muted">可能是平台刚更新过版本。刷新页面即可加载最新版本；已发起的运行不受影响。</p>
+        <div className="font-display font-semibold">{t("页面加载失败")}</div>
+        <p className="text-sm text-muted">{t("可能是平台刚更新过版本。刷新页面即可加载最新版本；已发起的运行不受影响。")}</p>
         <pre className="num text-xs text-faint whitespace-pre-wrap">{this.state.error.message}</pre>
-        <button className="btn btn-primary self-start" onClick={() => window.location.reload()}>刷新页面</button>
+        <button className="btn btn-primary self-start" onClick={() => window.location.reload()}>{t("刷新页面")}</button>
       </div>
     );
   }
@@ -61,7 +62,7 @@ function Pages() {
   const location = useLocation();
   return (
     <PageBoundary resetKey={location.pathname}>
-      <Suspense fallback={<div className="label">加载中…</div>}>
+      <Suspense fallback={<div className="label">{t("加载中…")}</div>}>
         <Routes>
           <Route path="/" element={<Navigate to="/ideas" replace />} />
           <Route path="/ideas" element={<IdeasPage />} />
@@ -87,12 +88,12 @@ function Pages() {
 }
 
 const STEPS = [
-  { to: "/ideas", no: "00", name: "线索池", hint: "信息输入" },
-  { to: "/projects", no: "01", name: "研究项目", hint: "选择或新建" },
-  { to: "/research", no: "02", name: "研究立项", hint: "范围与假设" },
-  { to: "/audit", no: "03", name: "审核", hint: "确认研究规格" },
-  { to: "/run", no: "04", name: "运行中", hint: "AI 研究过程" },
-  { to: "/results", no: "05", name: "结果", hint: "挖掘与验证" },
+  { to: "/ideas", no: "00", name: t("线索池"), hint: t("信息输入") },
+  { to: "/projects", no: "01", name: t("研究项目"), hint: t("选择或新建") },
+  { to: "/research", no: "02", name: t("研究立项"), hint: t("范围与假设") },
+  { to: "/audit", no: "03", name: t("审核"), hint: t("确认研究规格") },
+  { to: "/run", no: "04", name: t("运行中"), hint: t("AI 研究过程") },
+  { to: "/results", no: "05", name: t("结果"), hint: t("挖掘与验证") },
 ];
 
 function ThemeToggle() {
@@ -101,14 +102,14 @@ function ThemeToggle() {
   return (
     <button
       className="btn whitespace-nowrap shrink-0"
-      aria-label={`切换为${next === "dark" ? "深色" : "浅色"}主题`}
+      aria-label={tf("切换为{mode}主题", { mode: next === "dark" ? t("深色") : t("浅色") })}
       onClick={() => {
         document.documentElement.dataset.theme = next;
         try { localStorage.setItem("factopia-theme", next); } catch { /* 忽略 */ }
         setTheme(next);
       }}
     >
-      {theme === "dark" ? "浅色" : "深色"}
+      {theme === "dark" ? t("浅色") : t("深色")}
     </button>
   );
 }
@@ -121,9 +122,9 @@ export default function App() {
           <div className="mx-auto max-w-[1680px] px-4 md:px-6 h-14 flex items-center gap-6">
             <div className="flex items-baseline gap-3 shrink-0">
               <span className="font-display text-lg font-semibold tracking-[0.18em] text-accent">FACTOPIA</span>
-              <span className="hidden 2xl:inline text-xs text-muted">跨境量化研究平台 · 最小 POC</span>
+              <span className="hidden 2xl:inline text-xs text-muted">{t("跨境量化研究平台 · 最小 POC")}</span>
             </div>
-            <nav className="flex items-center gap-1 overflow-x-auto" aria-label="研究流程">
+            <nav className="flex items-center gap-1 overflow-x-auto" aria-label={t("研究流程")}>
               {STEPS.map((s, i) => (
                 <div key={s.to} className="flex items-center">
                   {i > 0 && <span className="hidden 2xl:inline mx-0.5 text-faint" aria-hidden>→</span>}
@@ -141,8 +142,8 @@ export default function App() {
                 </div>
               ))}
               <span className="mx-2 h-5 border-l border-line" aria-hidden />
-              {[{ to: "/intel", name: "情报台", hint: "多语言公告" }, { to: "/data", name: "数据台", hint: "主数据与时间点" }, { to: "/library", name: "因子库", hint: "因子库与知识检索" }, { to: "/rules", name: "风控台", hint: "规则包与预检" }, { to: "/portfolio", name: "组合台", hint: "授权组合与报告" }, { to: "/approvals", name: "审批台", hint: "跨地区审批与审计" },
-                { to: "/signals", name: "信号目录", hint: "分市场版本与监控" }, { to: "/overview", name: "总览", hint: "管理总览" }, { to: "/acceptance", name: "验收", hint: "成功标准与红队" }].map((d) => (
+              {[{ to: "/intel", name: t("情报台"), hint: t("多语言公告") }, { to: "/data", name: t("数据台"), hint: t("主数据与时间点") }, { to: "/library", name: t("因子库"), hint: t("因子库与知识检索") }, { to: "/rules", name: t("风控台"), hint: t("规则包与预检") }, { to: "/portfolio", name: t("组合台"), hint: t("授权组合与报告") }, { to: "/approvals", name: t("审批台"), hint: t("跨地区审批与审计") },
+                { to: "/signals", name: t("信号目录"), hint: t("分市场版本与监控") }, { to: "/overview", name: t("总览"), hint: t("管理总览") }, { to: "/acceptance", name: t("验收"), hint: t("成功标准与红队") }].map((d) => (
                 <NavLink
                   key={d.to}
                   to={d.to}

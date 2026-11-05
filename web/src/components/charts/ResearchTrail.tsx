@@ -5,6 +5,7 @@ import { Bloom, EffectComposer } from "@react-three/postprocessing";
 import * as THREE from "three";
 import type { Round, Run } from "../../api";
 import { cssVar, pct, reducedMotion, useThemeVersion } from "../../lib";
+import { t, tf } from "../../i18n";
 
 type Node = { key: string; label: string; pos: THREE.Vector3; ret: number | null; kind: "baseline" | "adopted" | "rejected" | "running"; round?: Round };
 
@@ -13,10 +14,10 @@ const RADIUS = 3.2, STEP = 1.35, TURN = 1.15;
 function layout(run: Run, rounds: Round[]): Node[] {
   const at = (i: number) => new THREE.Vector3(Math.cos(i * TURN) * RADIUS, i * STEP - 3, Math.sin(i * TURN) * RADIUS);
   const nodes: Node[] = [{
-    key: "baseline", label: "起点", pos: at(0), ret: run.baseline?.metrics?.annual_return_with_cost ?? null, kind: "baseline",
+    key: "baseline", label: t("起点"), pos: at(0), ret: run.baseline?.metrics?.annual_return_with_cost ?? null, kind: "baseline",
   }];
   rounds.forEach((r, i) => nodes.push({
-    key: String(r.loop), label: `第 ${r.loop} 轮`, pos: at(i + 1), round: r,
+    key: String(r.loop), label: tf("第 {n} 轮", { n: r.loop }), pos: at(i + 1), round: r,
     ret: r.metrics?.annual_return_with_cost ?? null,
     kind: r.status !== "done" ? "running" : r.decision ? "adopted" : "rejected",
   }));

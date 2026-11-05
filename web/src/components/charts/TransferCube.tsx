@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import EChart from "../EChart";
 import type { Cube, Market, PeriodKey } from "../../api";
 import { cssVar, labelColor, MARKET_LABEL, reducedMotion, useThemeVersion, fix } from "../../lib";
+import { t, tf } from "../../i18n";
 import { Seg, ViewToggle } from "../ui";
 
 const PERIODS: PeriodKey[] = ["train", "valid", "test"];
@@ -75,7 +76,7 @@ export default function TransferCube({ cube }: { cube: Cube }) {
         formatter: (p: { dataIndex: number; seriesType: string }) => {
           if (p.seriesType !== "scatter3D") return "";
           const f = cube.factors[p.dataIndex], d = f.periods[period];
-          return `<b>${f.name}</b> · ${f.group}<br/>${f.desc}<br/>香港 t=${fix(d.t.hk, 2)}　英国 t=${fix(d.t.uk, 2)}　法国 t=${fix(d.t.fr, 2)}<br/>分类：${d.label}`;
+          return `<b>${f.name}</b> · ${t(f.group)}<br/>${t(f.desc)}<br/>${MARKET_LABEL.hk} t=${fix(d.t.hk, 2)}　${MARKET_LABEL.uk} t=${fix(d.t.uk, 2)}　${MARKET_LABEL.fr} t=${fix(d.t.fr, 2)}<br/>${t("分类：")}${t(d.label)}`;
         },
       },
       grid3D: {
@@ -116,10 +117,10 @@ export default function TransferCube({ cube }: { cube: Cube }) {
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-2">
-        <Seg label="评估时期" value={period} onChange={(p) => { setPlaying(false); setPeriod(p); }}
+        <Seg label={t("评估时期")} value={period} onChange={(p) => { setPlaying(false); setPeriod(p); }}
           options={PERIODS.map((p) => ({ value: p, label: cube.periods[p].label }))} />
-        <button className="btn" onClick={() => setPlaying((x) => !x)} aria-pressed={playing}>{playing ? "暂停" : "播放时期变化"}</button>
-        <span className="text-xs text-muted">{cube.periods[period].note}</span>
+        <button className="btn" onClick={() => setPlaying((x) => !x)} aria-pressed={playing}>{playing ? t("暂停") : t("播放时期变化")}</button>
+        <span className="text-xs text-muted">{t(cube.periods[period].note)}</span>
         <div className="ml-auto"><ViewToggle precise={precise} onChange={setPrecise} /></div>
       </div>
       <div className="grid gap-4 lg:grid-cols-[1fr_260px]">
@@ -127,47 +128,47 @@ export default function TransferCube({ cube }: { cube: Cube }) {
           <div className="overflow-x-auto max-h-[460px] overflow-y-auto">
             <table className="w-full text-sm num">
               <thead className="sticky top-0 bg-bg-2 text-muted text-xs">
-                <tr><th className="text-left py-1.5 pr-3">因子</th><th className="text-left pr-3 font-sans">类型</th>
+                <tr><th className="text-left py-1.5 pr-3">{t("因子")}</th><th className="text-left pr-3 font-sans">{t("类型")}</th>
                   {AXIS.map((m) => <th key={m} className="text-right pr-3" style={{ color: cssVar(`--${m}`) }}>{MARKET_LABEL[m]} t</th>)}
-                  <th className="text-left font-sans">分类</th></tr>
+                  <th className="text-left font-sans">{t("分类")}</th></tr>
               </thead>
               <tbody>
                 {significant.map(({ f, d }) => (
                   <tr key={f.name} className="border-t border-line">
-                    <td className="py-1.5 pr-3">{f.name}</td><td className="pr-3 font-sans text-muted">{f.group}</td>
+                    <td className="py-1.5 pr-3">{f.name}</td><td className="pr-3 font-sans text-muted">{t(f.group)}</td>
                     {AXIS.map((m) => <td key={m} className={`text-right pr-3 ${Math.abs(d.t[m] ?? 0) > cube.threshold ? "text-text" : "text-faint"}`}>{fix(d.t[m], 2)}</td>)}
-                    <td className="font-sans" style={{ color: labelColor(d.label) }}>{d.label}</td>
+                    <td className="font-sans" style={{ color: labelColor(d.label) }}>{t(d.label)}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
-            {significant.length === 0 && <div className="text-muted py-6 text-center">该时期没有显著因子</div>}
+            {significant.length === 0 && <div className="text-muted py-6 text-center">{t("该时期没有显著因子")}</div>}
           </div>
         ) : (
           <EChart option={option} className="h-[460px]" onClick={(p) => p.seriesType === "scatter3D" && setSelected(cube.factors[p.dataIndex].name)} />
         )}
         <aside className="flex flex-col gap-3">
           <div>
-            <div className="label mb-2">分类（{cube.periods[period].label}，|t| &gt; {cube.threshold}）</div>
+            <div className="label mb-2">{tf("分类（{p}，|t| > {n}）", { p: cube.periods[period].label, n: cube.threshold })}</div>
             <ul className="flex flex-col gap-1.5">
               {counts.map(([label, n]) => (
                 <li key={label} className="flex items-center gap-2 text-sm">
                   <span className="size-2.5 rounded-full" style={{ background: labelColor(label) }} />
-                  <span className="flex-1">{label}</span><span className="num text-muted">{n}</span>
+                  <span className="flex-1">{t(label)}</span><span className="num text-muted">{n}</span>
                 </li>
               ))}
             </ul>
           </div>
           <p className="text-xs text-muted leading-relaxed">
-            每个点是一个 Alpha158 因子，三条坐标轴是它在香港、英国、法国的显著性（t 值）。
-            中间的立方体是"不显著"区域；沿某条轴伸出去为地区特定，落在角上为三市场通用。
+            {t("每个点是一个 Alpha158 因子，三条坐标轴是它在香港、英国、法国的显著性（t 值）。")}
+            {t('中间的立方体是"不显著"区域；沿某条轴伸出去为地区特定，落在角上为三市场通用。')}
           </p>
           {selected && (() => {
             const f = cube.factors.find((x) => x.name === selected)!;
             return (
               <div className="border-t border-line pt-3 text-sm">
                 <div className="num font-medium">{f.name}</div>
-                <div className="text-muted text-xs mb-2">{f.group} · {f.desc}</div>
+                <div className="text-muted text-xs mb-2">{t(f.group)} · {t(f.desc)}</div>
                 {PERIODS.map((p) => (
                   <div key={p} className="flex gap-2 text-xs num">
                     <span className="w-20 font-sans text-faint">{cube.periods[p].label}</span>

@@ -1,4 +1,7 @@
 import type { ReactNode } from "react";
+import katex from "katex";
+import "katex/dist/katex.min.css";
+import { t, tf } from "../i18n";
 
 export function Panel({ title, eyebrow, actions, children, className = "" }: {
   title: string; eyebrow?: string; actions?: ReactNode; children: ReactNode; className?: string;
@@ -34,8 +37,8 @@ export function Seg<T extends string | number>({ value, options, onChange, label
 /** 3D 视图与精确视图（2D 表格 / 平面图）切换：审核与汇报时使用精确视图。 */
 export function ViewToggle({ precise, onChange }: { precise: boolean; onChange: (v: boolean) => void }) {
   return (
-    <Seg label="视图" value={precise ? "2d" : "3d"} onChange={(v) => onChange(v === "2d")}
-      options={[{ value: "3d", label: "3D 视图" }, { value: "2d", label: "精确视图" }]} />
+    <Seg label={t("视图")} value={precise ? "2d" : "3d"} onChange={(v) => onChange(v === "2d")}
+      options={[{ value: "3d", label: t("3D 视图") }, { value: "2d", label: t("精确视图") }]} />
   );
 }
 
@@ -72,9 +75,41 @@ export function Stat({ label, value, sub, tone }: { label: string; value: ReactN
 }
 
 export function Loading({ what }: { what: string }) {
-  return <div className="h-full min-h-40 grid place-items-center label">正在载入{what}…</div>;
+  return <div className="h-full min-h-40 grid place-items-center label">{tf("正在载入{what}…", { what })}</div>;
 }
 
 export function ErrorBox({ error }: { error: string }) {
-  return <Notice tone="bad" title="数据载入失败">{error}</Notice>;
+  return <Notice tone="bad" title={t("数据载入失败")}>{error}</Notice>;
+}
+
+/** LaTeX 数学公式渲染（RD-Agent 生成的因子 formulation、变量名）。公式非法时降级为原文显示。 */
+export function Tex({ tex, display = false, className = "" }: { tex: string | null | undefined; display?: boolean; className?: string }) {
+  if (!tex) return null;
+  let html: string | null = null;
+  try {
+    html = katex.renderToString(tex, { displayMode: display, throwOnError: true, strict: false });
+  } catch {
+    try {
+      html = katex.renderToString(tex, { displayMode: display, throwOnError: false, strict: false });
+    } catch {
+      html = null;
+    }
+  }
+  if (html === null) return <span className={`num text-[11px] text-faint break-all ${className}`}>{tex}</span>;
+  return <span className={className} dangerouslySetInnerHTML={{ __html: html }} />;
+}
+
+/** 因子公式的变量说明表：变量名（LaTeX 行内渲染）→ 含义。 */
+export function TexVars({ vars }: { vars: Record<string, string> | null | undefined }) {
+  if (!vars || Object.keys(vars).length === 0) return null;
+  return (
+    <ul className="flex flex-col gap-0.5 mt-1">
+      {Object.entries(vars).map(([k, v]) => (
+        <li key={k} className="flex items-baseline gap-2 text-xs">
+          <span className="shrink-0 text-faint"><Tex tex={k} /></span>
+          <span className="text-faint">{v}</span>
+        </li>
+      ))}
+    </ul>
+  );
 }

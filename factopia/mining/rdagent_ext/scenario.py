@@ -10,6 +10,7 @@
 
 通过环境变量 QLIB_FACTOR_SCEN 启用（由 prepare_run.py 设置），不修改 RD-Agent 源码。
 """
+import hashlib
 import os
 import shutil
 from pathlib import Path
@@ -18,10 +19,45 @@ import yaml
 from rdagent.app.qlib_rd_loop.conf import FACTOR_PROP_SETTING
 from rdagent.log import rdagent_logger as logger
 from rdagent.components.coder.factor_coder.config import FACTOR_COSTEER_SETTINGS
+from rdagent.oai.backend.litellm import LiteLLMAPIBackend
 from rdagent.scenarios.qlib.experiment import utils as qlib_exp_utils
 from rdagent.scenarios.qlib.experiment.factor_experiment import QlibFactorScenario
 
 from factopia.research.context import BENCHMARK_FILE, MARKETS, build_context
+
+
+def _patch_embedding_fallback() -> None:
+    """embedding 接口故障（如供应商欠费 402）时降级为确定性哈希向量（维度与 bge-m3 一致）。
+
+    embedding 仅用于 CoSTEER 知识库的经验检索，降级只影响检索相关性，
+    不影响因子生成、实现、评估与反馈主流程；接口恢复后自动回到真实向量。
+    """
+    if getattr(LiteLLMAPIBackend, "_factopia_embedding_fallback", False):
+        return
+
+    def _pseudo_embedding(text: str, dim: int = 1024) -> list[float]:
+        seed = text.encode("utf-8", errors="replace") or b"\x00"
+        values: list[float] = []
+        while len(values) < dim:
+            seed = hashlib.sha256(seed).digest()
+            values += [b / 255.0 for b in seed]
+        norm = sum(v * v for v in values[:dim]) ** 0.5 or 1.0
+        return [v / norm for v in values[:dim]]
+
+    original = LiteLLMAPIBackend._create_embedding_inner_function
+
+    def _with_fallback(self, input_content_list: list[str]) -> list[list[float]]:
+        try:
+            return original(self, input_content_list)
+        except Exception as e:
+            logger.warning(f"embedding 接口失败，本轮降级为哈希向量（检索相关性下降，主流程不受影响）：{e}")
+            return [_pseudo_embedding(s) for s in input_content_list]
+
+    LiteLLMAPIBackend._create_embedding_inner_function = _with_fallback
+    LiteLLMAPIBackend._factopia_embedding_fallback = True
+
+
+_patch_embedding_fallback()
 
 
 class FactopiaFactorScenario(QlibFactorScenario):

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api, type Job, type Project, type ProjectRun } from "../api";
 import { cssVar, MARKET_LABEL, pct, useAsync } from "../lib";
+import { t, tf } from "../i18n";
 import { Badge, ErrorBox, Loading, Panel } from "../components/ui";
 import Globe from "../components/charts/Globe";
 import ResumeButton from "../components/ResumeButton";
@@ -26,14 +27,14 @@ export default function ProjectsPage() {
       <div className="grid gap-5 xl:grid-cols-[minmax(0,7fr)_minmax(0,5fr)] items-stretch">
         <section className="panel overflow-hidden min-h-[360px] relative">
           <div className="absolute left-5 top-5 z-10 max-w-[34ch] pointer-events-none">
-            <div className="label">01 · 研究项目</div>
-            <h1 className="font-display text-2xl font-semibold tracking-wide mt-1">同一个假设，香港、伦敦、巴黎分别验证</h1>
-            <p className="text-muted text-sm mt-2">选择一个研究项目继续，或新建研究。每个项目从立项、审核、运行到结果都有记录。</p>
+            <div className="label">{t("01 · 研究项目")}</div>
+            <h1 className="font-display text-2xl font-semibold tracking-wide mt-1">{t("同一个假设，香港、伦敦、巴黎分别验证")}</h1>
+            <p className="text-muted text-sm mt-2">{t("选择一个研究项目继续，或新建研究。每个项目从立项、审核、运行到结果都有记录。")}</p>
           </div>
           {/* 标题在左，地球偏右，互不遮挡；窄屏时地球放到标题下方 */}
-          <div className="h-[380px] mt-36 md:mt-0 md:ml-[38%]">{overview.data ? <Globe overview={overview.data} /> : <Loading what="市场概况" />}</div>
+          <div className="h-[380px] mt-36 md:mt-0 md:ml-[38%]">{overview.data ? <Globe overview={overview.data} /> : <Loading what={t("市场概况")} />}</div>
         </section>
-        <Panel eyebrow="数据" title="三地市场">
+        <Panel eyebrow={t("数据")} title={t("三地市场")}>
           {overview.data ? (
             <div className="flex flex-col gap-3">
               {(["hk", "uk", "fr"] as const).map((m) => {
@@ -43,22 +44,22 @@ export default function ProjectsPage() {
                     <div className="flex items-baseline gap-2">
                       <span className="font-medium">{o.name}</span><span className="text-xs text-muted">{o.index} · {o.currency}</span>
                     </div>
-                    <div className="num text-xs text-muted mt-0.5">{o.stocks} 只 · {o.first} 至 {o.last}{o.fx_to_hkd ? ` · 1 ${o.currency} = ${o.fx_to_hkd} HKD` : ""}</div>
-                    <div className="num text-xs text-faint">AI 挖掘可用数据截至 {o.mining_cutoff}</div>
+                    <div className="num text-xs text-muted mt-0.5">{tf("{n} 只 · {a} 至 {b}", { n: o.stocks, a: o.first, b: o.last })}{o.fx_to_hkd ? ` · 1 ${o.currency} = ${o.fx_to_hkd} HKD` : ""}</div>
+                    <div className="num text-xs text-faint">{tf("AI 挖掘可用数据截至 {d}", { d: o.mining_cutoff })}</div>
                   </div>
                 );
               })}
             </div>
-          ) : <Loading what="市场概况" />}
-          <button className="btn btn-primary w-full h-10 justify-center mt-5" onClick={() => navigate("/research")}>新建研究 →</button>
+          ) : <Loading what={t("市场概况")} />}
+          <button className="btn btn-primary w-full h-10 justify-center mt-5" onClick={() => navigate("/research")}>{t("新建研究 →")}</button>
         </Panel>
       </div>
 
       {projects.error && <ErrorBox error={projects.error} />}
-      {!projects.data ? (projects.error ? null : <Loading what="研究项目" />) : (
+      {!projects.data ? (projects.error ? null : <Loading what={t("研究项目")} />) : (
         <div className="flex flex-col gap-4">
           {projects.data.map((p) => <ProjectCard key={p.id} p={p} />)}
-          {projects.data.length === 0 && <div className="text-muted">还没有研究项目。点击"新建研究"开始。</div>}
+          {projects.data.length === 0 && <div className="text-muted">{t('还没有研究项目。点击"新建研究"开始。')}</div>}
         </div>
       )}
     </div>
@@ -67,10 +68,10 @@ export default function ProjectsPage() {
 
 function ProjectCard({ p }: { p: Project }) {
   return (
-    <Panel eyebrow={`${p.markets.map((m) => MARKET_LABEL[m]).join(" · ")} · 预测周期 ${p.horizon} 个交易日`} title={p.title || p.id}
+    <Panel eyebrow={tf("{m} · 预测周期 {h} 个交易日", { m: p.markets.map((m) => MARKET_LABEL[m]).join(" · "), h: p.horizon })} title={p.title || p.id}
       actions={<>
-        <Badge tone={STATUS_TONE[p.status]}>{p.status}</Badge>
-        {p.example ? <Badge>手写示例</Badge> : <Badge>v{p.versions.join(" / v")}</Badge>}
+        <Badge tone={STATUS_TONE[p.status]}>{t(p.status)}</Badge>
+        {p.example ? <Badge>{t("手写示例")}</Badge> : <Badge>v{p.versions.join(" / v")}</Badge>}
         <span className="num text-xs text-faint">{p.id}</span>
       </>}>
       <p className="text-sm text-muted leading-relaxed max-w-[110ch]">{p.hypothesis}</p>
@@ -79,9 +80,9 @@ function ProjectCard({ p }: { p: Project }) {
         <table className="w-full text-sm">
           <thead className="text-xs text-muted">
             <tr>
-              <th className="text-left py-1.5 font-normal">运行</th><th className="text-left font-normal">市场</th><th className="text-left font-normal">状态</th>
-              <th className="text-right font-normal">轮数 / 采纳</th><th className="text-right font-normal">起点 → 最好（扣成本年化）</th>
-              <th className="text-right font-normal">费用</th><th className="text-right font-normal">操作</th>
+              <th className="text-left py-1.5 font-normal">{t("运行")}</th><th className="text-left font-normal">{t("市场")}</th><th className="text-left font-normal">{t("状态")}</th>
+              <th className="text-right font-normal">{t("轮数 / 采纳")}</th><th className="text-right font-normal">{t("起点 → 最好（扣成本年化）")}</th>
+              <th className="text-right font-normal">{t("费用")}</th><th className="text-right font-normal">{t("操作")}</th>
             </tr>
           </thead>
           <tbody>
@@ -90,7 +91,7 @@ function ProjectCard({ p }: { p: Project }) {
           </tbody>
         </table>
         {p.runs.length === 0 && p.jobs.length === 0 && (
-          <div className="text-muted text-sm py-3">尚未运行。{p.example ? "这是早期手写的示例规格，可在研究立项页起草新规格。" : "在审核页锁定后发起运行。"}</div>
+          <div className="text-muted text-sm py-3">{t("尚未运行。")}{p.example ? t("这是早期手写的示例规格，可在研究立项页起草新规格。") : t("在审核页锁定后发起运行。")}</div>
         )}
       </div>
     </Panel>
@@ -116,8 +117,8 @@ function StudyLink({ p, version }: { p: Project; version: number }) {
   const run = s ? (s.markets[s.rule.primary]?.run_id ?? Object.values(s.markets).find((e) => e?.run_id)?.run_id) : null;
   return (
     <Link to={run ? `/results?run=${run}` : "#"} className="btn gap-2" aria-disabled={!run}>
-      <span>v{version} 研究结论</span>
-      {s ? <Badge tone={OVERALL_TONE[s.overall.state]}>{s.overall.state === "passed" ? s.overall.label : `假设${s.overall.label}`}</Badge> : <span className="text-faint text-xs">…</span>}
+      <span>{tf("v{v} 研究结论", { v: version })}</span>
+      {s ? <Badge tone={OVERALL_TONE[s.overall.state]}>{s.overall.state === "passed" ? t(s.overall.label) : tf("假设{l}", { l: t(s.overall.label) })}</Badge> : <span className="text-faint text-xs">…</span>}
     </Link>
   );
 }
@@ -128,7 +129,7 @@ function RetryButton({ jobId }: { jobId: string }) {
     <button className="btn mr-2" onClick={async () => {
       const r = await api.retryJob(jobId);
       navigate(`/run?job=${r.jobs[0].job_id}`);
-    }} title="新建任务，从第 0 轮重头开始">重新运行</button>
+    }} title={t("新建任务，从第 0 轮重头开始")}>{t("重新运行")}</button>
   );
 }
 
@@ -136,16 +137,16 @@ function RetryButton({ jobId }: { jobId: string }) {
 function JobRow({ j }: { j: Job }) {
   return (
     <tr className="border-t border-line">
-      <td className="py-2 pr-3"><span className="num text-muted">{j.run_id ?? "等待开始"}</span><span className="num text-xs text-faint ml-1.5">v{j.version}</span>
+      <td className="py-2 pr-3"><span className="num text-muted">{j.run_id ?? t("等待开始")}</span><span className="num text-xs text-faint ml-1.5">v{j.version}</span>
         {j.error && <div className="text-xs text-bad mt-1 max-w-[60ch] truncate" title={j.error}>{j.error}</div>}</td>
       <td className="pr-3"><span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full" style={{ background: cssVar(`--${j.market}`) }} />{MARKET_LABEL[j.market]}</span></td>
-      <td className="pr-3"><Badge tone={JOB_TONE[j.state]}>{j.state_zh}</Badge></td>
+      <td className="pr-3"><Badge tone={JOB_TONE[j.state]}>{t(j.state_zh)}</Badge></td>
       <td className="num text-right pr-3 text-faint">0 / {j.loops}</td>
       <td className="num text-right pr-3 text-faint">—</td>
       <td className="num text-right pr-3">${j.cost_usd.toFixed(2)}</td>
       <td className="text-right whitespace-nowrap">
         {["failed", "cancelled", "budget_stopped"].includes(j.state) && <><ResumeButton jobId={j.job_id} /><RetryButton jobId={j.job_id} /></>}
-        <Link className="btn" to={`/run?job=${j.job_id}`}>查看任务</Link>
+        <Link className="btn" to={`/run?job=${j.job_id}`}>{t("查看任务")}</Link>
       </td>
     </tr>
   );
@@ -157,20 +158,20 @@ function RunRow({ r }: { r: ProjectRun }) {
       <td className="py-2 pr-3">
         <span className="num">{r.run_id}</span>{r.version != null && <span className="num text-xs text-faint ml-1.5">v{r.version}</span>}
         <div className="flex gap-1.5 mt-1">
-          {r.context_leak && <Badge tone="bad">受泄漏影响</Badge>}
-          {r.linked === "推断" && <Badge>按市场与周期关联</Badge>}
+          {r.context_leak && <Badge tone="bad">{t("受泄漏影响")}</Badge>}
+          {r.linked === "推断" && <Badge>{t("按市场与周期关联")}</Badge>}
         </div>
         {r.job_error && <div className="text-xs text-bad mt-1 max-w-[60ch] truncate" title={r.job_error}>{r.job_error}</div>}
       </td>
       <td className="pr-3"><span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full" style={{ background: cssVar(`--${r.market}`) }} />{MARKET_LABEL[r.market]}</span></td>
-      <td className="pr-3"><Badge tone={STATUS_TONE[r.state]}>{r.state}</Badge></td>
+      <td className="pr-3"><Badge tone={STATUS_TONE[r.state]}>{t(r.state)}</Badge></td>
       <td className="num text-right pr-3">{r.rounds} / {r.adopted}</td>
       <td className="num text-right pr-3">{pct(r.baseline_return)} → <span className={r.best_return != null ? "text-good" : "text-faint"}>{pct(r.best_return)}</span></td>
       <td className="num text-right pr-3">${r.cost_usd.toFixed(2)}</td>
       <td className="text-right whitespace-nowrap">
         {r.job_id && r.job_state && ["failed", "cancelled", "budget_stopped"].includes(r.job_state) && <><ResumeButton jobId={r.job_id} /><RetryButton jobId={r.job_id} /></>}
-        <Link className="btn mr-2" to={`/run?run=${r.run_id}`}>{r.state === "运行中" ? "查看过程" : "回放过程"}</Link>
-        <Link className="btn" to={`/results?run=${r.run_id}`}>查看结果</Link>
+        <Link className="btn mr-2" to={`/run?run=${r.run_id}`}>{r.state === "运行中" ? t("查看过程") : t("回放过程")}</Link>
+        <Link className="btn" to={`/results?run=${r.run_id}`}>{t("查看结果")}</Link>
       </td>
     </tr>
   );

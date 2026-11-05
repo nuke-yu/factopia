@@ -4,6 +4,8 @@
 输出按 JSON 结构校验；数据缺口、自由文本授权条款与测试期年份由系统补充为待确认事项。
 大模型优先使用 .env 中的 FACTOPIA_LLM_BASE_URL / MODEL / API_KEY（OpenAI 兼容接口，如阿里云百炼）；
 未设置时回退到 RD-Agent 的 DeepSeek 配置（CHAT_MODEL=deepseek/... 与 DEEPSEEK_API_KEY）。
+大模型使用与 RD-Agent 相同的 .env 配置（CHAT_MODEL=litellm_proxy/... + LITELLM_PROXY_API_KEY 与
+LITELLM_PROXY_API_BASE，硅基流动等 OpenAI 兼容端点），可用 FACTOPIA_LLM_* 覆盖。
 """
 import json
 import os
@@ -15,6 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from factopia.research import evidence, mandates, regions
+from factopia.lang import llm_language
 
 PROMPT_VERSION = "rs-draft-v3"   # v3：加入内部知识检索结果（因子库、以往研究、字段口径，只含名称与说明）
 PROMPT_FILE = Path(__file__).parent / "prompts" / f"{PROMPT_VERSION}.md"
@@ -47,9 +50,16 @@ def llm_config() -> dict:
     if base and model and key:
         return {"base_url": base.rstrip("/"), "model": model, "api_key": key}
     chat = os.environ.get("CHAT_MODEL", "")
+    if chat.startswith("litellm_proxy/") and os.environ.get("LITELLM_PROXY_API_KEY") and os.environ.get("LITELLM_PROXY_API_BASE"):
+        return {"base_url": os.environ["LITELLM_PROXY_API_BASE"].rstrip("/"), "model": chat.split("/", 1)[1],
+                "api_key": os.environ["LITELLM_PROXY_API_KEY"]}
+    if chat.startswith("zhipu/") and os.environ.get("ZHIPUAI_API_KEY"):
+        return {"base_url": "https://open.bigmodel.cn/api/paas/v4", "model": chat.split("/", 1)[1],
+                "api_key": os.environ["ZHIPUAI_API_KEY"]}
     if chat.startswith("deepseek/") and os.environ.get("DEEPSEEK_API_KEY"):
         return {"base_url": "https://api.deepseek.com", "model": chat.split("/", 1)[1], "api_key": os.environ["DEEPSEEK_API_KEY"]}
-    raise DraftError("未配置大模型：在 .env 中设置 CHAT_MODEL=deepseek/... 与 DEEPSEEK_API_KEY，或 FACTOPIA_LLM_BASE_URL / MODEL / API_KEY")
+    raise DraftError("未配置大模型：在 .env 中设置 CHAT_MODEL=litellm_proxy/... 与 LITELLM_PROXY_API_KEY"
+                     "（外加 LITELLM_PROXY_API_BASE，如硅基流动），或 FACTOPIA_LLM_BASE_URL / MODEL / API_KEY")
 
 
 def _extra_body() -> dict:
@@ -201,7 +211,7 @@ def make_draft(inputs: dict) -> dict:
     past = evidence.past_runs(inputs["markets"], inputs["horizon"]) if inputs.get("include_past_runs", True) else []
     internal = internal_knowledge(inputs["hypothesis"] + " " + (inputs.get("direction") or ""))
     prompt = PROMPT_FILE.read_text(encoding="utf-8").format(
-        internal="\n".join(f"- [{x['kind']}] {x['title']}: {x['prompt']}" for x in internal) or "- none",
+        internal="\n".join(f"- [{x['kind']}] {x['title']}: {x['prompt']}" for x in internal) or "- none", language=llm_language(),
         markets=", ".join(inputs["markets"]), horizon=inputs["horizon"],
         direction=inputs.get("direction") or "(not given)", hypothesis=inputs["hypothesis"],
         mandate_name=mandate["name"],

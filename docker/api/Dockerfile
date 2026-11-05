@@ -20,6 +20,7 @@ COPY factopia/rules factopia/rules
 COPY factopia/portfolio factopia/portfolio
 COPY factopia/approval factopia/approval
 COPY factopia/signals factopia/signals
+COPY factopia/paper factopia/paper
 COPY factopia/acceptance factopia/acceptance
 COPY factopia/ideas factopia/ideas
 COPY factopia/sources.py factopia/access.py factopia/

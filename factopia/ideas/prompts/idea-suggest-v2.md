@@ -17,7 +17,7 @@ Rules:
 - Explain the economic logic and why the effect might differ between the three markets (costs, trading rules, investor base, disclosure language).
 - Do NOT mention or assume any results, returns or statistics from 2022 onwards (that is the hidden test period). Do not mention specific years from 2022 onwards.
 - Do not mention any real person or client. No personal data.
-- Write title, body, direction, period and why_zh in Simplified Chinese. Keep the body 2-5 sentences. In why_zh, say which evidence the idea builds on.
+- Write title, body, direction, period and why_zh in {language}. Keep the body 2-5 sentences. In why_zh, say which evidence the idea builds on.
 - For "experience", write the body in first person as a researcher's practical observation; for "feedback", write it as what the feedback giver said and pick feedback_role from: {roles}.
 - "period" is only for experience: the time span the observation refers to (before 2022), otherwise empty.{note}
 

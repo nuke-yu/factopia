@@ -7,7 +7,7 @@ Rules:
 - data_needs: choose from price_volume (daily prices and volume), benchmark (index levels), fx (exchange rates), text (company announcements text), fundamentals (accounting / financial statement data, valuation ratios, earnings), alternative (any other non-standard data), other.
 - Do NOT report the document's backtest returns or statistics as facts about our markets.
 - Extract the publication date and the data sample period if stated (YYYY-MM-DD, YYYY-MM or YYYY); otherwise leave empty strings.
-- Write description_zh, logic_zh and summary_zh in Simplified Chinese; keep factor names in the document's original language.
+- Write description_zh, logic_zh and summary_zh in {language}; keep factor names in the document's original language.
 - Return at most 8 factors.
 
 Document title: {title}

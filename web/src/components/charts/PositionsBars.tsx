@@ -3,6 +3,7 @@ import EChart from "../EChart";
 import { api, type Positions } from "../../api";
 import { cssVar, reducedMotion, useAsync, useThemeVersion } from "../../lib";
 import { ErrorBox, Loading, ViewToggle } from "../ui";
+import { t, tf } from "../../i18n";
 
 const TOP = 30; // 只显示持有时间最长的 30 只股票
 
@@ -30,7 +31,7 @@ export default function PositionsBars({ runId, roundKey }: { runId: string; roun
     const p95 = Math.max(0.01, all[Math.floor(all.length * 0.95)] ?? maxW); // 颜色按 95% 分位，个别大权重不压暗其他柱子
     const tooltip = {
       backgroundColor: cssVar("--bg-2"), borderColor: line, textStyle: { color: text },
-      formatter: (p: { value: number[] }) => `<b>${inst[p.value[0]]}</b><br/>${data.dates[p.value[1]]}　权重 ${(p.value[2] * 100).toFixed(1)}%`,
+      formatter: (p: { value: number[] }) => `<b>${inst[p.value[0]]}</b><br/>${data.dates[p.value[1]]}　${t("权重")} ${(p.value[2] * 100).toFixed(1)}%`,
     };
     const cells: [number, number, number][] = [];
     data.weights.forEach((row, d) => row.slice(0, TOP).forEach((w, i) => { if (w > 0 && d < shown) cells.push([i, d, w]); }));
@@ -53,24 +54,24 @@ export default function PositionsBars({ runId, roundKey }: { runId: string; roun
         viewControl: { distance: 270, alpha: 28, beta: 32, autoRotate: !reducedMotion(), autoRotateSpeed: 3 },
         axisPointer: { show: false },
       },
-      xAxis3D: { type: "category", data: inst, name: "股票", nameTextStyle: { color: muted }, axisLabel: { color: muted, fontSize: 9, interval: 2 }, axisLine: { lineStyle: { color: line } } },
-      yAxis3D: { type: "category", data: data.dates, name: "日期", nameTextStyle: { color: muted }, axisLabel: { color: muted, fontSize: 9, interval: 7 }, axisLine: { lineStyle: { color: line } } },
-      zAxis3D: { type: "value", name: "权重", max: maxW, nameTextStyle: { color: muted }, axisLabel: { color: muted, formatter: (v: number) => `${Math.round(v * 100)}%` }, axisLine: { lineStyle: { color: line } } },
+      xAxis3D: { type: "category", data: inst, name: t("股票"), nameTextStyle: { color: muted }, axisLabel: { color: muted, fontSize: 9, interval: 2 }, axisLine: { lineStyle: { color: line } } },
+      yAxis3D: { type: "category", data: data.dates, name: t("日期"), nameTextStyle: { color: muted }, axisLabel: { color: muted, fontSize: 9, interval: 7 }, axisLine: { lineStyle: { color: line } } },
+      zAxis3D: { type: "value", name: t("权重"), max: maxW, nameTextStyle: { color: muted }, axisLabel: { color: muted, formatter: (v: number) => `${Math.round(v * 100)}%` }, axisLine: { lineStyle: { color: line } } },
       series: [{ type: "bar3D", data: cells, shading: "lambert", barSize: [1.6, 1.6], bevelSize: 0.3 }],
     };
   }, [data, shown, precise, theme]);
 
   if (error) return <ErrorBox error={error} />;
-  if (!data) return <div className="h-[400px]"><Loading what="持仓" /></div>;
+  if (!data) return <div className="h-[400px]"><Loading what={t("持仓")} /></div>;
   return (
     <div className="flex flex-col gap-2">
       <div className="flex flex-wrap items-center gap-2">
-        {!precise && <button className="btn" disabled={reducedMotion()} onClick={() => { if (shown >= data.dates.length) setShown(1); setPlaying((x) => !x); }}>{playing ? "暂停" : "按时间回放"}</button>}
+        {!precise && <button className="btn" disabled={reducedMotion()} onClick={() => { if (shown >= data.dates.length) setShown(1); setPlaying((x) => !x); }}>{playing ? t("暂停") : t("按时间回放")}</button>}
         <span className="num text-xs text-muted">{data.dates[Math.max(0, shown - 1)]}</span>
         <div className="ml-auto"><ViewToggle precise={precise} onChange={setPrecise} /></div>
       </div>
       <EChart option={option} notMerge className="h-[400px]" />
-      <p className="text-xs text-muted">每 10 个交易日取一次持仓；显示持有时间最长的 {TOP} 只（共 {data.instruments.length} 只出现过）。柱子升起、落下即模型换仓。</p>
+      <p className="text-xs text-muted">{tf("每 10 个交易日取一次持仓；显示持有时间最长的 {n} 只（共 {m} 只出现过）。柱子升起、落下即模型换仓。", { n: TOP, m: data.instruments.length })}</p>
     </div>
   );
 }

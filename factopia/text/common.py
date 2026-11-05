@@ -9,6 +9,8 @@ from pathlib import Path
 
 import yaml
 
+from factopia import lang
+
 RUNTIME = Path(os.environ.get("FACTOPIA_RUNTIME", "/workspace/runtime"))
 CONFIGS = Path(os.environ.get("FACTOPIA_CONFIGS_DIR", "/workspace/configs"))
 TEXT = RUNTIME / "text"
@@ -125,15 +127,15 @@ def is_table(text: str) -> bool:
     return sum(bool(_NUM.match(t)) for t in toks) / len(toks) >= tr["numeric_share"]
 
 
-def series_exclusion(dataset: str, n_paragraphs: int, title: str) -> str | None:
-    """通知类公告：返回排除原因；不排除时返回 None（configs/text/pipeline.yaml series_filter）。"""
+def series_exclusion(dataset: str, n_paragraphs: int, title: str) -> dict | None:
+    """通知类公告：返回排除原因码（few_paragraphs / notice，前端按码表本地化）；不排除时返回 None。"""
     sf = pipeline()["series_filter"]
     if dataset not in sf["datasets"]:
         return None
     if n_paragraphs < sf["min_paragraphs"]:
-        return f"段落过少（{n_paragraphs} 段 < {sf['min_paragraphs']}）：通知或 PDF 抽不出文字"
+        return {"code": "few_paragraphs", "n": n_paragraphs, "min": sf["min_paragraphs"]}
     if sf["notice_title_pattern"] and n_paragraphs < sf["notice_max_paragraphs"] and re.search(sf["notice_title_pattern"], title or "", re.I):
-        return f"通知类公告（标题为报告发布 / 提供查阅通知，{n_paragraphs} 段）"
+        return {"code": "notice", "n": n_paragraphs}
     return None
 
 
@@ -187,4 +189,5 @@ def query_concepts(query: str) -> dict[str, list[str]]:
 
 
 def concept_names() -> dict[str, str]:
-    return {c: s["zh_name"] for c, s in glossary()["concepts"].items()}
+    # 按当前地区语言返回概念名；无请求上下文（CLI、runner 子进程）时回退简体中文
+    return {c: lang.t(s["zh_name"]) for c, s in glossary()["concepts"].items()}

@@ -242,18 +242,19 @@ RULE_NOTE = ("结论以逐日 Rank IC 的 t 值（Newey-West）为主口径：t 
 def judge(n_days: int, t: float | None, et: float | None) -> str:
     """三个市场检验的结论（第 11.10 节）。主口径：逐日 Rank IC 的 Newey-West t 值；事件检验（Welch t）只作辅助。
     原规则"两个口径任一显著即有效"相当于多试一次，偏宽松，已收紧。"""
+    # 结论码（前端按码表本地化）：insufficient / valid / opposite / inconsistent / aux / aux_opposite / insignificant
     if not n_days or t is None:
-        return "数据不足（每天少于 5 只股票有信号）"
+        return "insufficient"
     ev_neg, ev_pos = et is not None and et < -2, et is not None and et > 2
     if t < -2:
-        return "结论不一致（事件检验方向相反）" if ev_pos else "有效（方向符合假设）"
+        return "inconsistent" if ev_pos else "valid"
     if t > 2:
-        return "结论不一致（事件检验方向相反）" if ev_neg else "方向相反"
+        return "inconsistent" if ev_neg else "opposite"
     if ev_neg:
-        return "不显著（仅事件检验显著，作辅助证据）"
+        return "aux"
     if ev_pos:
-        return "不显著（事件检验方向相反）"
-    return "不显著"
+        return "aux_opposite"
+    return "insignificant"
 
 
 def sensitivity(dataset: str, delays=(60, 120, 240), holds=(21, 63, 126), horizon: int = 20) -> dict:

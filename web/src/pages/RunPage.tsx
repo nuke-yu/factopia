@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api, MARKETS, type Job, type LiveState, type Market, type Round, type RunEvent } from "../api";
 import { cssVar, fix, MARKET_LABEL, pct, reducedMotion, useAsync } from "../lib";
-import { Badge, ErrorBox, Loading, Notice, Panel, Seg } from "../components/ui";
+import { t, tf } from "../i18n";
+import { Badge, ErrorBox, Loading, Notice, Panel, Seg, Tex, TexVars } from "../components/ui";
 import ResearchTrail from "../components/charts/ResearchTrail";
 import NavChart from "../components/charts/NavChart";
 import LiveStatus from "../components/LiveStatus";
@@ -22,15 +23,15 @@ export default function RunPage() {
     <div className="flex flex-col gap-5">
       <div className="flex flex-wrap items-end gap-4">
         <div>
-          <div className="label">04 · 运行中</div>
-          <h1 className="font-display text-2xl font-semibold tracking-wide mt-1">AI 研究过程</h1>
-          <p className="text-muted text-sm mt-1 max-w-[80ch]">每一轮：AI 提出假设 → 写代码并自检修错 → Qlib 回测 → AI 评审并决定下一步。运行中每 5 秒刷新；已完成的运行可按真实时间戳加速回放。</p>
+          <div className="label">{t("04 · 运行中")}</div>
+          <h1 className="font-display text-2xl font-semibold tracking-wide mt-1">{t("AI 研究过程")}</h1>
+          <p className="text-muted text-sm mt-1 max-w-[80ch]">{t("每一轮：AI 提出假设 → 写代码并自检修错 → Qlib 回测 → AI 评审并决定下一步。运行中每 5 秒刷新；已完成的运行可按真实时间戳加速回放。")}</p>
         </div>
         <div className="ml-auto flex items-center gap-2">
-          <label htmlFor="run-sel" className="label whitespace-nowrap">运行</label>
+          <label htmlFor="run-sel" className="label whitespace-nowrap">{t("运行")}</label>
           <select id="run-sel" className="field w-auto num text-sm" value={runId} onChange={(e) => setParams({ run: e.target.value })}>
-            {!runId && <option value="">等待运行开始…</option>}
-            {runs.data?.map((r) => <option key={r.run_id} value={r.run_id}>{r.research?.id ? `${r.research.id} v${r.research.version} · ` : ""}{r.run_id} · {MARKET_LABEL[r.market]} · {r.rounds} 轮</option>)}
+            {!runId && <option value="">{t("等待运行开始…")}</option>}
+            {runs.data?.map((r) => <option key={r.run_id} value={r.run_id}>{r.research?.id ? `${r.research.id} v${r.research.version} · ` : ""}{r.run_id} · {MARKET_LABEL[r.market]} · {tf("{n} 轮", { n: r.rounds })}</option>)}
           </select>
         </div>
       </div>
@@ -66,26 +67,26 @@ function JobWaiting({ jobId, onRun }: { jobId: string; onRun: (runId: string) =>
     else if (["done", "failed", "cancelled", "budget_stopped"].includes(j.state)) setFinal(true);
   }, [j]); // eslint-disable-line react-hooks/exhaustive-deps
   if (job.error) return <ErrorBox error={job.error} />;
-  if (!j) return <Loading what="任务" />;
+  if (!j) return <Loading what={t("任务")} />;
   const ahead = (queue.data ?? []).filter((x) => x.job_id < j.job_id && (x.state === "queued" || x.state === "running")).length;
   return (
     <div className="flex flex-col gap-4">
       <section className="panel p-4 flex flex-wrap items-center gap-3">
-        <Badge tone={j.state === "failed" ? "bad" : j.state === "running" ? "accent" : "muted"}>{j.state_zh}</Badge>
+        <Badge tone={j.state === "failed" ? "bad" : j.state === "running" ? "accent" : "muted"}>{t(j.state_zh)}</Badge>
         <span className="font-medium">{j.research_id} v{j.version}</span>
         <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full" style={{ background: cssVar(`--${j.market}`) }} />{MARKET_LABEL[j.market]}</span>
-        <span className="num text-xs text-muted">{j.loops} 轮 · 上限 ${j.budget_usd}</span>
-        {j.state === "queued" && <span className="text-sm text-muted">前面还有 {ahead} 个任务</span>}
-        {j.state === "running" && <span className="text-sm text-muted">RD-Agent 正在准备数据与基准回测，第一轮开始后自动切换到过程视图…</span>}
+        <span className="num text-xs text-muted">{tf("{n} 轮 · 上限 {b}", { n: j.loops, b: `$${j.budget_usd}` })}</span>
+        {j.state === "queued" && <span className="text-sm text-muted">{tf("前面还有 {n} 个任务", { n: ahead })}</span>}
+        {j.state === "running" && <span className="text-sm text-muted">{t("RD-Agent 正在准备数据与基准回测，第一轮开始后自动切换到过程视图…")}</span>}
         {(j.state === "queued" || j.state === "running") && <div className="ml-auto"><StopButton jobId={j.job_id} /></div>}
         {["failed", "cancelled", "budget_stopped"].includes(j.state) && <div className="ml-auto"><ResumeButton jobId={j.job_id} onDone={() => setFinal(false)} /><RetryButton jobId={j.job_id} /></div>}
       </section>
-      {j.error && <Notice tone="bad" title="运行失败">{j.error}</Notice>}
+      {j.error && <Notice tone="bad" title={t("运行失败")}>{j.error}</Notice>}
       {isLive(live.data) && <LiveStatus job={j} live={live.data} />}
       <details className="panel p-4" open={!isLive(live.data)}>
-        <summary className="cursor-pointer label">RD-Agent 原始输出（最后 40 行）</summary>
+        <summary className="cursor-pointer label">{t("RD-Agent 原始输出（最后 40 行）")}</summary>
         <pre className="num text-[11px] whitespace-pre-wrap leading-relaxed text-muted max-h-[420px] overflow-y-auto bg-bg rounded p-3 mt-2">
-          {j.log_tail.length ? j.log_tail.join("\n").replace(/\x1b\[[0-9;]*m/g, "") : "等待输出…"}
+          {j.log_tail.length ? j.log_tail.join("\n").replace(/\x1b\[[0-9;]*m/g, "") : t("等待输出…")}
         </pre>
       </details>
     </div>
@@ -102,7 +103,7 @@ function RetryButton({ jobId }: { jobId: string }) {
     <span className="inline-flex items-center gap-2">
       <button className="btn" onClick={async () => {
         try { const r = await api.retryJob(jobId); setParams({ job: r.jobs[0].job_id }); } catch (e) { setError((e as Error).message); }
-      }} title="新建任务，从第 0 轮重头开始">重新运行</button>
+      }} title={t("新建任务，从第 0 轮重头开始")}>{t("重新运行")}</button>
       {error && <span className="text-xs text-bad">{error}</span>}
     </span>
   );
@@ -112,15 +113,15 @@ function RetryButton({ jobId }: { jobId: string }) {
 function StopButton({ jobId }: { jobId: string }) {
   const [step, setStep] = useState<"idle" | "confirm" | "sent">("idle");
   const [error, setError] = useState<string | null>(null);
-  if (step === "sent") return <span className="text-sm text-warn">已请求停止，当前步骤结束后停止…</span>;
+  if (step === "sent") return <span className="text-sm text-warn">{t("已请求停止，当前步骤结束后停止…")}</span>;
   return (
     <span className="inline-flex items-center gap-2">
-      {step === "confirm" && <span className="text-sm text-warn">已完成的轮次会保留。确认停止？</span>}
+      {step === "confirm" && <span className="text-sm text-warn">{t("已完成的轮次会保留。确认停止？")}</span>}
       <button className={`btn ${step === "confirm" ? "border-bad text-bad" : ""}`} onClick={async () => {
         if (step === "idle") return setStep("confirm");
         try { await api.cancelJob(jobId); setStep("sent"); } catch (e) { setError((e as Error).message); }
-      }}>{step === "confirm" ? "确认停止" : "停止运行"}</button>
-      {step === "confirm" && <button className="btn" onClick={() => setStep("idle")}>取消</button>}
+      }}>{step === "confirm" ? t("确认停止") : t("停止运行")}</button>
+      {step === "confirm" && <button className="btn" onClick={() => setStep("idle")}>{t("取消")}</button>}
       {error && <span className="text-xs text-bad">{error}</span>}
     </span>
   );
@@ -160,7 +161,7 @@ function Replay({ runId }: { runId: string }) {
 
   if (!detail.data || !events.data) {
     if (detail.error || events.error) return <ErrorBox error={(detail.error ?? events.error)!} />;
-    return <Loading what="运行过程" />;
+    return <Loading what={t("运行过程")} />;
   }
   const { run, rounds, job, batch } = detail.data;
   const visible = events.data.filter((e) => e.t <= clock);
@@ -169,34 +170,34 @@ function Replay({ runId }: { runId: string }) {
   return (
     <>
       {run.context_leak && (
-        <Notice tone="bad" title="此次运行受数据泄漏影响（MINE-11 修复前），仅用于展示过程">运行时提供给 AI 的已有发现包含测试期的评估结论。</Notice>
+        <Notice tone="bad" title={t("此次运行受数据泄漏影响（MINE-11 修复前），仅用于展示过程")}>{t("运行时提供给 AI 的已有发现包含测试期的评估结论。")}</Notice>
       )}
       <section className="panel p-4 flex flex-wrap items-center gap-3">
         {running ? (
           <>
-            <span className="inline-flex items-center gap-2 text-sm text-accent"><span className="size-2 rounded-full bg-accent animate-pulse" />实时 · 每 5 秒刷新</span>
-            {!follow && <button className="btn" onClick={() => setFollow(true)}>回到最新</button>}
+            <span className="inline-flex items-center gap-2 text-sm text-accent"><span className="size-2 rounded-full bg-accent animate-pulse" />{t("实时 · 每 5 秒刷新")}</span>
+            {!follow && <button className="btn" onClick={() => setFollow(true)}>{t("回到最新")}</button>}
           </>
         ) : (
           <>
-            <Badge tone={run.state === "已完成" ? "muted" : "warn"}>{run.state === "已完成" ? "回放" : `${run.state} · 回放`}</Badge>
+            <Badge tone={run.state === "已完成" ? "muted" : "warn"}>{run.state === "已完成" ? t("回放") : `${t(run.state)} · ${t("回放")}`}</Badge>
             <button className="btn w-20 justify-center" onClick={() => { if (clock >= total) setClock(0); setPlaying((p) => !p); }}>
-              {playing ? "暂停" : clock >= total ? "重新播放" : "播放"}
+              {playing ? t("暂停") : clock >= total ? t("重新播放") : t("播放")}
             </button>
-            <Seg label="回放速度" value={speed} onChange={setSpeed} options={SPEEDS.map((s) => ({ value: s, label: `${s}×` }))} />
+            <Seg label={t("回放速度")} value={speed} onChange={setSpeed} options={SPEEDS.map((s) => ({ value: s, label: `${s}×` }))} />
           </>
         )}
-        <input aria-label="回放进度" type="range" min={0} max={total} step={0.5} value={clock} className="flex-1 min-w-48 accent-[var(--accent)]"
+        <input aria-label={t("回放进度")} type="range" min={0} max={total} step={0.5} value={clock} className="flex-1 min-w-48 accent-[var(--accent)]"
           onChange={(e) => { setPlaying(false); setFollow(false); setClock(Number(e.target.value)); }} />
         <span className="num text-sm text-muted w-28 text-right">{mmss(clock)} / {mmss(total)}</span>
-        {running && job ? <StopButton jobId={job.job_id} /> : <button className="btn" onClick={() => { setPlaying(false); setClock(total); }}>跳到结尾</button>}
+        {running && job ? <StopButton jobId={job.job_id} /> : <button className="btn" onClick={() => { setPlaying(false); setClock(total); }}>{t("跳到结尾")}</button>}
       </section>
       {job && (
         <div className="text-xs text-muted flex flex-wrap gap-x-4">
-          <span>研究规格 <Link to="/projects" className="text-accent underline">{job.research_id} v{job.version}</Link></span>
-          <span className="num">任务 {job.job_id}</span>
-          <span>{job.loops} 轮 · 费用上限 ${job.budget_usd}</span>
-          {job.state !== "running" && <span>任务状态：{job.state_zh}</span>}
+          <span>{t("研究规格")} <Link to="/projects" className="text-accent underline">{job.research_id} v{job.version}</Link></span>
+          <span className="num">{tf("任务 {id}", { id: job.job_id })}</span>
+          <span>{tf("{n} 轮 · 费用上限 {b}", { n: job.loops, b: `$${job.budget_usd}` })}</span>
+          {job.state !== "running" && <span>{t("任务状态：")}{t(job.state_zh)}</span>}
         </div>
       )}
 
@@ -210,25 +211,25 @@ function Replay({ runId }: { runId: string }) {
       </div>
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,6fr)_minmax(0,5fr)]">
-        <Panel eyebrow="随轮次生长" title="研究轨迹">
+        <Panel eyebrow={t("随轮次生长")} title={t("研究轨迹")}>
           <div className="h-[560px] -mx-1">
             <ResearchTrail run={run} rounds={trailRounds(rounds, visible)} selected={String(visible.at(-1)?.loop ?? "baseline")} onSelect={() => undefined} />
           </div>
         </Panel>
-        <Panel eyebrow="最新在上" title="过程记录">
-          <Feed events={visible} onPrompt={setPrompt} />
+        <Panel eyebrow={t("最新在上")} title={t("过程记录")}>
+          <Feed events={visible} rounds={rounds} onPrompt={setPrompt} />
         </Panel>
       </div>
 
       {running && backtest.data && Object.keys(backtest.data).length > 0 && (
-        <Panel eyebrow="每完成一轮更新" title="各轮回测净值（实时，扣成本后超额）">
+        <Panel eyebrow={t("每完成一轮更新")} title={t("各轮回测净值（实时，扣成本后超额）")}>
           <NavChart backtest={backtest.data} rounds={rounds} selected={String(rounds.filter((r) => r.decision).at(-1)?.loop ?? "")} className="h-[320px]" />
         </Panel>
       )}
       {finished && (
-        <Notice tone="accent" title={run.state === "已完成" ? "运行结束" : `运行${run.state}`}>
-          共 {run.rounds} 轮，采纳 {run.adopted} 轮，大模型费用 ${run.cost_usd.toFixed(2)}。<Link to={`/results?run=${run.run_id}`} className="text-accent underline">查看结果分析 →</Link>
-          {job && <span className="text-muted">（回测明细在运行结束后约 1 分钟内导出）</span>}
+        <Notice tone="accent" title={run.state === "已完成" ? t("运行结束") : tf("运行{s}", { s: t(run.state) })}>
+          {tf("共 {r} 轮，采纳 {a} 轮，大模型费用 {c}。", { r: run.rounds, a: run.adopted, c: `$${run.cost_usd.toFixed(2)}` })}<Link to={`/results?run=${run.run_id}`} className="text-accent underline">{t("查看结果分析 →")}</Link>
+          {job && <span className="text-muted">{t("（回测明细在运行结束后约 1 分钟内导出）")}</span>}
         </Notice>
       )}
       {prompt != null && <PromptModal runId={runId} index={prompt} onClose={() => setPrompt(null)} />}
@@ -261,26 +262,26 @@ function Lane({ market, loops, visible, clock }: { market: Market; loops: number
       <div className="flex items-center gap-2">
         <span className="size-2.5 rounded-full" style={{ background: color, boxShadow: `0 0 10px ${color}` }} />
         <span className="font-medium">{MARKET_LABEL[market]}</span>
-        <span className="num text-xs text-muted ml-auto">第 {loop} 轮 · 已完成 {done} / {loops}</span>
+        <span className="num text-xs text-muted ml-auto">{tf("第 {l} 轮 · 已完成 {d} / {n}", { l: loop, d: done, n: loops })}</span>
       </div>
-      <ol className="grid grid-cols-4 gap-1.5 mt-3" aria-label="当前步骤">
+      <ol className="grid grid-cols-4 gap-1.5 mt-3" aria-label={t("当前步骤")}>
         {PIPELINE.map((s) => {
           const on = s === active;
           return (
             <li key={s} className={`text-center text-[11px] py-1.5 rounded border transition-colors ${on ? "text-text" : "text-faint border-line"}`}
               style={on ? { borderColor: color, background: `color-mix(in oklab, ${color} 18%, transparent)`, boxShadow: `0 0 12px color-mix(in oklab, ${color} 40%, transparent)` } : undefined}>
-              {s}
+              {t(s)}
             </li>
           );
         })}
       </ol>
       <dl className="grid grid-cols-4 gap-2 mt-3 text-xs">
-        <div><dt className="text-faint">采纳</dt><dd className="num text-base">{adopted}</dd></div>
-        <div><dt className="text-faint">AI 调用</dt><dd className="num text-base">{calls}</dd></div>
-        <div><dt className="text-faint">自检修错</dt><dd className="num text-base">{fixes}</dd></div>
-        <div><dt className="text-faint">费用</dt><dd className="num text-base">${cost.toFixed(3)}</dd></div>
+        <div><dt className="text-faint">{t("采纳")}</dt><dd className="num text-base">{adopted}</dd></div>
+        <div><dt className="text-faint">{t("AI 调用")}</dt><dd className="num text-base">{calls}</dd></div>
+        <div><dt className="text-faint">{t("自检修错")}</dt><dd className="num text-base">{fixes}</dd></div>
+        <div><dt className="text-faint">{t("费用")}</dt><dd className="num text-base">${cost.toFixed(3)}</dd></div>
       </dl>
-      <div className="num text-[11px] text-faint mt-2">已用时 {mmss(clock)}</div>
+      <div className="num text-[11px] text-faint mt-2">{tf("已用时 {d}", { d: mmss(clock) })}</div>
     </section>
   );
 }
@@ -294,12 +295,12 @@ function BatchLane({ job }: { job: Job }) {
       <div className="flex items-center gap-2">
         <span className="size-2.5 rounded-full" style={{ background: color }} />
         <span className="font-medium">{MARKET_LABEL[job.market]}</span>
-        <span className="ml-auto"><Badge tone={job.state === "running" ? "accent" : job.state === "done" ? "good" : job.state === "queued" ? "muted" : "warn"}>{job.state_zh}</Badge></span>
+        <span className="ml-auto"><Badge tone={job.state === "running" ? "accent" : job.state === "done" ? "good" : job.state === "queued" ? "muted" : "warn"}>{t(job.state_zh)}</Badge></span>
       </div>
       <p className="text-sm text-muted mt-3">
-        {job.state === "queued" ? "同一版本，排在当前市场之后依次运行。" : `${job.rounds} 轮 · 费用 $${job.cost_usd.toFixed(3)}`}
+        {job.state === "queued" ? t("同一版本，排在当前市场之后依次运行。") : tf("{n} 轮 · 费用 {c}", { n: job.rounds, c: `$${job.cost_usd.toFixed(3)}` })}
       </p>
-      {job.state !== "queued" && <Link to={to} className="text-accent underline text-sm">查看该市场的过程 →</Link>}
+      {job.state !== "queued" && <Link to={to} className="text-accent underline text-sm">{t("查看该市场的过程 →")}</Link>}
     </section>
   );
 }
@@ -311,23 +312,23 @@ function IdleLane({ market }: { market: Market }) {
         <span className="size-2.5 rounded-full" style={{ background: cssVar(`--${market}`) }} />
         <span className="font-medium">{MARKET_LABEL[market]}</span>
       </div>
-      <p className="text-sm text-muted mt-3">本次运行未包含该市场。研究规格锁定后，可在三个市场分别运行（RS-09）。</p>
+      <p className="text-sm text-muted mt-3">{t("本次运行未包含该市场。研究规格锁定后，可在三个市场分别运行（RS-09）。")}</p>
     </section>
   );
 }
 
-function Feed({ events, onPrompt }: { events: RunEvent[]; onPrompt: (i: number) => void }) {
+function Feed({ events, rounds, onPrompt }: { events: RunEvent[]; rounds: Round[]; onPrompt: (i: number) => void }) {
   const shown = events.filter((e) => e.kind !== "cost" && !(e.kind === "llm" && e.purpose === "编写 / 检查代码") && !(e.kind === "step" && (e.phase === "end" || e.name === "记录")));
   const recent = shown.slice(-60).reverse();
   return (
     <ol className="flex flex-col gap-2 h-[560px] overflow-y-auto pr-1" aria-live="polite">
-      {recent.length === 0 && <li className="text-muted text-sm">等待第一轮开始…</li>}
-      {recent.map((e, i) => <FeedItem key={e.index} e={e} fresh={i === 0} onPrompt={onPrompt} />)}
+      {recent.length === 0 && <li className="text-muted text-sm">{t("等待第一轮开始…")}</li>}
+      {recent.map((e, i) => <FeedItem key={e.index} e={e} rounds={rounds} fresh={i === 0} onPrompt={onPrompt} />)}
     </ol>
   );
 }
 
-function FeedItem({ e, fresh, onPrompt }: { e: RunEvent; fresh: boolean; onPrompt: (i: number) => void }) {
+function FeedItem({ e, rounds, fresh, onPrompt }: { e: RunEvent; rounds: Round[]; fresh: boolean; onPrompt: (i: number) => void }) {
   const head = (label: string, tone?: string) => (
     <div className="flex items-center gap-2 text-xs">
       <span className="num text-faint w-14">{mmss(e.t)}</span>
@@ -338,34 +339,56 @@ function FeedItem({ e, fresh, onPrompt }: { e: RunEvent; fresh: boolean; onPromp
   const box = `border-l-2 pl-3 py-1 ${fresh ? "bg-accent/6" : ""}`;
   switch (e.kind) {
     case "step":
-      return <li className={box} style={{ borderColor: cssVar("--line-2") }}>{head(`开始：${e.name}`)}</li>;
+      return <li className={box} style={{ borderColor: cssVar("--line-2") }}>{head(tf("开始：{n}", { n: e.name }))}</li>;
     case "llm":
       return (
         <li className={box} style={{ borderColor: cssVar("--accent") }}>
-          {head(`AI 调用 · ${e.purpose}`, cssVar("--accent"))}
-          <div className="text-xs text-muted mt-0.5 num">提示词 {(e.prompt_chars / 1000).toFixed(1)}k 字 · 用时 {e.seconds ?? "—"} 秒
-            {e.has_prompt && <button className="ml-2 text-accent underline" onClick={() => onPrompt(e.index)}>查看提示词</button>}
+          {head(tf("AI 调用 · {p}", { p: e.purpose }), cssVar("--accent"))}
+          <div className="text-xs text-muted mt-0.5 num">{tf("提示词 {k}k 字 · 用时 {s} 秒", { k: (e.prompt_chars / 1000).toFixed(1), s: e.seconds ?? "—" })}
+            {e.has_prompt && <button className="ml-2 text-accent underline" onClick={() => onPrompt(e.index)}>{t("查看提示词")}</button>}
           </div>
         </li>
       );
     case "hypothesis":
       return (
         <li className={box} style={{ borderColor: cssVar("--accent") }}>
-          {head("提出假设", cssVar("--text"))}
+          {head(t("提出假设"), cssVar("--text"))}
           <Typed text={e.text} animate={fresh} />
         </li>
       );
     case "factors":
       return (
         <li className={box} style={{ borderColor: cssVar("--line-2") }}>
-          {head(`定义 ${e.factors.length} 个因子`)}
-          <div className="flex flex-wrap gap-1.5 mt-1">{e.factors.map((f) => <span key={f.name} title={f.description}><Badge tone="accent">{f.name}</Badge></span>)}</div>
+          {head(tf("定义 {n} 个因子", { n: e.factors.length }))}
+          <div className="flex flex-col gap-2 mt-1.5">
+            {e.factors.map((f) => {
+              // 公式：新事件自带；历史运行（事件未带 formulation）从 rounds.json 兜底
+              const rf = rounds.find((r) => r.loop === e.loop)?.factors.find((x) => x.name === f.name);
+              const tex = f.formulation ?? rf?.formulation ?? null;
+              const vars = f.variables ?? rf?.variables ?? null;
+              return (
+                <div key={f.name} className="border border-line rounded p-2">
+                  <div className="flex items-baseline gap-2">
+                    <Badge tone="accent">{f.name}</Badge>
+                    <span className="text-xs text-muted truncate" title={f.description}>{f.description}</span>
+                  </div>
+                  <Tex tex={tex} display className="block mt-1 overflow-x-auto" />
+                  {vars && Object.keys(vars).length > 0 && (
+                    <details className="mt-1">
+                      <summary className="text-xs text-muted cursor-pointer">{t("变量说明")}</summary>
+                      <TexVars vars={vars} />
+                    </details>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </li>
       );
     case "check":
       return (
         <li className={box} style={{ borderColor: e.items.every((i) => i.ok) ? cssVar("--good") : cssVar("--warn") }}>
-          {head(`代码自检 · 第 ${e.attempt} 次`, e.items.every((i) => i.ok) ? cssVar("--good") : cssVar("--warn"))}
+          {head(tf("代码自检 · 第 {n} 次", { n: e.attempt }), e.items.every((i) => i.ok) ? cssVar("--good") : cssVar("--warn"))}
           <ul className="mt-1 flex flex-col gap-0.5">
             {e.items.map((i) => (
               <li key={i.name} className="text-xs flex gap-2">
@@ -378,20 +401,20 @@ function FeedItem({ e, fresh, onPrompt }: { e: RunEvent; fresh: boolean; onPromp
         </li>
       );
     case "coded":
-      return <li className={box} style={{ borderColor: cssVar("--good") }}>{head(`代码完成：${e.passed} / ${e.total} 个因子通过自检`, cssVar("--good"))}</li>;
+      return <li className={box} style={{ borderColor: cssVar("--good") }}>{head(tf("代码完成：{a} / {b} 个因子通过自检", { a: e.passed, b: e.total }), cssVar("--good"))}</li>;
     case "backtest":
       return (
         <li className={box} style={{ borderColor: cssVar("--uk") }}>
-          {head("Qlib 回测完成", cssVar("--text"))}
-          <div className="num text-xs text-muted mt-0.5">IC {fix(e.metrics?.ic)} · 扣成本年化 {pct(e.metrics?.annual_return_with_cost)} · 最大回撤 {pct(e.metrics?.max_drawdown_with_cost)}</div>
+          {head(t("Qlib 回测完成"), cssVar("--text"))}
+          <div className="num text-xs text-muted mt-0.5">{tf("IC {i} · 扣成本年化 {r} · 最大回撤 {d}", { i: fix(e.metrics?.ic), r: pct(e.metrics?.annual_return_with_cost), d: pct(e.metrics?.max_drawdown_with_cost) })}</div>
         </li>
       );
     case "decision":
       return (
         <li className={box} style={{ borderColor: e.decision ? cssVar("--good") : cssVar("--bad") }}>
-          <div className="flex items-center gap-2">{head("AI 评审")}{e.decision ? <Badge tone="good">采纳</Badge> : <Badge tone="bad">未采纳</Badge>}</div>
+          <div className="flex items-center gap-2">{head(t("AI 评审"))}{e.decision ? <Badge tone="good">{t("采纳")}</Badge> : <Badge tone="bad">{t("未采纳")}</Badge>}</div>
           <p className="text-xs text-muted mt-1 leading-relaxed line-clamp-3" title={e.observations}>{e.observations}</p>
-          <p className="text-xs mt-1 leading-relaxed line-clamp-3"><span className="text-faint">下一步：</span>{e.new_hypothesis}</p>
+          <p className="text-xs mt-1 leading-relaxed line-clamp-3"><span className="text-faint">{t("下一步：")}</span>{e.new_hypothesis}</p>
         </li>
       );
     default:
@@ -420,14 +443,14 @@ function PromptModal({ runId, index, onClose }: { runId: string; index: number; 
   }, [onClose]);
   const text = useMemo(() => (p.data ? (p.data[tab] ?? "") : ""), [p.data, tab]);
   return (
-    <div className="fixed inset-0 z-40 bg-black/60 grid place-items-center p-4" role="dialog" aria-modal="true" aria-label="发给 AI 的提示词" onClick={onClose}>
+    <div className="fixed inset-0 z-40 bg-black/60 grid place-items-center p-4" role="dialog" aria-modal="true" aria-label={t("发给 AI 的提示词")} onClick={onClose}>
       <div className="panel w-full max-w-5xl max-h-[85vh] flex flex-col p-4" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center gap-3 mb-3">
-          <h2 className="font-display font-semibold">发给 AI 的提示词（WB-01）</h2>
-          <Seg label="内容" value={tab} onChange={setTab} options={[{ value: "system", label: "系统提示" }, { value: "user", label: "用户提示" }, { value: "response", label: "AI 回复" }]} />
-          <button className="btn ml-auto" onClick={onClose}>关闭</button>
+          <h2 className="font-display font-semibold">{t("发给 AI 的提示词（WB-01）")}</h2>
+          <Seg label={t("内容")} value={tab} onChange={setTab} options={[{ value: "system", label: t("系统提示") }, { value: "user", label: t("用户提示") }, { value: "response", label: t("AI 回复") }]} />
+          <button className="btn ml-auto" onClick={onClose}>{t("关闭")}</button>
         </div>
-        {p.error ? <ErrorBox error={p.error} /> : !p.data ? <Loading what="提示词" /> : (
+        {p.error ? <ErrorBox error={p.error} /> : !p.data ? <Loading what={t("提示词")} /> : (
           <pre className="num text-xs whitespace-pre-wrap leading-relaxed overflow-y-auto flex-1 bg-bg rounded p-3 text-muted">{text}</pre>
         )}
       </div>

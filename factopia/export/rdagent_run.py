@@ -13,6 +13,7 @@
 """
 import argparse
 import json
+import math
 import os
 import re
 from datetime import datetime
@@ -22,6 +23,18 @@ from rdagent.log.storage import FileStorage
 
 RDAGENT_ROOT = Path(os.environ.get("FACTOPIA_RDAGENT_ROOT", "/workspace/runtime/rdagent"))
 RUNS_DIR = Path(os.environ.get("FACTOPIA_RESULTS_DIR", "/workspace/runtime/results")) / "runs"
+
+
+def _json_safe(obj):
+    """递归把 NaN/Inf 换成 None：大模型 402 失败时 cost 汇总会产生 NaN，
+    落盘为 NaN 字面量后 API 响应序列化会 500（Out of range float values are not JSON compliant）。"""
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_json_safe(v) for v in obj]
+    if isinstance(obj, float) and not math.isfinite(obj):
+        return None
+    return obj
 
 METRICS = {
     "ic": "IC",
@@ -119,7 +132,9 @@ def export(log_dir: Path) -> Path:
             r["hypothesis"], r["reason"] = c.hypothesis, c.reason
             ev(msg.timestamp, "hypothesis", text=c.hypothesis, reason=c.reason)
         elif name == "experiment generation":
-            ev(msg.timestamp, "factors", factors=[{"name": t.factor_name, "description": t.factor_description[:200]} for t in c])
+            ev(msg.timestamp, "factors", factors=[{"name": t.factor_name, "description": t.factor_description[:200],
+                                                    "formulation": t.factor_formulation, "variables": t.variables}
+                                                   for t in c])
             r["factors"] = [{"name": t.factor_name, "description": t.factor_description,
                              "formulation": t.factor_formulation, "variables": t.variables, "code": None}
                             for t in c]
@@ -197,12 +212,12 @@ def export(log_dir: Path) -> Path:
 
     out = RUNS_DIR / run_id
     out.mkdir(parents=True, exist_ok=True)
-    (out / "run.json").write_text(json.dumps(run, ensure_ascii=False, indent=2))
-    (out / "rounds.json").write_text(json.dumps(ordered, ensure_ascii=False, indent=2))
+    (out / "run.json").write_text(json.dumps(_json_safe(run), ensure_ascii=False, indent=2, allow_nan=False))
+    (out / "rounds.json").write_text(json.dumps(_json_safe(ordered), ensure_ascii=False, indent=2, allow_nan=False))
     events.sort(key=lambda e: e[0])
     t0 = events[0][0] if events else None
     timeline = [{"t": round((t - t0).total_seconds(), 2), **e} for t, e in events]
-    (out / "events.json").write_text(json.dumps(timeline, ensure_ascii=False))
+    (out / "events.json").write_text(json.dumps(_json_safe(timeline), ensure_ascii=False, allow_nan=False))
     return out
 
 

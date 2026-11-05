@@ -8,6 +8,8 @@ from pathlib import Path
 
 import yaml
 
+from factopia.lang import joinlist, market_label, t
+
 MANDATES_DIR = Path(os.environ.get("FACTOPIA_CONFIGS_DIR", "/workspace/configs")) / "mandates"
 
 TERMS = [  # (字段, 界面名称, 挖掘阶段的用法)
@@ -39,22 +41,22 @@ def load(mandate_id: str) -> dict:
 
 def _display(key: str, value) -> str:
     if key == "target_markets":
-        return "、".join(MARKET_ZH.get(m, m) for m in value)
+        return joinlist(market_label(m) for m in value)
     if key == "long_only":
-        return "不允许（只做多）" if value else "允许"
+        return t("不允许（只做多）") if value else t("允许")
     if key == "restricted_securities":
-        return "、".join(value) if value else "无"
-    return str(value)
+        return joinlist(value) if value else t("无")
+    return t(str(value))
 
 
 def parse(mandate: dict) -> dict:
     """返回界面显示的条款、转换出的挖掘约束（英文，发给 AI）与需要 AI 解释的自由文本条款。"""
-    terms = [{"key": k, "name": name, "value": _display(k, mandate.get(k)), "usage": usage}
+    terms = [{"key": k, "name": t(name), "value": _display(k, mandate.get(k)), "usage": t(usage)}
              for k, name, usage in TERMS if k in mandate]
     constraints = []
     if mandate.get("long_only"):
         constraints.append("Long-only portfolio; short selling is not allowed.")
     if mandate.get("restricted_securities"):
         constraints.append("Exclude these restricted securities: " + ", ".join(mandate["restricted_securities"]) + ".")
-    return {"id": mandate["id"], "name": mandate["name"], "markets": mandate.get("target_markets", []),
-            "terms": terms, "constraints": constraints, "free_text": mandate.get("free_text") or []}
+    return {"id": mandate["id"], "name": t(mandate["name"]), "markets": mandate.get("target_markets", []),
+            "terms": terms, "constraints": constraints, "free_text": [t(x) for x in mandate.get("free_text") or []]}

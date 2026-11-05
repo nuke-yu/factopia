@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 
 import pandas as pd
 
+from factopia import lang
 from factopia.text.common import DATASETS, LANG_ZH, REVIEW, concept_names, ds_dir, glossary, is_table, pipeline, read_json, series_exclusion, write_shared
 from factopia.text.understand import FLAG_ZH
 
@@ -343,7 +344,7 @@ def accuracy(dataset: str) -> dict:
             "unscreened": {"sample_size": len(t["unscreened"]), "reviewed": miss[1], "missed": miss[0],
                            "miss_rate": round(miss[0] / miss[1], 3) if miss[1] else None, "ci95": _wilson(miss[0], miss[1])},
             "screening": t["screening"], "settings": t["settings"],
-            "note": "抽样按固定种子随机抽取，复核完全部样本后的准确率可代表全体大模型判断；样本少时区间较宽"}
+            "note": lang.t("抽样按固定种子随机抽取，复核完全部样本后的准确率可代表全体大模型判断；样本少时区间较宽")}
 
 
 def snapshot(datasets: list[str]) -> tuple[dict, dict[str, bytes]]:

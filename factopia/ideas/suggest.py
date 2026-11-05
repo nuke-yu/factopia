@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from factopia import ideas as I
+from factopia.lang import llm_language, t
 
 PROMPT_VERSION = "idea-suggest-v2"
 PROMPT_FILE = Path(__file__).parent / "prompts" / f"{PROMPT_VERSION}.md"
@@ -95,7 +96,7 @@ def _chat(prompt: str, task: str = "线索 AI 建议") -> tuple[dict, dict, str]
     try:
         return json.loads(text), usage, cfg["model"]
     except json.JSONDecodeError as e:
-        raise I.IdeaError(f"大模型输出不是合法 JSON：{e}") from e
+        raise I.IdeaError(t("大模型输出不是合法 JSON：{e}", e=e)) from e
 
 
 def suggest(channel: str, markets: list[str] | None = None, avoid: list[str] | None = None, seed: str = "",
@@ -104,7 +105,7 @@ def suggest(channel: str, markets: list[str] | None = None, avoid: list[str] | N
     skip_angle："换一个"时排除当前方向。"""
     from factopia.ideas import directions as D
     if channel not in CHANNEL_TASK:
-        raise I.IdeaError("论文 / 研报渠道不生成默认假设；可选：投资假设、研究员经验、人工反馈")
+        raise I.IdeaError(t("论文 / 研报渠道不生成默认假设；可选：投资假设、研究员经验、人工反馈"))
     seed = (seed or "").strip()[:500]
     ms = [m for m in I.MARKETS if m in (markets or I.MARKETS)] or list(I.MARKETS)
     log = _recent()
@@ -126,7 +127,7 @@ def suggest(channel: str, markets: list[str] | None = None, avoid: list[str] | N
     out, usage_all, model, note, prompt = None, {"prompt_tokens": 0, "completion_tokens": 0}, None, "", ""
     for attempt in range(2):
         prompt = PROMPT_FILE.read_text(encoding="utf-8").format(
-            task=CHANNEL_TASK[channel], direction=direction, markets=ctx["markets"], data=ctx["data"],
+            task=CHANNEL_TASK[channel], direction=direction, markets=ctx["markets"], data=ctx["data"], language=llm_language(),
             evidence="\n".join(f"[{it['id']}] {it['text']}" for it in items) or "- none",
             avoid="\n".join(f"- {t}" for t in recent[-60:]) or "- none", roles=", ".join(ROLE_CHOICES), note=note)
         raw, usage, model = _chat(prompt)
@@ -143,7 +144,7 @@ def suggest(channel: str, markets: list[str] | None = None, avoid: list[str] | N
             break
         note = f"\n\nYour previous suggestion \"{title}\" was too similar to an existing one. Propose a clearly different idea within the same direction."
     if not out:
-        raise I.IdeaError("AI 两次都没有给出完整的建议，请再试一次")
+        raise I.IdeaError(t("AI 两次都没有给出完整的建议，请再试一次"))
     by_id = {it["id"]: it for it in items}
     cited = [f"E{n}" for n in dict.fromkeys(re.findall(r"E?(\d+)", " ".join(map(str, out.get("grounds") or []))))]
     grounds = [{"kind": by_id[c]["kind"], "text": by_id[c]["zh"]} for c in cited if c in by_id][:8]
@@ -168,16 +169,16 @@ def auto_hypothesis(iid: str) -> dict:
     """自动回流线索：AI 把平台记录（监控预警、组合归因、审批退回）改写为可检验的研究假设，存入线索并留痕。"""
     idea = I.load(iid)
     if idea["channel"] not in ("monitor", "portfolio", "approval"):
-        raise I.IdeaError("只有自动回流的线索需要 AI 改写为研究假设")
+        raise I.IdeaError(t("只有自动回流的线索需要 AI 改写为研究假设"))
     if idea.get("ai_hypothesis"):
         return idea
     ctx = _context(idea["markets"] or list(I.MARKETS))
     prompt = AUTO_PROMPT_FILE.read_text(encoding="utf-8").format(
-        channel=idea["channel_zh"], title=idea["title"], body=idea["body"], markets=ctx["markets"], data=ctx["data"])
+        channel=idea["channel_zh"], title=idea["title"], body=idea["body"], markets=ctx["markets"], data=ctx["data"], language=llm_language())
     raw, usage, model = _chat(prompt, "线索 AI 研究假设")
     hyp = str(raw.get("hypothesis") or "").strip()
     if len(hyp) < 20:
-        raise I.IdeaError("AI 没有给出完整的研究假设，请再试一次")
+        raise I.IdeaError(t("AI 没有给出完整的研究假设，请再试一次"))
     idea["ai_hypothesis"] = {"title": str(raw.get("title") or idea["title"])[:200], "hypothesis": hyp[:3000],
                              "direction": str(raw.get("direction") or "")[:500], "why_zh": str(raw.get("why_zh") or "")[:600],
                              "model": model, "prompt_version": AUTO_PROMPT_VERSION,
