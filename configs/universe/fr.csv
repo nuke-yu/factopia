@@ -11,11 +11,12 @@ CAP.PA,Capgemini
 CS.PA,Axa
 DG.PA,Vinci
 DSY.PA,Dassault Systèmes
-EDEN.PA,Edenred
 EL.PA,EssilorLuxottica
 EN.PA,Bouygues
 ENGI.PA,Engie
+ENX.PA,Euronext
 ERF.PA,Eurofins Scientific
+FGR.PA,Eiffage
 GLE.PA,Société Générale
 HO.PA,Thales
 KER.PA,Kering
@@ -35,7 +36,6 @@ SGO.PA,Saint-Gobain
 STLAP.PA,Stellantis
 STMPA.PA,STMicroelectronics
 SU.PA,Schneider Electric
-TEP.PA,Teleperformance
 TTE.PA,TotalEnergies
 URW.PA,Unibail-Rodamco-Westfield
 VIE.PA,Veolia

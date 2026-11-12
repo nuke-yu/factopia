@@ -1,0 +1,14 @@
+# 团队专有因子库示例（BR-35；格式说明见同目录 README.md）
+# 说明：这是演示条目，尚未做真实统计，不要用于研究结论。
+# markets 中的数值仅用于页面展示，且不得包含测试期（2022–2023）的结果。
+source_name: team_core
+version: 2026.11
+factors:
+  - name: HK_VOL_REV_5D
+    status: 研究中
+    group: 量价反转
+    description: 港股中过去 5 个交易日跌幅较大、同时成交量相对 20 日均量放大的股票，未来 20 个交易日反弹更快。
+    formulation: '-\operatorname{rank}(r_{5d}) \cdot \operatorname{rank}\left(\frac{V_{5d}}{\bar{V}_{20d}}\right)'
+    code: null
+    markets: {}                 # 可选；没有真实统计时留空对象，页面 t 值列显示 —
+    period_note: 示例条目，尚未统计；接入真实统计前请勿用于研究结论

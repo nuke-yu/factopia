@@ -38,13 +38,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /
 # 走代理克隆 GitHub 仓库时 HTTP/2 多路复用流易被中断（curl 92），强制 HTTP/1.1 提高稳定性
 RUN git config --global http.version HTTP/1.1
 
-RUN conda create -y -n rdagent python=3.11 && conda clean -afy
+# 国内网络常连不上 conda.anaconda.org，且各镜像站时有下架/超时：
+# 依次尝试多个国内 conda-forge 镜像，任一可用即继续。如需固定某个源，直接改下面的默认值。
+ARG CONDA_FORGE_CHANNELS="https://conda.anaconda.org/conda-forge https://mirrors.ustc.edu.cn/anaconda/cloud/conda-forge https://mirrors.ustc.edu.cn/conda-forge https://mirrors.bfsu.edu.cn/anaconda/cloud/conda-forge https://mirror.nju.edu.cn/anaconda/cloud/conda-forge https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge https://mirrors.cloud.tencent.com/anaconda/cloud/conda-forge https://mirrors.huaweicloud.com/anaconda/cloud/conda-forge"
+RUN ok=0; for ch in $CONDA_FORGE_CHANNELS; do \
+        echo "== conda channel attempt: $ch"; \
+        if CONDA_REMOTE_CONNECT_TIMEOUT_SECS=10 CONDA_REMOTE_READ_TIMEOUT_SECS=30 CONDA_REMOTE_MAX_RETRIES=1 \
+           conda create -y -n rdagent --override-channels -c "$ch" python=3.11; then \
+            ok=1; break; \
+        fi; \
+        rm -rf /opt/conda/envs/rdagent; conda clean -afy >/dev/null 2>&1 || true; \
+    done; \
+    [ "$ok" = 1 ] || { echo "所有 conda 镜像均不可用：请检查网络，或给 Docker 构建配置代理"; exit 1; }; \
+    conda clean -afy
 ENV CONDA_DEFAULT_ENV=rdagent \
     PATH=/opt/conda/envs/rdagent/bin:$PATH
 
 ARG RDAGENT_VERSION
 RUN ok=0; for i in $(seq 1 12); do echo "clone attempt $i"; rm -rf /opt/rdagent-src; if git clone --depth 1 --branch ${RDAGENT_VERSION} https://github.com/microsoft/RD-Agent.git /opt/rdagent-src; then ok=1; break; fi; sleep 25; done; [ "$ok" = 1 ]
-RUN pip install --no-cache-dir -e /opt/rdagent-src tables longport \
+# 同上：默认走阿里云 PyPI 镜像；如镜像缺包，可在构建时覆盖 PIP_INDEX_URL
+ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+RUN pip install --no-cache-dir -i "$PIP_INDEX_URL" -e /opt/rdagent-src tables longport \
     && echo ${RDAGENT_VERSION} > /opt/rdagent-src/.factopia_version \
     && cp -a /opt/rdagent-src /opt/rdagent-src-image
 

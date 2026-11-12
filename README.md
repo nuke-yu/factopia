@@ -23,6 +23,11 @@ docker compose up -d dind
 docker save factopia-qlib:dev | docker compose exec -T dind docker load
 # if fails, then try below cmd
 # cmd /c "docker save factopia-qlib:dev | docker compose exec -T dind docker load"
+
+# dind 起不来时（日志出现 failed to start containerd ... PID ... still running）：删除并重建容器；
+# dind_data 卷中的镜像不会丢。等约 20 秒后确认：
+# docker compose rm -sf dind && docker compose up -d dind
+# docker compose exec -T dind docker info
 ```
 
 ### 常用命令
@@ -58,6 +63,10 @@ docker compose run --rm rdagent ls /workspace/runtime
 # 模拟盘：每日推进（结算挂单 → 重算信号 → 月度调仓 → 出报告），加参数 report 只重算报告
 docker compose -f docker-compose.yml -f compose.local.yml exec runner python -m factopia.paper
 # 长桥模拟盘需在 .env 填 LONGPORT_APP_KEY / LONGPORT_APP_SECRET / LONGPORT_ACCESS_TOKEN（港股走长桥，UK/FR 自动影子撮合）
+
+# 测试UT
+docker compose -f docker-compose.yml -f compose.local.yml run --rm app python -m unittest tests.test_agents -v
+
 ```
 
 ## Factopia Web 界面
@@ -74,6 +83,8 @@ docker compose -f docker-compose.yml -f compose.local.yml exec runner python -m 
 ```bash
 # 启动全部服务（本机；源码挂载，修改代码后 api 自动重载）→ http://localhost:18080
 docker compose -f docker-compose.yml -f compose.local.yml --profile platform --profile research up -d --build
+docker compose -f docker-compose.yml -f compose.local.yml --profile platform --profile research up -d
+
 
 # 查看后台运行器与导出日志
 docker compose -f docker-compose.yml -f compose.local.yml --profile research logs -f runner exporter

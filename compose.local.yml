@@ -34,6 +34,9 @@ services:
     # 行情再断时先确认宿主机 Clash 是否常开。
     extra_hosts:
       - "openapi-quote.longportapp.com:127.0.0.1"
+      # 容器内直连百炼工作区端点会出现 SSL WRONG_VERSION_NUMBER（走 IPv6/Docker NAT 时），
+      # 固定为宿主机解析到的 IPv4，强制走 IPv4。
+      - "llm-tlndh47wd9ustbss.cn-beijing.maas.aliyuncs.com:39.106.184.160"
     command: ["sh", "-c", "while true; do python -m factopia.longport_fwd; sleep 5; done & exec python -m factopia.runner"]
   exporter:
     volumes:
@@ -41,6 +44,9 @@ services:
 
   # 后端接口：挂载源码并自动重载
   api:
+    # 同 runner：把大模型端点固定为宿主机解析到的 IPv4，避免容器内 IPv6/DNS 导致 TLS 失败。
+    extra_hosts:
+      - "llm-tlndh47wd9ustbss.cn-beijing.maas.aliyuncs.com:39.106.184.160"
     volumes:
       - ./factopia:/workspace/factopia/factopia:ro
       - ./configs:/workspace/configs:ro
