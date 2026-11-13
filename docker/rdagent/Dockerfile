@@ -1,18 +1,16 @@
 # RD-Agent 主程序镜像（多架构）。
 # - RD-Agent 执行因子代码时要求在 conda 环境中运行（CondaConf.conda_env_name 为必填）
 # - Python 3.11：RD-Agent README 注明其 CI 在 3.10 / 3.11 上测试
-# - 源码克隆到 /opt/rdagent-src 并以可编辑方式安装：RD-Agent 会把自身目录下的模板文件夹挂载给回测容器，
-#   该目录通过命名卷与 dind 共享，保证所有路径都是容器内路径（见全局设计 7.4）
-ARG RDAGENT_VERSION=v1.0.0
+# - 源码来自仓库内 rdagents/（RD-Agent v1.0.0 副本），不再从 GitHub clone；
+#   该目录经命名卷与 dind 共享，保证所有路径都是容器内路径（见全局设计 7.4）
+
+# pip 源可通过 --build-arg PIP_INDEX_URL=... 覆盖（默认官方 PyPI；国内网络可传镜像加速）
+ARG PIP_INDEX_URL=https://pypi.org/simple
 
 # ---- 构建阶段：编译 RD-Agent 自带的 Web UI（Vue + Vite，需要 Node 22）----
 # 由 `rdagent server_ui` 提供服务，含 Playground：选择场景、上传资料、启动与控制运行、实时查看过程
 FROM node:22-slim AS web
-ARG RDAGENT_VERSION
-RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/*
-# 走代理克隆 GitHub 仓库时 HTTP/2 多路复用流易被中断（curl 92），强制 HTTP/1.1 提高稳定性
-RUN git config --global http.version HTTP/1.1
-RUN ok=0; for i in $(seq 1 12); do echo "clone attempt $i"; rm -rf /src; if git clone --depth 1 --branch ${RDAGENT_VERSION} https://github.com/microsoft/RD-Agent.git /src; then ok=1; break; fi; sleep 25; done; [ "$ok" = 1 ]
+COPY rdagents /src
 WORKDIR /src/web
 # 上游 v1.0.0 的 package.json 中 vite@8 与 @vitejs/plugin-vue@5（声明支持 vite 5/6）版本声明冲突，npm 严格校验会拒绝安装
 RUN npm ci --legacy-peer-deps && npm run build:flask   # 输出到 /src/git_ignore_folder/static
@@ -34,23 +32,25 @@ RUN mkdir -p /tmp/vendor && cd /tmp/vendor && npm init -y >/dev/null \
 # Miniforge：只使用免费的 conda-forge 源，不涉及 Anaconda 默认源的服务条款与商业许可
 FROM condaforge/miniforge3:latest
 
-RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
-# 走代理克隆 GitHub 仓库时 HTTP/2 多路复用流易被中断（curl 92），强制 HTTP/1.1 提高稳定性
-RUN git config --global http.version HTTP/1.1
+ARG PIP_INDEX_URL
+ENV PIP_INDEX_URL=${PIP_INDEX_URL}
 
 RUN conda create -y -n rdagent python=3.11 && conda clean -afy
 ENV CONDA_DEFAULT_ENV=rdagent \
     PATH=/opt/conda/envs/rdagent/bin:$PATH
 
-ARG RDAGENT_VERSION
-RUN ok=0; for i in $(seq 1 12); do echo "clone attempt $i"; rm -rf /opt/rdagent-src; if git clone --depth 1 --branch ${RDAGENT_VERSION} https://github.com/microsoft/RD-Agent.git /opt/rdagent-src; then ok=1; break; fi; sleep 25; done; [ "$ok" = 1 ]
-RUN pip install --no-cache-dir -e /opt/rdagent-src tables longport yfinance exchange_calendars \
-    && echo ${RDAGENT_VERSION} > /opt/rdagent-src/.factopia_version \
+# 依赖单独成层：rdagents/ 代码变更时无需重新下载依赖（含 paper trading 所需 longport/yfinance 等）
+COPY rdagents/requirements.txt /tmp/rdagent-requirements.txt
+RUN pip install --no-cache-dir -r /tmp/rdagent-requirements.txt tables longport yfinance exchange_calendars
+
+# 源码目录即安装目录：RD-Agent 会把自身目录下的模板文件夹挂载给回测容器，
+COPY rdagents /opt/rdagent-src
+RUN pip install --no-cache-dir --no-deps -e /opt/rdagent-src \
     && cp -a /opt/rdagent-src /opt/rdagent-src-image
 
 # Web UI 静态文件（由 UI_STATIC_PATH 指向）
 COPY --from=web /src/git_ignore_folder/static /opt/rdagent-web
 
-COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY docker/rdagent/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

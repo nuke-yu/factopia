@@ -34,7 +34,8 @@ services:
 
   rdagent: &rdagent
     build:
-      context: docker/rdagent
+      context: .
+      dockerfile: docker/rdagent/Dockerfile
     image: factopia-rdagent:dev
     env_file: .env
     depends_on: [dind]
