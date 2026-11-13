@@ -34,6 +34,7 @@ from factopia.validate import jobs as validate_jobs
 
 ENTRYPOINT = os.environ.get("FACTOPIA_ENTRYPOINT", "/usr/local/bin/entrypoint.sh")
 POLL_S, EXPORT_EVERY_S, STOP_GRACE_S = 3, 15, 90
+HEARTBEAT_S = 60   # 运行中每 60 秒打印一条进度心跳（区分正常运行与卡死）
 QLIB_IMAGE = os.environ.get("QLIB_DOCKER_IMAGE", "factopia-qlib:dev")
 API_UID = int(os.environ.get("FACTOPIA_API_UID", "10001"))  # api 镜像以非 root 用户运行（docker/api/Dockerfile）
 MAX_PARALLEL = int(os.environ.get("FACTOPIA_MAX_PARALLEL", "3"))
@@ -67,12 +68,20 @@ def next_job(active: set[str] | None = None) -> dict | None:
     return None
 
 
-def export_progress(job: dict, log_dir: Path) -> dict | None:
-    """导出当前进度；日志正在写入或还没有任何一轮时返回 None。"""
+def export_progress(job: dict, log_dir: Path, *, warned: dict | None = None) -> dict | None:
+    """导出当前进度；日志正在写入或还没有任何一轮时返回 None。
+
+    warned: 调用方传入的可变标记 {"export": bool}；首次失败打印告警（不刷屏），成功后重置。
+    """
     try:
         out = rdagent_run.export(log_dir)
-    except Exception:
+    except Exception as e:
+        if warned is not None and not warned.get("export"):
+            warned["export"] = True
+            log(f"{job['job_id']}: 导出进度失败（首轮完成前属正常）：<摘要> {type(e).__name__}: {str(e)[:120]}")
         return None
+    if warned is not None:
+        warned["export"] = False
     run = json.loads((out / "run.json").read_text())
     job.update(cost_usd=run["cost_usd"], rounds=run["rounds"])
     return run
@@ -128,6 +137,17 @@ def stop(proc: subprocess.Popen, prefixes: list[Path]) -> None:
         log(f"清理回测容器失败：{e}")
 
 
+def heartbeat(job: dict, live: LiveParser, started: float) -> None:
+    """运行中心跳：轮次 · 当前步骤 · 最近活动 · 已跑时长 · 费用。"""
+    st = live.state()
+    loop = f"第 {st['loop']} 轮" if st.get("loop") else st.get("phase", "准备中")
+    activity = st.get("activity") or []
+    act = activity[-1] if activity else "等待输出"
+    mins = int((time.time() - started) / 60)
+    log(f"{job['job_id']} ▸ {loop} · {st.get('step_zh') or act} · "
+        f"最近: {act} · 已跑 {mins}m · ${job.get('cost_usd', 0):.3f}")
+
+
 def run_job(job: dict) -> None:
     resume = store.resume_info(job) if job.get("resume") else None
     if job.get("resume") and not (resume and resume["ok"]):   # 要求续跑却没有检查点：不能悄悄改成从头开始
@@ -149,6 +169,8 @@ def run_job(job: dict) -> None:
         cmd = [ENTRYPOINT, "rdagent", "fin_factor", "--loop-n", str(job["loops"])]
         job.update(state="running", started_at=store.now(), run_id=run_id, log_dir=str(log_dir), resume=False)
         log(f"{job['job_id']}: 开始 {job['research_id']} v{job['version']} {job['market']} → {run_id}")
+    log(f"{job['job_id']}: 参数 市场={job['market']} 周期={job['horizon']} 轮数={job['loops']} "
+        f"预算=${job['budget_usd']:.2f} · 每 {HEARTBEAT_S}s 心跳 · 原始日志: {store.log_path(job['job_id'])}")
     store.write_job(job)
 
     src = SRC_ROOT / job["job_id"]
@@ -164,16 +186,22 @@ def run_job(job: dict) -> None:
         proc = subprocess.Popen(cmd,
                                 stdout=out, stderr=subprocess.STDOUT, env=env, start_new_session=True)
         reason, last_export, backtested = None, 0.0, 0
+        last_heartbeat = time.time()
+        started = time.time()
+        export_warned: dict = {"export": False}
         while proc.poll() is None:
             time.sleep(POLL_S)
             follow(tail, live, job)
+            if time.time() - last_heartbeat >= HEARTBEAT_S:
+                last_heartbeat = time.time()
+                heartbeat(job, live, started)
             if live.fatal:
                 reason = "fatal"
             elif store.cancel_requested(job["job_id"]):
                 reason = "cancelled"
             elif time.time() - last_export >= EXPORT_EVERY_S:
                 last_export = time.time()
-                if export_progress(job, log_dir) is not None:
+                if export_progress(job, log_dir, warned=export_warned) is not None:
                     store.write_job(job)
                     backtested = mark_new_backtests(run_id, backtested)
                 if job["cost_usd"] >= job["budget_usd"]:
@@ -203,7 +231,8 @@ def run_job(job: dict) -> None:
     store.write_job(job)
     if run is not None:  # 回测与持仓需要 Qlib 读取，由 exporter 服务（app 镜像）导出
         (rdagent_run.RUNS_DIR / run_id / ".backtest_pending").write_text(store.now())
-    log(f"{job['job_id']}: {job['state']}，{job['rounds']} 轮，${job['cost_usd']:.3f}")
+    log(f"{job['job_id']}: {job['state']}，{job['rounds']} 轮，${job['cost_usd']:.3f}"
+        + (f" · 详细日志: {log_file}" if job["state"] != "done" else ""))
     if job["state"] == "done":
         enqueue_validation(run_id)
 

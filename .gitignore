@@ -11,8 +11,7 @@ __pycache__/
 /artifacts/
 /logs/
 
-# 第三方源码（只用于阅读，依赖通过包管理安装）
-/vendor/
+# 第三方源码：rdagents/（RD-Agent v1.0.0）已并入本库统一管理，不忽略
 
 # 前端
 web/node_modules/
