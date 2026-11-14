@@ -9,8 +9,8 @@ dependencies = [
     "pandas",
     "pyarrow",
     # PyPI 上的 pyqlib 没有 Linux ARM 安装包，改为从源码编译；
-    # 固定到 RD-Agent 官方镜像使用的同一提交，保证两边 Qlib 一致
-    "pyqlib @ git+https://github.com/microsoft/qlib.git@2fb9380b342556ddb50a4b24e4fe8655d548b2b8",
+    # 源码快照在仓库 qlibs/（与 RD-Agent 官方镜像固定同一提交 2fb9380），保证两边 Qlib 一致
+    "pyqlib",
     "skfolio",
     # Qlib 的实验记录依赖 MLflow 文件存储，3.13 起默认关闭（见 Qlib 主分支 pyproject 注释）
     "mlflow<3.13",
@@ -22,6 +22,9 @@ dependencies = [
 [project.optional-dependencies]
 # 模拟盘长桥通道（factopia.paper.broker）：影子撮合模式不需要该依赖
 paper = ["longport"]
+
+[tool.uv.sources]
+pyqlib = { path = "qlibs", editable = true }
 
 [tool.uv]
 package = false
