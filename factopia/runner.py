@@ -311,6 +311,52 @@ def execute(job: dict) -> None:
 
 PAPER_HOUR_UTC = int(os.environ.get("FACTOPIA_PAPER_ADVANCE_UTC_HOUR", "9"))
 
+DATA_HOUR_UTC = int(os.environ.get("FACTOPIA_DATA_UPDATE_UTC_HOUR", "19"))
+_data_thread: threading.Thread | None = None
+
+
+def _data_updated_on() -> str:
+    try:
+        from factopia.paper import engine
+        return (engine.RUNTIME / "data" / ".daily_update").read_text().strip()[-10:]
+    except Exception:
+        return ""
+
+
+def _run_data_pipeline() -> None:
+    from factopia.paper import engine
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    marker = engine.RUNTIME / "data" / ".daily_update"
+    try:
+        from factopia.data import download, standardize   # import 也纳入 try：失败同样记标记，避免每分钟重试
+        download.main()
+        standardize.main()
+        marker.write_text(today)
+        log(f"数据管道：download → standardize 完成（{today}）")
+    except Exception:
+        marker.write_text(today)   # 失败也记当日标记：避免每分钟重试；次日自动再试，中间可手动补
+        log(f"数据管道：每日下载失败（{today} 当日不再重试）\n{traceback.format_exc()[-400:]}")
+
+
+def schedule_data_update() -> None:
+    """每日自动推进行情（download → standardize；模拟盘的成交与估值都依赖行情推进）。
+
+    幂等：状态文件 runtime/data/.daily_update 记录最近一次运行的 UTC 日，当日最多跑一次（成败都记）；
+    时刻由 FACTOPIA_DATA_UPDATE_UTC_HOUR 控制（UTC 时，默认 19 = 北京 03:00：港股 / 英股 / 法股
+    前一交易日均已收盘且数据源更新完毕）。下载在后台线程执行，不阻塞任务队列。
+    """
+    global _data_thread
+    now_dt = datetime.now(timezone.utc)
+    if now_dt.hour < DATA_HOUR_UTC:
+        return
+    if now_dt.strftime("%Y-%m-%d") <= _data_updated_on():
+        return
+    if _data_thread is not None and _data_thread.is_alive():
+        return
+    log("数据管道：每日 download → standardize 开始")
+    _data_thread = threading.Thread(target=_run_data_pipeline, name="data-daily", daemon=True)
+    _data_thread.start()
+
 
 def schedule_paper_daily() -> None:
     """每日为接入中的模拟盘排队一轮推进（Spec 14.15：每日收盘后由后台推进）。
@@ -350,6 +396,10 @@ def main() -> None:
             del active[jid]
         if time.time() - sched_at > 60:
             sched_at = time.time()
+            try:
+                schedule_data_update()
+            except Exception:
+                log(f"数据管道调度检查失败\n{traceback.format_exc()[-400:]}")
             try:
                 schedule_paper_daily()
             except Exception:

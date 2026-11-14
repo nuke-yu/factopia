@@ -96,7 +96,7 @@ def catalog() -> list[dict]:
         spec = yaml.safe_load(spec_p.read_text(encoding="utf-8")) if spec_p.exists() else {}
         mandate = _mandate(mt.get("mandate"))
         lock = sub.get("lock")
-        reg = (lock.get("labels") or approval.labels(sub)) if lock else None    # 早期锁定记录没有存标签：按冻结材料补算
+        reg = approval.labels(sub) if lock else None       # 标签按冻结材料动态重算（语言跟随当前地区视角）；锁定记录中的旧副本仅存档
         packs = [f"{p['pack']} {p['version']}" for p in mt["prechecks"]["setup"]["packs"]]
         cats = sorted({d.get("category") for d in spec.get("data_needs") or []} | {"price_volume", "benchmark"})
         for m in sub["markets"]:

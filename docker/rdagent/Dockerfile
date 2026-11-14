@@ -44,7 +44,7 @@ ENV CONDA_DEFAULT_ENV=rdagent \
 
 ARG RDAGENT_VERSION
 RUN ok=0; for i in $(seq 1 12); do echo "clone attempt $i"; rm -rf /opt/rdagent-src; if git clone --depth 1 --branch ${RDAGENT_VERSION} https://github.com/microsoft/RD-Agent.git /opt/rdagent-src; then ok=1; break; fi; sleep 25; done; [ "$ok" = 1 ]
-RUN pip install --no-cache-dir -e /opt/rdagent-src tables longport \
+RUN pip install --no-cache-dir -e /opt/rdagent-src tables longport yfinance exchange_calendars \
     && echo ${RDAGENT_VERSION} > /opt/rdagent-src/.factopia_version \
     && cp -a /opt/rdagent-src /opt/rdagent-src-image
 

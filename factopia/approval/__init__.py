@@ -30,6 +30,8 @@ from pathlib import Path
 
 import yaml
 
+from factopia import lang
+
 RUNTIME = Path(os.environ.get("FACTOPIA_RUNTIME", "/workspace/runtime"))
 CONFIGS = Path(os.environ.get("FACTOPIA_CONFIGS_DIR", "/workspace/configs"))
 DIR = RUNTIME / "approvals"
@@ -329,15 +331,17 @@ def labels(s: dict) -> dict:
         t = (per_t.get(m) or {}).get("t_aligned")
         if t is not None and thr / 2 < t <= thr:
             tags.append("需调整参数")
-            why.append(f"t 值 {t:.2f} 介于迁移门槛的一半与门槛（{thr}）之间")
+            why.append(lang.t("t 值 {t} 介于迁移门槛的一半与门槛（{thr}）之间", t=f"{t:.2f}", thr=thr))
         pack = yaml.safe_load((d / f"{m}.yaml").read_text(encoding="utf-8")) if (d / f"{m}.yaml").exists() else {}
         comp = f"{MARKET_ZH[m]}合规"
         exc = [v["rule"] for k, v in s.get("rule_decisions", {}).items() if k.startswith(comp + "|") and v["action"] == "exception"]
         cond = [c["note"] for c in s.get("conditions") or [] if c["role"] == comp]
         if (pack.get("status") or "") != "已确认" or exc or cond:
             tags.append("待合规确认")
-            why += ([f"规则包 {pack.get('version', '')} 状态：{pack.get('status')}"] if (pack.get("status") or "") != "已确认" else []) \
-                + ([f"合规例外：{'、'.join(exc)}"] if exc else []) + ([f"合规附加条件：{'；'.join(cond)}"] if cond else [])
+            why += ([lang.t("规则包 {version} 状态：{status}", version=pack.get('version', ''),
+                            status=lang.t(pack.get('status') or ''))] if (pack.get("status") or "") != "已确认" else []) \
+                + ([lang.t("合规例外：{rules}", rules='、'.join(exc))] if exc else []) \
+                + ([lang.t("合规附加条件：{conditions}", conditions='；'.join(cond))] if cond else [])
         prod.append(m)
         out[m] = {"label": "适用" + ("（" + "、".join(f"{MARKET_ZH[m]}市场{x}" for x in tags) + "）" if tags else ""),
                   "tags": tags, "reasons": why}

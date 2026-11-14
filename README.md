@@ -4,6 +4,7 @@ AI 驱动的跨境量化股票策略研究平台（香港 / 英国 / 法国）�
 
 - 需求规格：[docs/Factopia-最小POC-Spec.md](docs/Factopia-最小POC-Spec.md)
 - 全局设计：[docs/Factopia-全局设计与最小POC.md](docs/Factopia-全局设计与最小POC.md)（开发环境见第 7 节）
+- 模拟盘规格：[docs/Factopia-模拟盘Spec.md](docs/Factopia-模拟盘Spec.md)（信号接入与两种撮合模式的语义）
 
 ## 快速开始
 
@@ -55,7 +56,7 @@ RDAGENT_UI_MARKET=hk docker compose -f docker-compose.yml -f compose.local.yml -
 # 查看命名卷中的文件
 docker compose run --rm rdagent ls /workspace/runtime
 
-# 模拟盘：每日推进（结算挂单 → 重算信号 → 月度调仓 → 出报告），加参数 report 只重算报告
+# 模拟盘：每日推进（结算挂单 → 重算信号 → 月度调仓 → 出报告），加参数 report 只重算报告（详见下文「模拟盘」一节）
 docker compose -f docker-compose.yml -f compose.local.yml exec runner python -m factopia.paper
 # 长桥模拟盘需在 .env 填 LONGPORT_APP_KEY / LONGPORT_APP_SECRET / LONGPORT_ACCESS_TOKEN（港股走长桥，UK/FR 自动影子撮合）
 ```
@@ -94,6 +95,55 @@ $DC run --rm app python -m factopia.export.alpha158
 
 **部署到云服务器：** `web` 与 `api` 镜像可独立部署（`--profile platform`）；`runner`、`exporter` 需要与 `dind` 同机，并使用挂载的源码（`compose.local.yml`），打包进镜像是后续工作。
 默认只监听本机；对外开放前**必须**在前面加 HTTPS 反向代理与登录（目前接口没有身份验证），再在 `.env` 中设置 `FACTOPIA_WEB_BIND=0.0.0.0`、`FACTOPIA_WEB_PORT`。
+
+## 模拟盘（信号接入与撮合）
+
+获批信号接入模拟盘后逐日推进：结算挂单 → 重算信号（与监控同一口径）→ 月度调仓 → 估值与报告。报告写入 `runtime/signals/<signal_id>/paper.json`，页面「信号目录」的模拟盘面板读取同一文件，含组合视图：建仓信息、当前持仓（数量 / 平均成本 / 现价 / 市值 / 持股比例 / 浮动盈亏）与个股贡献（已实现 + 浮动盈亏 − 交易成本）；运行建议经"模拟盘反馈"回流线索池。完整需求语义见 [docs/Factopia-模拟盘Spec.md](docs/Factopia-模拟盘Spec.md)。
+
+### 两种撮合模式（接入时固化，运行期不可改）
+
+| 模式 | 判定条件 | 撮合语义 | 适用 |
+|---|---|---|---|
+| 影子撮合（默认） | 未配置长桥，或信号非港股 | 截面日 T 收盘后决策挂单，T+1 起以开盘价逐日成交（开盘缺失用收盘价兜底），按规则包成本扣减现金，允许碎股 | 全部市场，无需账户 |
+| 长桥 LongPort | `.env` 中 `LONGPORT_APP_KEY` / `LONGPORT_APP_SECRET` / `LONGPORT_ACCESS_TOKEN` 全部非空，且信号为港股 | 券商市价单（当日有效），数量按券商每手股数向下取整；限流（429002）按提示等待重试、连接错误短暂重试；持仓与现金按成交回报本地记账，券商查询留作对账 | 仅港股 |
+
+两种模式可在同一进程内共存：模式在接入时写入 `runtime/paper/<signal_id>/enrolled.json`，之后按该文件的 `mode` 推进，不随环境变量变化。
+
+### 接入做法
+
+1. **页面**：「信号目录」→ 信号详情的模拟盘面板：接入 / 重置（重复接入 = 清空旧状态从头开始）/ 停止 / 手动推进。
+2. **接口**（接入与推进以任务形式由 runner 执行）：
+
+   | 端点 | 作用 |
+   |---|---|
+   | `POST /api/signals/{signal_id}/paper` | 接入 / 重置；body 可带 `capital`（默认 `FACTOPIA_PAPER_CAPITAL`，100 万） |
+   | `POST /api/signals/{signal_id}/paper/stop` | 停用：长桥在途挂单撤销、本地挂单留痕取消，历史保留 |
+   | `POST /api/signals/{signal_id}/paper/advance` | 手动推进一轮（定时调度之外的补充） |
+   | `POST /api/research/{id}/versions/{v}/paper-demo` | 研究线结果一键接入演示线（获批市场生成信号并接入） |
+
+3. **命令行**：
+
+   ```bash
+   # 全部接入中的信号各推进一轮（加参数 report 只重算报告）
+   docker compose -f docker-compose.yml -f compose.local.yml exec runner python -m factopia.paper
+   ```
+
+   例外做法：需要把某个港股信号强制接入为影子模式（例如长桥账户额度不足）时，在 runner 容器内用脚本先清空 `LONGPORT_*` 环境变量再调用 `engine.enroll(signal_id)`，模式即固化为 shadow。
+
+### 推进、调仓与数据依赖
+
+- runner 每日自动排队一轮推进：`FACTOPIA_PAPER_ADVANCE_UTC_HOUR`（默认 UTC 9 = 港股 17:00 收盘后），每信号每 UTC 日最多自动排一个任务；
+- runner 每日自动推进行情：`FACTOPIA_DATA_UPDATE_UTC_HOUR`（默认 UTC 19 = 北京 03:00，三市场前一交易日数据齐备后）后台执行 `download → standardize`，当日只跑一次（成败都记 `runtime/data/.daily_update`，失败当日不再重试、次日自动再试）；推进时刻须晚于数据更新时刻；
+- 每轮幂等：行情没有新日期时只结算挂单并重算报告，不重复调仓；
+- 月度调仓：每月首个有新数据的交易日，取最新截面前 20% 等权（与监控口径一致）；与当前持仓差额小于 5%×目标市值时跳过该笔；
+- 影子撮合的成交、报告估值都依赖标准化行情推进到新日期——自动更新之外也可手动补跑（`docker compose -f docker-compose.yml -f compose.local.yml run --rm app python -m factopia.data.download` 与 `.../standardize`），不更新则挂单一直挂到有新数据为止；
+- 长桥挂单超过 7 个自然日未成交自动撤销；下月调仓时未成交的旧挂单按剩余持仓 / 可用现金封顶缩放。
+
+### 已知限制
+
+- 长桥通道使用共享模拟账户：HKD 购买力（现金 + 融资额度）不足时新买单会被券商以 `Insufficient Credit Limit` 拒绝——被拒的信号可按上文做法切回影子撮合；
+- 接入 / 重置必须在 runner 容器内执行（root）：API 进程（uid 10001）无法删除 runner 写过的模拟盘目录；
+- 推进时刻默认在收盘后；要改到交易时段内推进，调整 `FACTOPIA_PAPER_ADVANCE_UTC_HOUR`。
 
 ## 架构
 

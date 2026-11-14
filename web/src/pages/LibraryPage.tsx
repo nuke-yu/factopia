@@ -15,6 +15,8 @@ const SOURCES: { value: Src; label: string }[] = [
 ];
 const KIND_TONE = { factor: "accent", research: "good", field: "muted", filing: "warn" } as const;
 const EXAMPLES = ["波动率调整后的动量", "management risk disclosure", "risque de dépréciation", "成交量 换手"];
+// 迁移标签为冻结数据：「地区特定(HK) / 地区特定（HK、UK）」市场代码为拉丁字母，前缀过词典、括号部分原样
+const fmtLabel = (s: string) => (s.startsWith("地区特定") ? t("地区特定") + s.slice(4) : t(s));
 
 function tCell(v: number | null | undefined) {
   if (v == null) return <span className="text-faint">—</span>;
@@ -48,7 +50,7 @@ function Search() {
       {res && (
         <div className="mt-4 flex flex-col gap-3">
           <div className="text-xs text-muted">
-            {res.method}{t(" · 检索范围：")}{joinList(Object.entries(res.corpus).map(([k, v]) => `${({ factor: t("因子"), research: t("研究"), field: t("字段"), filing: t("公告") } as Record<string, string>)[k] ?? k} ${v}`))}
+            {t(res.method)}{t(" · 检索范围：")}{joinList(Object.entries(res.corpus).map(([k, v]) => `${({ factor: t("因子"), research: t("研究"), field: t("字段"), filing: t("公告") } as Record<string, string>)[k] ?? k} ${v}`))}
             {res.expansion.method === "llm" && <div className="mt-1">{t("改写：")}{(["zh", "en", "fr"] as const).map((l) => (res.expansion.terms[l] ?? []).join(" / ")).filter(Boolean).join(" ｜ ")}</div>}
           </div>
           {res.results.length === 0 ? <p className="text-sm text-muted">{t("没有找到相关内容。")}</p> : (
@@ -58,12 +60,12 @@ function Search() {
                 if (!rs.length) return null;
                 return (
                   <div key={k}>
-                    <div className="label mb-1">{rs[0].kind_zh}</div>
+                    <div className="label mb-1">{t(rs[0].kind_zh)}</div>
                     <ul className="flex flex-col divide-y divide-line">
                       {rs.map((r) => (
                         <li key={r.id} className="py-2 flex flex-col gap-0.5">
                           <div className="flex flex-wrap items-center gap-2">
-                            <Badge tone={KIND_TONE[r.kind]}>{r.kind_zh}</Badge>
+                            <Badge tone={KIND_TONE[r.kind]}>{t(r.kind_zh)}</Badge>
                             {r.kind === "research"
                               ? <Link className="text-accent text-sm" to="/projects" title={tf("研究项目 {i}", { i: r.ref })}>{r.title}</Link>
                               : <span className="text-sm">{r.title}</span>}
@@ -100,10 +102,10 @@ export default function LibraryPage() {
           <div className="label">{t("因子库")}</div>
           <h1 className="font-display text-xl font-semibold">{t("内部因子库与知识检索")}</h1>
         </div>
-        <span className="text-sm text-muted">{Object.entries(data.summary.by_source).map(([k, v]) => `${k} ${v}`).join(" · ")}</span>
+        <span className="text-sm text-muted">{Object.entries(data.summary.by_source).map(([k, v]) => `${t(k)} ${v}`).join(" · ")}</span>
       </div>
       <Search />
-      <Panel eyebrow={tf("共 {n} 个 · 专有因子库接入：{d}", { n: data.summary.total, d: data.summary.proprietary_dir })} title={t("因子库")}>
+      <Panel eyebrow={tf("共 {n} 个 · 专有因子库接入：{d}", { n: data.summary.total, d: t(data.summary.proprietary_dir) })} title={t("因子库")}>
         <div className="flex flex-wrap items-center gap-3 mb-3">
           <Seg label={t("来源")} value={src} options={SOURCES} onChange={setSrc} />
           <input id="lf" aria-label={t("筛选因子")} className="field max-w-xs" placeholder={t("按名称、因子组或说明筛选")} value={filter} onChange={(e) => setFilter(e.target.value)} />
@@ -122,21 +124,21 @@ export default function LibraryPage() {
               {items.map((i) => (
                 <tr key={i.id} className="border-t border-line align-top">
                   <td className="py-1 pr-2 num whitespace-nowrap">{i.name}</td>
-                  <td className="pr-2 whitespace-nowrap"><Badge tone={i.source === "approved" ? (i.approved_markets?.length ? "good" : "warn") : i.source === "proprietary" ? "accent" : "muted"}>{i.status}</Badge>
+                  <td className="pr-2 whitespace-nowrap"><Badge tone={i.source === "approved" ? (i.approved_markets?.length ? "good" : "warn") : i.source === "proprietary" ? "accent" : "muted"}>{t(i.status)}</Badge>
                     {i.source === "approved" && <div className="mt-0.5">
                       {i.approved_markets?.length ? <span className="text-good">{t("获批：")}{joinList(i.approved_markets.map((m) => MARKET_LABEL[m]))}</span> : null}
                       {i.unapproved_markets?.length ? <span className="text-warn">{i.approved_markets?.length ? t("；") : ""}{t("未获批：")}{joinList(i.unapproved_markets.map((m) => MARKET_LABEL[m]))}</span> : null}
                     </div>}
                     <div className="text-faint mt-0.5">{t(i.group ?? "")}</div></td>
                   <td className="pr-2 min-w-[16rem]">{t(i.description ?? "")}
-                    {i.source === "approved" && <div className="text-faint mt-0.5">{i.period_note}</div>}</td>
+                    {i.source === "approved" && i.period_note && <div className="text-faint mt-0.5">{t(i.period_note)}</div>}</td>
                   {visibleMarkets().map((m) => {
                     const x = i.markets[m];
                     return <td key={m} className="pr-2 text-right num whitespace-nowrap">{tCell(x?.t)}
                       {i.source === "approved" && x && !x.approved && <div className="text-warn">{t("未获批")}</div>}
-                      {x?.state && <div className="text-faint">{x.state}</div>}</td>;
+                      {x?.state && <div className="text-faint">{t(x.state)}</div>}</td>;
                   })}
-                  <td className="pr-2 whitespace-nowrap">{i.label ?? "—"}</td>
+                  <td className="pr-2 whitespace-nowrap">{i.label ? fmtLabel(i.label) : "—"}</td>
                 </tr>
               ))}
             </tbody>
