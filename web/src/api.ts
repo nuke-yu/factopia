@@ -504,6 +504,15 @@ export type PaperResult = {
     monthly: Record<string, number> };
   trades: { fills: number; buy_value: number; sell_value: number; costs: number };
   positions: { count: number; cash: number; value: number; pending: number };
+  portfolio?: {
+    created: { date: string; symbols: number; buy_value: number } | null;
+    rebalances: number;
+    holdings: { symbol: string; name?: string; qty: number; avg_cost: number | null; price: number | null; value: number;
+      weight: number | null; pnl: number | null; pnl_pct: number | null }[];
+    contributions: { symbol: string; name?: string; realized: number | null; unrealized: number | null; cost: number | null;
+      contribution: number | null; contribution_pct: number | null }[];
+    note: string;
+  };
   alerts: { kind: string; level: string; title: string; detail: string }[];
   suggestion: string; suggestion_zh: string; thresholds: Record<string, number>; note: string;
 };
@@ -583,7 +592,7 @@ const post = <T,>(path: string, body: unknown) =>
   request<T>(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
 // ---------------------------------------------------------------- 研究线索池（Spec 第 17 章）
-export type IdeaChannel = "hypothesis" | "paper" | "experience" | "feedback" | "monitor" | "portfolio" | "approval";
+export type IdeaChannel = "hypothesis" | "paper" | "experience" | "feedback" | "monitor" | "paper_trading" | "portfolio" | "approval";
 export type IdeaStatus = "new" | "converted" | "duplicate" | "dismissed";
 export type IdeaFactor = { key: string; name: string; description_zh: string; formula: string; logic_zh: string; data_needs: string[];
   availability: { ok: boolean; missing: string[]; needs_zh: string[] }; cites: number[]; quotes: { p: number; text: string }[] };

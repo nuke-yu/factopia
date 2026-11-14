@@ -112,6 +112,35 @@ function PaperNavChart({ p }: { p: PaperResult }) {
   return <EChart option={option} notMerge className="h-[280px]" />;
 }
 
+/** 个股贡献横向条形图：正贡献用主题色、负贡献用警示色（贡献 = 已实现 + 浮动盈亏 − 该股交易成本）。 */
+function ContributionChart({ rows }: { rows: { symbol: string; name?: string; contribution: number | null }[] }) {
+  const theme = useThemeVersion();
+  const option = useMemo(() => {
+    const muted = cssVar("--muted"), line = cssVar("--line"), accent = cssVar("--accent"), bad = cssVar("--bad");
+    const data = rows.slice(0, 16);                     // 后端已按 |贡献| 降序
+    const lbl = (r: { symbol: string; name?: string }) =>
+      r.name ? `${r.symbol} ${r.name.length > 14 ? r.name.slice(0, 14) + "…" : r.name}` : r.symbol;
+    const items = [...data].reverse();                 // 类目轴自下而上：最大在上
+    const syms = items.map(lbl);
+    const vals = items.map((r) => r.contribution ?? 0);
+    return {
+      animationDuration: 600, grid: { left: 8, right: 16, top: 8, bottom: 24, containLabel: true },
+      tooltip: { trigger: "axis", axisPointer: { type: "shadow" },
+        formatter: (ps: { dataIndex: number }[]) => {
+          const r = items[ps[0].dataIndex];
+          if (!r) return "";
+          const v = r.contribution ?? 0;
+          return `${r.name ? r.name + "<br/>" : ""}${r.symbol} · <b>${v.toLocaleString()}</b>`;
+        } },
+      xAxis: { type: "value", axisLabel: { color: muted }, splitLine: { lineStyle: { color: line, opacity: 0.35 } } },
+      yAxis: { type: "category", data: syms, axisLabel: { color: muted, fontSize: 10 }, axisLine: { lineStyle: { color: line } } },
+      series: [{ type: "bar", data: vals, barWidth: "62%",
+        itemStyle: { color: (x: { value: number }) => (x.value >= 0 ? accent : bad) } }],
+    };
+  }, [rows, theme]);
+  return <EChart option={option} notMerge className="h-[340px]" />;
+}
+
 /** 模拟盘（实盘前验证）：接入/停用操作 + 净值曲线、持仓、成交流水、rank IC、预警与建议（报告来自 paper.json，每轮推进后更新）。 */
 function PaperPanel({ sid, e, p, enrolled, job, reload, onChanged }: {
   sid: string; e: SignalEntry; p: PaperResult | null;
@@ -196,6 +225,58 @@ function PaperPanel({ sid, e, p, enrolled, job, reload, onChanged }: {
               <p className="text-xs mt-3"><Badge tone={SUG_TONE[p.suggestion]}>{p.suggestion === "pause" ? t("建议暂停") : p.suggestion === "watch" ? t("加强观察") : t("正常")}</Badge></p>
             </Panel>
           </div>
+          {p.portfolio && (p.portfolio.holdings.length > 0 || p.portfolio.contributions.length > 0) && (
+            <Panel className="mt-4"
+              eyebrow={p.portfolio.created
+                ? tf("建仓 {date} · {n} 只 · 买入 {v} · 累计下单 {r} 轮（含建仓）", {
+                    date: p.portfolio.created.date, n: p.portfolio.created.symbols,
+                    v: `${(p.portfolio.created.buy_value / 1e6).toFixed(2)}M`, r: p.portfolio.rebalances })
+                : t("尚未建仓：挂单等待成交，成交后此处展示组合")}
+              title={t("组合（持股比例与个股贡献）")}>
+              <div className="grid gap-5 xl:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]">
+                <div className="overflow-x-auto">
+                  <div className="label mb-1">{t("当前持仓（按市值降序）")}</div>
+                  <table className="w-full text-sm num">
+                    <thead className="label text-left"><tr>
+                      <th className="py-1 pr-3">{t("股票")}</th><th className="pr-3">{t("数量")}</th>
+                      <th className="pr-3">{t("平均成本")}</th><th className="pr-3">{t("现价")}</th>
+                      <th className="pr-3">{t("市值")}</th><th className="pr-3">{t("权重")}</th>
+                      <th>{t("浮动盈亏")}</th>
+                    </tr></thead>
+                    <tbody>
+                      {p.portfolio.holdings.map((h) => {
+                        const maxW = Math.max(1e-9, ...p.portfolio!.holdings.map((x) => x.weight ?? 0));
+                        return (
+                          <tr key={h.symbol} className="border-t border-line">
+                            <td className="py-1.5 pr-3 font-sans">
+                              <div>{h.symbol}</div>
+                              {h.name && <div className="text-xs text-faint">{h.name}</div>}
+                            </td>
+                            <td className="pr-3">{h.qty != null && h.qty % 1 !== 0 ? fix(h.qty, 2) : fix(h.qty, 0)}</td>
+                            <td className="pr-3">{fix(h.avg_cost, 2)}</td>
+                            <td className="pr-3">{fix(h.price, 2)}</td>
+                            <td className="pr-3">{fix(h.value / 1e3, 1)}K</td>
+                            <td className="pr-3">
+                              <div className="flex items-center gap-2 justify-end">
+                                <span>{pct(h.weight, 1)}</span>
+                                <span className="inline-block h-1.5 rounded" style={{ width: `${Math.max(2, (h.weight ?? 0) / maxW * 72)}px`, background: "var(--accent)" }} />
+                              </div>
+                            </td>
+                            <td className={h.pnl_pct == null ? "" : h.pnl_pct >= 0 ? "text-good" : "text-bad"}>{signed(h.pnl_pct, 1)}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                  <p className="text-xs text-faint mt-2">{p.portfolio.note}</p>
+                </div>
+                <div>
+                  <div className="label mb-1">{t("个股贡献（已实现 + 浮动盈亏 − 交易成本，前 16）")}</div>
+                  <ContributionChart rows={p.portfolio.contributions} />
+                </div>
+              </div>
+            </Panel>
+          )}
           <p className="text-xs text-faint mt-3">{p.note}</p>
         </>
       )}
@@ -248,10 +329,10 @@ function Detail({ sid, onChanged }: { sid: string; onChanged: () => void }) {
         actions={<Badge tone={STATE_TONE[e.state]}>{t(e.state_zh)}</Badge>}>
         <div className="grid gap-x-6 gap-y-1.5 text-sm sm:grid-cols-2">
           {e.labels.regional && <div className="sm:col-span-2"><span className="label mr-2">{t("地区适用性")}</span>
-            <Badge tone={e.labels.regional.tags.length ? "warn" : "good"}>{e.labels.applicability}</Badge>
-            <span className="ml-2 text-muted">{e.labels.regional.display}</span>
-            {e.labels.regional.reasons.length > 0 && <div className="text-xs text-faint mt-0.5">{e.labels.regional.reasons.join("；")}</div>}</div>}
-          <div><span className="label mr-2">{t("授权类型")}</span>{e.labels.mandate}</div>
+            <Badge tone={e.labels.regional.tags.length ? "warn" : "good"}>{t(e.labels.applicability ?? "")}</Badge>
+            <span className="ml-2 text-muted">{e.labels.regional.display.split("；").map((x) => t(x)).join(t("；"))}</span>
+            {e.labels.regional.reasons.length > 0 && <div className="text-xs text-faint mt-0.5">{e.labels.regional.reasons.map((x) => t(x)).join(t("；"))}</div>}</div>}
+          <div><span className="label mr-2">{t("授权类型")}</span>{t(e.labels.mandate)}</div>
           <div><span className="label mr-2">{t("适用语言")}</span>{joinList(e.labels.languages.map((x) => t(x)))}</div>
           <div><span className="label mr-2">{t("数据范围")}</span>{t(e.labels.data_scope.universe)} · {joinList(e.labels.data_scope.categories)} · {t("快照")} <span className="num text-xs">{e.labels.data_scope.snapshot}…</span></div>
           <div><span className="label mr-2">{t("规则版本")}</span><span className="num text-xs">{e.labels.rule_versions.join(" · ")}</span></div>
@@ -291,14 +372,14 @@ function Detail({ sid, onChanged }: { sid: string; onChanged: () => void }) {
             <Stat label={t("数据漂移 PSI")} value={fix(m.data_drift.psi, 3)} sub={tf("上线期因子缺失 {v}", { v: pct(m.data_drift.missing_live, 0) })} />
           </div>
           <div className="grid gap-5 xl:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]">
-            <Panel eyebrow={m.note} title={t("监控曲线")}><Rolling m={m} /></Panel>
+            <Panel eyebrow={t(m.note)} title={t("监控曲线")}><Rolling m={m} /></Panel>
             <Panel eyebrow={t("统计与经济预警同时成立才建议暂停；只对本市场")} title={tf("预警（{n}）", { n: m.alerts.length })}>
               {m.alerts.length === 0 ? <p className="text-sm text-muted">{t("没有预警。")}</p> : (
                 <ul className="flex flex-col gap-2 text-sm">
                   {m.alerts.map((a) => (
                     <li key={a.title} className={`border-l-2 pl-3 ${a.level === "alert" ? "border-l-bad" : "border-l-warn"}`}>
                       <div className="flex items-center gap-2"><Badge tone={a.level === "alert" ? "bad" : "warn"}>{a.level === "alert" ? t("预警") : t("观察")}</Badge>
-                        <span className="font-medium">{a.title}</span></div>
+                        <span className="font-medium">{t(a.title)}</span></div>
                       <div className="text-xs text-muted mt-0.5">{a.detail}</div>
                     </li>
                   ))}
@@ -384,7 +465,7 @@ export default function SignalsPage() {
               {Object.entries(groups).map(([k, xs]) => (
                 <div key={k}>
                   <div className="text-xs text-faint mb-1 truncate">{k} · {xs[0].title}{xs[0].base_currency ? ` · ${xs[0].base_currency}` : ""}</div>
-                  {xs[0].labels.regional && <div className="text-xs mb-1"><Badge tone="accent">{xs[0].labels.regional.headline}</Badge></div>}
+                  {xs[0].labels.regional && <div className="text-xs mb-1"><Badge tone="accent">{t(xs[0].labels.regional.headline)}</Badge></div>}
                   <ul className="flex flex-col">
                     {xs.map((x) => (
                       <li key={x.signal_id}>

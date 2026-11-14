@@ -20,7 +20,7 @@ const BODY_LABEL: Record<string, [string, string]> = {
   feedback: [t("反馈内容"), t("例：客户团队反映，跨境客户更关心信号在市场急跌时的表现")],
 };
 const STATUS_TONE = { new: "accent", converted: "good", duplicate: "muted", dismissed: "muted" } as const;
-const AUTO = new Set<IdeaChannel>(["monitor", "portfolio", "approval"]);
+const AUTO = new Set<IdeaChannel>(["monitor", "portfolio", "approval", "paper_trading"]);
 const ACTOR_KEY = "factopia-idea-actor";
 
 function readActor() { try { return localStorage.getItem(ACTOR_KEY) ?? ""; } catch { return ""; } }
@@ -134,7 +134,7 @@ function Submit({ meta, actor, setActor, onCreated, onSuggestion }: { meta: Idea
           <input id="idea-period" className="field mt-1" value={x("period")} onChange={(e) => setX("period", e.target.value)} placeholder={t("例：2018–2021 年观察")} /></label>}
         {ch === "feedback" && <label className="text-sm">{t("反馈来源")}
           <select id="idea-fbrole" className="field mt-1" value={x("feedback_role") || meta.feedback_roles[0]} onChange={(e) => setX("feedback_role", e.target.value)}>
-            {meta.feedback_roles.map((r) => <option key={r}>{r}</option>)}</select></label>}
+            {meta.feedback_roles.map((r) => <option key={r}>{t(r)}</option>)}</select></label>}
         {ch === "paper" && (
           <div className="grid gap-3 sm:grid-cols-2 border border-line rounded p-3">
             <label className="text-sm sm:col-span-2">{t("文件（PDF / TXT / Markdown，≤ 20 MB；也可只粘贴摘要）")}
@@ -144,7 +144,7 @@ function Submit({ meta, actor, setActor, onCreated, onSuggestion }: { meta: Idea
             <label className="text-sm">{t("许可类型（必填）")}
               <select id="idea-licence" className="field mt-1" value={x("licence")} onChange={(e) => setX("licence", e.target.value)}>
                 <option value="">{t("请选择")}</option>
-                {Object.entries(meta.licences).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></label>
+                {Object.entries(meta.licences).map(([k, v]) => <option key={k} value={k}>{t(v)}</option>)}</select></label>
             <label className="text-sm sm:col-span-2">{t("许可说明")}{x("licence") && x("licence") !== "internal" ? t("（必填）") : t("（可选）")}
               <input id="idea-licnote" className="field mt-1" value={x("licence_note")} onChange={(e) => setX("licence_note", e.target.value)} placeholder={t("公开许可写许可名称；已购买授权写合同或订阅")} /></label>
             <label className="text-sm">{t("发表日期")}
@@ -335,13 +335,13 @@ function Detail({ id, actor, onChanged }: { id: string; actor: string; onChanged
   const open = d.status === "new" || d.status === "converted";
   return (
     <Panel eyebrow={tf("{id} · {ch} · {by}{role} · {at} UTC", { id: d.id, ch: t(d.channel_zh), by: d.submitted_by, role: d.role ? tf("（{role}）", { role: t(d.role) }) : "", at: d.created_at.slice(0, 16).replace("T", " ") })} title={d.title}
-      actions={<Badge tone={STATUS_TONE[d.status]}>{({ new: t("待处理"), converted: t("已转立项"), duplicate: t("重复"), dismissed: t("不跟进") } as Record<string, string>)[d.status] ?? d.status_zh[d.status]}</Badge>}>
+      actions={<Badge tone={STATUS_TONE[d.status]}>{({ new: t("待处理"), converted: t("已转立项"), duplicate: t("重复"), dismissed: t("不跟进") } as Record<string, string>)[d.status] ?? t(d.status_zh[d.status])}</Badge>}>
       <div className="grid gap-5 xl:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]">
         <div className="flex flex-col gap-4 min-w-0">
           {d.body && <div><div className="label mb-1">{tf("原文（{lang}，不翻译、不改写）", { lang: ({ zh: t("中文"), en: t("英文"), fr: t("法文") })[d.language] })}</div>
             <p className="text-sm whitespace-pre-wrap leading-relaxed">{d.body}</p></div>}
           {Object.keys(d.fields).length > 0 && <div className="text-sm text-muted">{Object.entries(d.fields).map(([k, v]) =>
-            tf("{k}：{v}", { k: ({ direction: t("方向"), period: t("经验时间段"), feedback_role: t("反馈来源") } as Record<string, string>)[k] ?? k, v })).join("；")}</div>}
+            tf("{k}：{v}", { k: ({ direction: t("方向"), period: t("经验时间段"), feedback_role: t("反馈来源") } as Record<string, string>)[k] ?? k, v: t(v) })).join("；")}</div>}
           {d.source_ref && <div className="text-sm">{t("来源：")}<SourceLink ref_={d.source_ref} /></div>}
           {AUTO.has(d.channel) && (
             <div className="border border-accent/40 bg-accent/5 rounded p-3 text-sm flex flex-col gap-1">
@@ -368,7 +368,7 @@ function Detail({ id, actor, onChanged }: { id: string; actor: string; onChanged
               <div className="label">{t("文档")}</div>
               <div>{d.document.name ?? t("粘贴的文字")}{d.document.pages != null && tf(" · {n} 页", { n: d.document.pages })} · {tf("{n} 段", { n: d.document.paragraphs })}
                 {d.document.sha256 && <span className="num text-xs text-faint"> · sha256 {d.document.sha256.slice(0, 16)}…</span>}</div>
-              <div>{tf("来源：{s}", { s: d.document.source })} · {tf("许可：{l}", { l: d.document.licence_zh })}{d.document.licence_note && tf("（{n}）", { n: d.document.licence_note })}</div>
+              <div>{tf("来源：{s}", { s: d.document.source })} · {tf("许可：{l}", { l: t(d.document.licence_zh) })}{d.document.licence_note && tf("（{n}）", { n: d.document.licence_note })}</div>
               <div className="text-muted">{tf("发表 {p}", { p: d.document.published ?? t("未知") })} · {tf("样本期 {s} 至 {e}", { s: d.document.sample_start ?? "?", e: d.document.sample_end ?? "?" })}
                 {d.document.ai_filled?.length ? <span className="text-faint">{tf("（{n} 项由 AI 从原文抽取）", { n: d.document.ai_filled.length })}</span> : null}</div>
             </div>
@@ -413,7 +413,7 @@ function Detail({ id, actor, onChanged }: { id: string; actor: string; onChanged
             <div className="label mb-1">{t("相似研究与线索（只作提示）")}</div>
             {!d.similar || (d.similar.research.length === 0 && d.similar.ideas.length === 0) ? <p className="text-sm text-muted">{t("没有发现相似内容。")}</p> : (
               <ul className="text-sm flex flex-col gap-1">
-                {d.similar.research.map((r) => <li key={r.ref}><Badge tone="muted">{r.kind_zh}</Badge> <span>{r.title}</span> <span className="num text-xs text-faint">{tf("得分 {s}", { s: r.score })}</span></li>)}
+                {d.similar.research.map((r) => <li key={r.ref}><Badge tone="muted">{t(r.kind_zh)}</Badge> <span>{r.title}</span> <span className="num text-xs text-faint">{tf("得分 {s}", { s: r.score })}</span></li>)}
                 {d.similar.ideas.map((r) => <li key={r.id}><Badge tone="warn">{t("线索")}</Badge> <span>{r.title}</span> <span className="text-xs text-faint">{t(r.channel_zh)} · {tf("重合 {p}%", { p: Math.round(r.overlap * 100) })}</span></li>)}
               </ul>
             )}
@@ -479,7 +479,7 @@ export default function IdeasPage() {
           {Object.entries(meta.channels).map(([k, v]) => (
             <button key={k} type="button" onClick={() => set("channel", ch === k ? "" : k)}
               className={`flex items-center gap-1.5 ${ch === k ? "text-text" : "text-muted hover:text-text"}`}>
-              <Badge tone={AUTO.has(k as IdeaChannel) ? "warn" : "accent"}>{v}</Badge><span className="num">{meta.counts.channel[k] ?? 0}</span>
+              <Badge tone={AUTO.has(k as IdeaChannel) ? "warn" : "accent"}>{t(v)}</Badge><span className="num">{meta.counts.channel[k] ?? 0}</span>
             </button>
           ))}
           {meta.synced > 0 && <span className="text-xs text-faint">{tf("本次自动回流新增 {n} 条", { n: meta.synced })}</span>}

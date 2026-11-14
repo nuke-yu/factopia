@@ -3,15 +3,20 @@
 - 启用条件：LONGPORT_APP_KEY / LONGPORT_APP_SECRET / LONGPORT_ACCESS_TOKEN 三个环境变量全部非空
   （缺任何一个都回退到影子撮合，系统无需账户即可跑通闭环）。仅支持港股。
 - 平台代码 4 位补零（"0005.HK"），长桥代码去前导零（"5.HK"）。
-- 下单：市价单（OrderType.MO）+ 当日有效（TimeInForceType.Day），数量按每手 100 股取整（向下）。
+- 下单：市价单（OrderType.MO）+ 当日有效（TimeInForceType.Day），数量按券商静态行情的每手股数
+  取整（向下，QuoteContext.static_info 查询失败回退每手 100 股）；触发限流时按提示等待后自动重试。
 - 持仓与现金查询（stock_positions / account_balance）保留作对账用；模拟盘账本按成交回报本地记账
   （共享的长桥模拟账户带预置持仓与多币种余额，整体覆盖会污染本地账本）。
 - 长桥 SDK 版本差异较大（属性名 quantity / qty、order 状态字符串不同），全部按防御式解析：
   先 today_orders 再 history_orders；状态字符串 lowercase 归并。
 """
 import os
+import re
+import time
 
 LOT = 100
+
+_RATE_LIMIT = re.compile(r"(429002|rate limit).*?retry after:?\s*(\d+)\s*s", re.IGNORECASE | re.DOTALL)
 
 
 class BrokerError(RuntimeError):
@@ -55,22 +60,58 @@ class LongPortBroker:
             self.ctx = TradeContext(cfg)
         except Exception as e:
             raise BrokerError(f"长桥交易通道初始化失败：{e}")
+        self._cfg = cfg
+        self._qctx = None
+        self._lots: dict[str, int] = {}
 
     # ---------------------------------------------------------------- 下单 / 撤单 / 查单
 
+    def lot_size(self, symbol: str) -> int:
+        """券商静态行情里的每手股数（QuoteContext.static_info）；查询失败回退 LOT。"""
+        key = to_broker_symbol(symbol)
+        if key in self._lots:
+            return self._lots[key]
+        lot = LOT
+        try:
+            if self._qctx is None:
+                from longport.openapi import QuoteContext
+                self._qctx = QuoteContext(self._cfg)
+            for info in self._qctx.static_info([key]) or []:
+                ls = getattr(info, "lot_size", None)
+                if ls and int(ls) > 0:
+                    lot = int(ls)
+                    break
+        except Exception:
+            pass
+        self._lots[key] = lot
+        return lot
+
     def submit(self, symbol: str, side: str, qty: float) -> str | None:
-        """市价单；按每手取整后数量为 0 时不下单（返回 None）。"""
+        """市价单；按券商每手股数取整后数量为 0 时不下单（返回 None）；限流时自动等待重试。"""
         from decimal import Decimal
         from longport.openapi import OrderSide, OrderType, TimeInForceType
-        n = int(qty // LOT) * LOT
+        lot = self.lot_size(symbol)
+        n = int(qty // lot) * lot
         if n <= 0:
             return None
-        try:
-            resp = self.ctx.submit_order(to_broker_symbol(symbol), OrderType.MO,
-                                         OrderSide.Buy if side == "buy" else OrderSide.Sell, Decimal(n), TimeInForceType.Day)
-        except Exception as e:
-            raise BrokerError(f"长桥下单失败 {symbol} {side} {n}：{e}")
-        return str(getattr(resp, "order_id", "") or "") or None
+        last_err = None
+        for attempt in range(3):
+            try:
+                resp = self.ctx.submit_order(to_broker_symbol(symbol), OrderType.MO,
+                                             OrderSide.Buy if side == "buy" else OrderSide.Sell, Decimal(n), TimeInForceType.Day)
+                return str(getattr(resp, "order_id", "") or "") or None
+            except Exception as e:
+                last_err = e
+                if attempt < 2:
+                    m = _RATE_LIMIT.search(str(e))
+                    if m:       # 限流：按券商提示等待后重试
+                        time.sleep(min(int(m.group(2)) + 1, 31))
+                        continue
+                    if "client error (Connect" in str(e) or "timed out" in str(e).lower():
+                        time.sleep(3)      # 代理/网络抖动：短暂等待后重试（连接未建立，无重复下单风险）
+                        continue
+                break
+        raise BrokerError(f"长桥下单失败 {symbol} {side} {n}：{last_err}")
 
     def check(self, order_id: str) -> dict:
         """查单结果：{"status": "filled"/"cancelled"/"pending", "filled_qty", "avg_price", "msg"}。"""
@@ -94,6 +135,9 @@ class LongPortBroker:
             avg_price = getattr(o, "avg_executed_price", None)
             if avg_price is None:
                 avg_price = getattr(o, "avg_price", None)
+            if avg_price is None:
+                # 部分 SDK 版本的 Order 对象只有 price 字段；市价单成交后即为成交均价
+                avg_price = getattr(o, "price", None)
             if any(k in st for k in ("cancel", "reject", "expire", "fail", "disused")):
                 out["status"] = "cancelled"
                 out["filled_qty"] = filled_qty

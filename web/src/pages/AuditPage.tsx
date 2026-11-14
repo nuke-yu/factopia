@@ -348,7 +348,7 @@ function EvidenceList({ result }: { result: DraftResult }) {
           <div className="font-medium">{t("内部知识检索（因子库、以往研究、字段口径）")}</div>
           <ul className="mt-1 flex flex-col gap-1 text-xs">
             {result.evidence.internal.map((x) => (
-              <li key={x.id}><Badge tone="muted">{x.kind_zh}</Badge> <span className="text-text">{x.title}</span>
+              <li key={x.id}><Badge tone="muted">{t(x.kind_zh)}</Badge> <span className="text-text">{x.title}</span>
                 <span className="text-faint">{tf(" · 得分 {s}", { s: x.score })}</span></li>
             ))}
           </ul>

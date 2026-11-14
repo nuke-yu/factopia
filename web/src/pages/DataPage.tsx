@@ -7,6 +7,8 @@ import { t, tf, joinList } from "../i18n";
 // 数据台（Spec 第 14.10 节；BR-13、16、17、18）：证券主数据与跨市场关联、公司行动、口径与规则、时间点一致性
 
 type Tab = "pit" | "securities" | "relations" | "actions" | "dictionary";
+// 公司行动明细为冻结数据：已知中文前缀（「每股 1.05」「比例 1.1」）过词典，数值与未知句原样
+const fmtDetail = (s: string) => (s.startsWith("每股 ") || s.startsWith("比例 ")) ? t(s.slice(0, 2)) + s.slice(2) : s;
 const VENUE: Record<string, string> = {
   HK: t("香港"), LN: t("伦敦"), FP: t("巴黎"), NA: t("阿姆斯特丹"), US: t("美国"), CG: t("上海"), CS: t("深圳"), SP: t("新加坡"), SE: t("瑞士"),
   BB: t("布鲁塞尔"), IM: t("米兰"), SM: t("马德里"), AT: t("澳大利亚"), JT: t("东京"),
@@ -17,7 +19,7 @@ function PitPanel() {
   if (loading) return <Loading what={t("时间点一致性")} />;
   if (error || !data) return <ErrorBox error={error ?? t("无数据")} />;
   return (
-    <Panel title={tf("时间点一致性：{l}", { l: data.label })} eyebrow={t("每个数据域的业务日期、正式发布时间、实际可获取时间")}>
+    <Panel title={tf("时间点一致性：{l}", { l: t(data.label) })} eyebrow={t("每个数据域的业务日期、正式发布时间、实际可获取时间")}>
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="label text-left">
@@ -27,20 +29,20 @@ function PitPanel() {
           <tbody>
             {data.domains.map((d) => (
               <tr key={d.key} className="border-t border-line align-top">
-                <td className="py-2 pr-3 whitespace-nowrap font-medium">{d.name}</td>
+                <td className="py-2 pr-3 whitespace-nowrap font-medium">{t(d.name)}</td>
                 <td className="pr-3">{d.used_in_backtest ? t("是") : <span className="text-faint">{t("否")}</span>}</td>
-                <td className="pr-3 text-muted">{d.business_date}</td>
-                <td className="pr-3 text-muted">{d.published_at}</td>
-                <td className="pr-3 text-muted">{d.available_at}</td>
+                <td className="pr-3 text-muted">{t(d.business_date)}</td>
+                <td className="pr-3 text-muted">{t(d.published_at)}</td>
+                <td className="pr-3 text-muted">{t(d.available_at)}</td>
                 <td className="pr-3">{d.status === "ok" ? <Badge tone="good">{t("一致")}</Badge> : <Badge tone="warn">{t("不一致")}</Badge>}</td>
-                <td className="text-xs text-muted max-w-[52ch]">{d.note}</td>
+                <td className="text-xs text-muted max-w-[52ch]">{t(d.note)}</td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
       <p className="text-xs text-faint mt-2">
-        {tf("股票池：{m}。 成分股起止日期在 configs/universe/membership/，取得数据商的历史成分股后按同一格式替换，Qlib 股票池随之按日生效。", { m: joinList(Object.entries(data.membership).map(([m, v]) => `${MARKET_LABEL[m as Market]} ${v}`)) })}
+        {tf("股票池：{m}。 成分股起止日期在 configs/universe/membership/，取得数据商的历史成分股后按同一格式替换，Qlib 股票池随之按日生效。", { m: joinList(Object.entries(data.membership).map(([m, v]) => `${MARKET_LABEL[m as Market]} ${t(v)}`)) })}
       </p>
     </Panel>
   );
@@ -194,8 +196,8 @@ function ActionsTab() {
                   <tr key={k} className="border-t border-line">
                     <td className="py-1.5 pr-3 num whitespace-nowrap">{x.date}</td>
                     <td className="pr-3 num" style={{ color: marketColor(x.market) }}>{x.symbol}</td>
-                    <td className="pr-3"><Badge tone={x.type === "suspension" ? "warn" : x.type === "split" ? "accent" : "muted"}>{x.type_zh}</Badge></td>
-                    <td className="pr-3 text-muted">{x.detail}</td>
+                    <td className="pr-3"><Badge tone={x.type === "suspension" ? "warn" : x.type === "split" ? "accent" : "muted"}>{t(x.type_zh)}</Badge></td>
+                    <td className="pr-3 text-muted">{fmtDetail(x.detail)}</td>
                     <td className="text-xs text-faint">{x.source}</td>
                   </tr>
                 ))}
@@ -310,7 +312,7 @@ function DictionaryTab() {
             <tbody>
               {groups.map((g) => (
                 <Fragment key={g}>
-                  <tr><td colSpan={6} className="pt-4 pb-1 label">{g}</td></tr>
+                  <tr><td colSpan={6} className="pt-4 pb-1 label">{t(g)}</td></tr>
                   {data.fields.fields.filter((f) => (f.group ?? t("其他")) === g).map((f) => (
                     <Fragment key={f.name}>
                       <tr className="border-t border-line align-top">
@@ -346,7 +348,7 @@ export default function DataPage() {
           <h1 className="font-display text-xl font-semibold">{t("参考数据与时间点一致性")}</h1>
         </div>
         <span className="text-sm text-muted">{t("发行人与证券 · 公司行动 · 口径与规则 · 三个时间")}</span>
-        {data.pit && <span className="ml-auto"><Badge tone={data.pit.point_in_time ? "good" : "warn"}>{data.pit.label}</Badge></span>}
+        {data.pit && <span className="ml-auto"><Badge tone={data.pit.point_in_time ? "good" : "warn"}>{t(data.pit.label)}</Badge></span>}
       </div>
       {m ? (
         <div className="panel p-4 grid gap-4 grid-cols-2 sm:grid-cols-3 lg:grid-cols-6">
