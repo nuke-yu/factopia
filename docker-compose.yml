@@ -13,7 +13,8 @@ services:
   # RD-Agent 回测镜像：只构建，不常驻。构建后需载入 dind：见 README
   qlib-runner:
     build:
-      context: docker/qlib
+      context: .
+      dockerfile: docker/qlib/Dockerfile
     image: factopia-qlib:dev
     profiles: ["build-only"]
 
