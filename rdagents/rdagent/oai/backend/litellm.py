@@ -44,6 +44,22 @@ class LiteLLMSettings(LLMSettings):
 LITELLM_SETTINGS = LiteLLMSettings()
 ACC_COST = 0.0
 
+# 凭据字段脱敏后再写日志，避免 API key 明文进入 console / trace 文件
+_SETTINGS_SECRET_FIELDS = (
+    "openai_api_key",
+    "chat_openai_api_key",
+    "embedding_openai_api_key",
+    "llama2_70b_endpoint_key",
+)
+
+
+def _masked_settings_repr() -> str:
+    dump = LITELLM_SETTINGS.model_dump()
+    for field in _SETTINGS_SECRET_FIELDS:
+        if dump.get(field):
+            dump[field] = "****"
+    return repr(dump)
+
 
 class LiteLLMAPIBackend(APIBackend):
     """LiteLLM implementation of APIBackend interface"""
@@ -52,8 +68,7 @@ class LiteLLMAPIBackend(APIBackend):
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         if not self.__class__._has_logged_settings:
-            logger.info(f"{LITELLM_SETTINGS}")
-            logger.log_object(LITELLM_SETTINGS.model_dump(), tag="LITELLM_SETTINGS")
+            logger.info(_masked_settings_repr())
             self.__class__._has_logged_settings = True
         super().__init__(*args, **kwargs)
 
