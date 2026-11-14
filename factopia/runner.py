@@ -45,12 +45,18 @@ def log(msg: str) -> None:
 
 
 def recover() -> None:
-    """运行器重启时，上次未结束的任务已随进程中断。"""
+    """运行器重启：普通任务标记中断；Agent 任务从检查点重新排队，waiting_children 保持。"""
     for job in store.list_jobs():
-        if job["state"] == "running":
-            job.update(state="failed", ended_at=store.now(), error="运行器重启，运行中断")
+        if job["state"] != "running":
+            continue
+        if job.get("kind") == "agent":
+            job.update(state="queued", error=None, ended_at=None, agent_state=job.get("agent_state"))
             store.write_job(job)
-            log(f"{job['job_id']}: 标记为中断")
+            log(f"{job['job_id']}: Agent 重新排队（检查点续跑）")
+            continue
+        job.update(state="failed", ended_at=store.now(), error="运行器重启，运行中断")
+        store.write_job(job)
+        log(f"{job['job_id']}: 标记为中断")
 
 
 def next_job(active: set[str] | None = None) -> dict | None:
@@ -65,6 +71,30 @@ def next_job(active: set[str] | None = None) -> dict | None:
             continue
         return job
     return None
+
+
+def resume_agents() -> None:
+    """等待子任务的 Agent：子任务结束且导出完成后重新入队；取消请求传给子任务。"""
+    if store.paused():
+        return
+    try:
+        from factopia.agents import children
+    except Exception:
+        return
+    for job in store.list_jobs():
+        if job.get("kind") != "agent" or job["state"] != "waiting_children":
+            continue
+        if store.cancel_requested(job["job_id"]):
+            for cid in job.get("child_jobs") or []:
+                store.request_cancel(cid)
+            job.update(state="cancelled", ended_at=store.now(), error="Agent 已取消")
+            store.write_job(job)
+            log(f"{job['job_id']}: Agent 取消，已请求停止子任务")
+            continue
+        if children.ready(job):
+            job.update(state="queued", child_ready_at=store.now())
+            store.write_job(job)
+            log(f"{job['job_id']}: 子任务完成，Agent 继续")
 
 
 def export_progress(job: dict, log_dir: Path) -> dict | None:
@@ -294,15 +324,75 @@ def init_dirs() -> None:
     """研究规格、任务、组合、报告与审批目录由后端写入：交给 api 的用户，运行器以 root 运行仍可读写。"""
     for d in (store.RESEARCH_DIR, store.JOBS_DIR, store.RUNTIME / "portfolio", store.RUNTIME / "reports",
               store.RUNTIME / "approvals", store.RUNTIME / "signals", store.RUNTIME / "acceptance",
-              store.RUNTIME / "access", store.RUNTIME / "ideas", store.RUNTIME / "paper"):
+              store.RUNTIME / "access", store.RUNTIME / "ideas", store.RUNTIME / "paper",
+              store.RUNTIME / "agents"):
         d.mkdir(parents=True, exist_ok=True)
         os.chown(d, API_UID, API_UID)
         d.chmod(0o775)
+    # Agent 轮次目录由 runner 以 root 创建；修复历史文件的归属，API 用户（approve/reject）才能写入
+    agents_dir = store.RUNTIME / "agents"
+    for root, _dirs, files in os.walk(agents_dir):
+        try:
+            os.chown(root, API_UID, API_UID)
+            os.chmod(root, 0o775)
+        except OSError:
+            pass
+        for name in files:
+            p = Path(root) / name
+            try:
+                os.chown(p, API_UID, API_UID)
+                os.chmod(p, 0o664)
+            except OSError:
+                pass
+
+
+def run_agent(job: dict) -> None:
+    """执行 Agent 任务的一个阶段；等待子任务时释放 runner 并行槽。"""
+    from factopia.agents import loop
+    from factopia.agents import store as agent_store
+    if store.cancel_requested(job["job_id"]):
+        for cid in job.get("child_jobs") or []:
+            store.request_cancel(cid)
+        job.update(state="cancelled", ended_at=store.now(), error="Agent 已取消")
+        store.write_job(job)
+        return
+    job.update(state="running", started_at=job.get("started_at") or store.now())
+    store.write_job(job)
+    try:
+        agent = loop.advance_by_id(job["agent_id"])
+    except Exception as e:
+        try:
+            agent = agent_store.load(job["agent_id"])
+            agent.update(state="failed", last_error=str(e)[:2000])
+            agent_store.save(agent)
+        except Exception:
+            agent = None
+        job.update(state="failed", ended_at=store.now(), error=str(e)[:1200])
+        store.write_job(job)
+        log(f"{job['job_id']}: Agent 失败：{job['error']}")
+        return
+    job.update(agent_state=agent["state"], cost_usd=agent.get("cost_usd") or 0.0,
+               rounds=int(agent.get("current_round") or 0),
+               child_jobs=agent.get("child_jobs") or [])
+    if agent["state"] == "waiting_children":
+        job["state"] = "waiting_children"
+    elif agent["state"] == "awaiting_human":
+        job["state"] = "awaiting_human"
+    elif agent["state"] in ("done", "stopped", "failed"):
+        job["state"] = agent["state"]
+        job["ended_at"] = store.now()
+        if agent["state"] == "failed":
+            job["error"] = agent.get("last_error")
+    else:
+        job["state"] = "queued"
+    store.write_job(job)
+    log(f"{job['job_id']}: {job['state']}（Agent {agent['state']}）")
 
 
 def execute(job: dict) -> None:
     try:
-        {"validate": run_validation, "monitor": run_monitor, "text": run_text, "paper": run_paper}.get(job.get("kind"), run_job)(job)
+        {"validate": run_validation, "monitor": run_monitor, "text": run_text,
+         "paper": run_paper, "agent": run_agent}.get(job.get("kind"), run_job)(job)
     except Exception:
         job.update(state="failed", ended_at=store.now(), error=traceback.format_exc()[-1200:])
         store.write_job(job)
@@ -354,6 +444,10 @@ def main() -> None:
                 schedule_paper_daily()
             except Exception:
                 log(f"每日推进调度检查失败\n{traceback.format_exc()[-400:]}")
+        try:
+            resume_agents()
+        except Exception:
+            log(f"Agent 子任务检查失败\n{traceback.format_exc()[-400:]}")
         job = next_job(set(active)) if len(active) < MAX_PARALLEL else None
         if job is None:
             time.sleep(POLL_S)

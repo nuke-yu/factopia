@@ -21,6 +21,8 @@ def build(agent: dict) -> str:
         facts = store.read_round(agent["agent_id"], n, "facts")
         diagnosis = store.read_round(agent["agent_id"], n, "diagnosis")
         plan = store.read_round(agent["agent_id"], n, "plan")
+        draft = store.read_round(agent["agent_id"], n, "next_version_draft")
+        approval = store.read_round(agent["agent_id"], n, "approval")
         action = store.read_round(agent["agent_id"], n, "action")
         evaluation = store.read_round(agent["agent_id"], n, "evaluation")
         lines += [f"## 第 {n} 轮", ""]
@@ -42,10 +44,17 @@ def build(agent: dict) -> str:
                 lines.append(f"  - 理由：{plan['rationale'].get('text')}（引用 {', '.join(plan['rationale'].get('cites') or [])}）")
             if plan.get("alternatives_rejected"):
                 lines.append("  - 未选择的动作：" + "；".join(f"{x.get('action')}（{x.get('why')}）" for x in plan["alternatives_rejected"]))
+        if draft:
+            lines.append(f"- 下一版草稿：{((draft.get('draft') or {}).get('title_zh')) or '—'}")
+        if approval:
+            lines.append(f"- 人工审批：{approval.get('decision')}（{approval.get('by')}）；"
+                         f"版本 {approval.get('saved_version') or '—'}；自动运行 {approval.get('run')}")
         if action:
             lines.append(f"- 动作结果：{action.get('status')}；草稿：{action.get('path') or '—'}")
         if evaluation:
             lines.append(f"- 评估：{evaluation.get('verdict')}；{evaluation.get('reason')}")
+            if evaluation.get("parent") or evaluation.get("child"):
+                lines.append(f"  - 对照：parent={evaluation.get('parent')}；child={evaluation.get('child')}")
         lines.append("")
 
     memory = store.memory(agent["agent_id"])
@@ -75,6 +84,6 @@ def write(agent: dict) -> None:
     """写报告；报告失败不掩盖主流程异常。"""
     try:
         path = store.dir_path(agent["agent_id"]) / "report.md"
-        path.write_text(build(agent), encoding="utf-8")
+        store._atomic_write(path, build(agent))
     except Exception:
         pass

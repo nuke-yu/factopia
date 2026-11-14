@@ -11,6 +11,8 @@ Rules:
 5. Keep the run bounded. Current policy: $policy
 6. Write text fields in $language. Write the hypothesis and direction fields in English because they are sent to RD-Agent.
 7. new_version creates a DRAFT only; a researcher must review and lock it. Do not claim that a new version has been run.
+8. For a rank-IC success criterion, `direction` must match the pre-registered sign: positive IC -> `increase` or `positive`; negative IC -> `decrease` or `negative`. A negative-IC hypothesis must NOT use `increase`.
+9. Prefer `new_version` when the hypothesis itself needs a change. Use `run_rdagent` / `run_text` only to run an already saved version, and `validate` only for an existing child run.
 
 Return a single JSON object. For a new version:
 {

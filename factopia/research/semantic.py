@@ -13,6 +13,8 @@ import json
 import math
 import os
 import re
+import urllib.error
+import urllib.request
 from collections import Counter
 from pathlib import Path
 
@@ -146,3 +148,122 @@ def search(query: str, kinds: list[str] | None = None, limit: int = 40, use_llm:
             seen[h["kind"]] += 1
     return {"query": query, "expansion": exp, "corpus": dict(Counter(d["kind"] for d in docs)), "results": kept,
             "method": "大模型多语言改写 + BM25 关键词检索（中文双字切分）" if exp["method"] == "llm" else "术语表改写 + BM25 关键词检索"}
+
+
+# ── 研究项目检索：AI 搜索（向量）+ 关键词回退 ──────────────────────
+_EMBED_CACHE: dict[tuple[str, str], list[float]] = {}
+
+
+def embedding_config() -> dict:
+    """向量模型配置：EMBEDDING_MODEL（去掉 openai/ 等前缀）+ OpenAI 兼容端点与密钥。"""
+    model = (os.environ.get("EMBEDDING_MODEL") or "").strip()
+    if not model:
+        raise RuntimeError("未配置向量模型：在 .env 中设置 EMBEDDING_MODEL（如 openai/text-embedding-v4）")
+    for prefix in ("openai/", "litellm_proxy/"):
+        if model.startswith(prefix):
+            model = model.split("/", 1)[1]
+            break
+    base = (os.environ.get("LITELLM_PROXY_API_BASE") or os.environ.get("FACTOPIA_LLM_BASE_URL")
+            or os.environ.get("OPENAI_API_BASE") or "").rstrip("/")
+    key = (os.environ.get("LITELLM_PROXY_API_KEY") or os.environ.get("FACTOPIA_LLM_API_KEY")
+           or os.environ.get("OPENAI_API_KEY") or "")
+    if not base or not key:
+        raise RuntimeError("未配置向量模型端点：在 .env 中设置 LITELLM_PROXY_API_BASE 与 LITELLM_PROXY_API_KEY")
+    return {"base_url": base, "model": model, "api_key": key}
+
+
+def _embed_batch(cfg: dict, batch: list[str]) -> list[list[float]]:
+    body = json.dumps({"model": cfg["model"], "input": batch, "encoding_format": "float"}).encode()
+    req = urllib.request.Request(f"{cfg['base_url']}/embeddings", data=body, method="POST",
+                                 headers={"Authorization": f"Bearer {cfg['api_key']}", "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            data = json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"向量接口返回 {e.code}：{e.read()[:300].decode(errors='replace')}") from e
+    except (urllib.error.URLError, TimeoutError) as e:
+        raise RuntimeError(f"无法连接向量接口：{e}") from e
+    rows = sorted(data.get("data") or [], key=lambda x: x.get("index", 0))
+    if len(rows) != len(batch):
+        raise RuntimeError("向量接口返回的结果数量与输入不一致")
+    return [[float(x) for x in row["embedding"]] for row in rows]
+
+
+def embed(texts: list[str]) -> list[list[float]]:
+    """OpenAI 兼容 /embeddings；按 10 条一批（百炼单次上限），项目文本向量缓存在进程内。"""
+    cfg = embedding_config()
+    missing = list(dict.fromkeys(t for t in texts if (cfg["model"], t) not in _EMBED_CACHE))
+    for i in range(0, len(missing), 10):
+        batch = missing[i:i + 10]
+        for text, vector in zip(batch, _embed_batch(cfg, batch)):
+            _EMBED_CACHE[(cfg["model"], text)] = vector
+    return [_EMBED_CACHE[(cfg["model"], t)] for t in texts]
+
+
+def embed_query(query: str) -> list[float]:
+    """查询向量不缓存，避免查询文本让进程内缓存无限增长。"""
+    return _embed_batch(embedding_config(), [query])[0]
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(y * y for y in b))
+    return dot / (na * nb) if na and nb else 0.0
+
+
+def _project_docs(items: list[dict]) -> list[dict]:
+    docs = []
+    for it in items:
+        title = str(it.get("title") or it.get("id") or "")
+        hypothesis = str(it.get("hypothesis") or "")
+        docs.append({"id": it.get("id"), "title": title, "hypothesis": hypothesis, "snippet": hypothesis[:240]})
+    return docs
+
+
+def _keyword_project_hits(query: str, docs: list[dict]) -> list[dict]:
+    """向量不可用时按标题 + 假设做 BM25；分数按最高分归一化到 0–1。"""
+    q_terms = Counter(tokens(query))
+    toks = [tokens(f"{d['title']} {d['hypothesis']}") for d in docs]
+    n = len(docs) or 1
+    avg = sum(len(ts) for ts in toks) / n
+    df = Counter(t for ts in toks for t in set(ts))
+    hits = []
+    for d, ts in zip(docs, toks):
+        tf = Counter(ts)
+        score = 0.0
+        for term, w in q_terms.items():
+            if term not in tf:
+                continue
+            idf = math.log(1 + (n - df[term] + 0.5) / (df[term] + 0.5))
+            score += w * idf * tf[term] * (K1 + 1) / (tf[term] + K1 * (1 - B + B * len(ts) / avg))
+        if score > 0:
+            hits.append({**d, "score": score})
+    top = max((h["score"] for h in hits), default=0.0)
+    if top > 0:
+        for h in hits:
+            h["score"] = round(h["score"] / top, 4)
+    return hits
+
+
+def search_projects(query: str, items: list[dict], limit: int = 20) -> dict:
+    """研究项目页的「AI 搜索」：比较查询与每个项目的标题 + 假设正文。
+
+    返回按相似度倒序的结果；embedding 不可用时退回 BM25，并在 error 中给出原因。
+    """
+    query = (query or "").strip()
+    docs = _project_docs(items)
+    if not query or not docs:
+        return {"query": query, "method": "none", "model": None, "error": None, "results": []}
+    try:
+        vectors = embed([f"{d['title']}\n{d['hypothesis']}" for d in docs])
+        qv = embed_query(query)
+        hits = [{**d, "score": round(max(0.0, _cosine(qv, v)), 4)} for d, v in zip(docs, vectors)]
+        method, error, model = "embedding", None, embedding_config()["model"]
+    except Exception as e:                                   # 未配置 / 网络故障：关键词保底
+        hits = _keyword_project_hits(query, docs)
+        method, error, model = "keyword", str(e)[:300], None
+    hits.sort(key=lambda h: (-h["score"], h["title"]))
+    return {"query": query, "method": method, "model": model, "error": error,
+            "results": [{"id": h["id"], "title": h["title"], "hypothesis": h["hypothesis"], "score": h["score"],
+                         "snippet": h["snippet"]} for h in hits[:limit]]}

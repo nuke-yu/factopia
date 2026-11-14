@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useEffect, useRef, useState } from "react";
 import { api, type Check, type CredCheck, type Diagnostics, type Explanation, type Market, type PaperDemoResult, type Study, type StudyMarket } from "../api";
 import { cssVar, fix, MARKET_LABEL, pct, signed, useAsync } from "../lib";
@@ -31,6 +31,7 @@ export default function StudyPanel({ researchId, version, current }: { researchI
     <Panel eyebrow={`${t("研究结论")} · ${s.research_id} v${s.version} · ${s.rule.markets.map((m) => MARKET_LABEL[m]).join(" / ")}`}
       title={t("按事先写好的标准判定")}
       actions={<>
+        <ContinueMenu researchId={researchId} version={version} current={current} study={s} />
         {primaryCred && primaryCred.state !== "unchecked" && <Badge tone={CRED_TONE[primaryCred.state]}>{t("可信度")}{t(primaryCred.label)}</Badge>}
         <Badge tone={OVERALL_TONE[s.overall.state]}>{s.overall.state === "passed" ? t(s.overall.label) : `${t("假设")}${t(s.overall.label)}`}</Badge></>}>
       <div className="flex flex-col gap-5">
@@ -108,6 +109,54 @@ export default function StudyPanel({ researchId, version, current }: { researchI
         )}
       </div>
     </Panel>
+  );
+}
+
+/** 结果页「继续研究」：同一研究下一版本 / 新方向存入线索池 / 交给研究迭代 Agent。 */
+function ContinueMenu({ researchId, version, current, study }: { researchId: string; version: number; current?: string; study: Study }) {
+  const navigate = useNavigate();
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const markets = study.rule.markets;
+  const title = study.title ? `${study.title}（新发现）` : tf("{id} v{n} 的新发现", { id: researchId, n: version });
+  const body = [study.overall.reason, ...study.findings.slice(0, 3).map((f) => f.text)].filter(Boolean).join("\n");
+  const params = new URLSearchParams({ prefill_title: title, prefill_body: body, prefill_markets: markets.join(","),
+    prefill_research: `${researchId}.v${version}`, ...(current ? { prefill_run: current } : {}) });
+  async function startAgent() {
+    setBusy(true); setError(null);
+    try {
+      const r = await api.createAgent({ research_id: researchId, version, rounds: 1, markets });
+      navigate(`/agents/${r.agent.agent_id}`);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally { setBusy(false); }
+  }
+  return (
+    <div className="relative">
+      <button type="button" className="btn btn-primary h-8 px-3 text-xs" disabled={busy} onClick={() => setOpen((x) => !x)}>
+        {busy ? t("启动中…") : t("继续研究 ▾")}
+      </button>
+      {open && (
+        <div className="absolute right-0 z-30 mt-1 w-80" style={{ position: "absolute" }}>
+          <div className="panel p-2 flex flex-col gap-1 text-sm shadow-xl">
+            <button type="button" className="text-left rounded p-2 hover:bg-line/40 cursor-pointer" onClick={() => { setOpen(false); navigate(`/research?based_on=${researchId}.v${version}`); }}>
+              <div className="font-medium">{tf("生成下一版本（v{n}）", { n: version + 1 })}</div>
+              <div className="text-xs text-muted">{t("同一研究，保留版本血缘；进入研究立项审改")}</div>
+            </button>
+            <button type="button" className="text-left rounded p-2 hover:bg-line/40 cursor-pointer" onClick={() => { setOpen(false); navigate(`/ideas?${params.toString()}`); }}>
+              <div className="font-medium">{t("把新发现存入线索池")}</div>
+              <div className="text-xs text-muted">{t("新方向先查重、可合并，之后再转立项")}</div>
+            </button>
+            <button type="button" className="text-left rounded p-2 hover:bg-line/40 cursor-pointer disabled:cursor-not-allowed" disabled={busy} onClick={startAgent}>
+              <div className="font-medium">{t("让 Agent 自动迭代")}</div>
+              <div className="text-xs text-muted">{t("AI 诊断后生成下一版草稿，执行前停在人工闸门")}</div>
+            </button>
+            {error && <div className="text-xs text-bad px-2 pb-1">{error}</div>}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 

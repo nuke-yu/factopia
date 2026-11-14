@@ -18,8 +18,10 @@ DEFAULTS = {
     "budget_usd": 2.0,
     "no_improve_patience": 2,
     "human_gate": "costly_actions",
-    "tools": ["new_version", "stop"],
-    "costly_tools": ["new_version"],
+    "child_loops": 2,
+    "child_budget_usd": 0.6,
+    "tools": ["new_version", "run_rdagent", "run_text", "validate", "diagnose", "stop"],
+    "costly_tools": ["new_version", "run_rdagent", "run_text"],
     "prompts": {
         "critic": "iteration-critic-v1",
         "planner": "iteration-planner-v1",

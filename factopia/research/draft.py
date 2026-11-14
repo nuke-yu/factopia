@@ -164,9 +164,10 @@ def _validate(raw: dict, inputs: dict) -> dict:
         name, status, usable = DATA[cat]
         out["data_needs"].append({"category": cat, "name": name, "detail": str(d.get("detail") or "").strip(), "usable": usable,
                                   "status": {m: status[m] for m in inputs["markets"]}})
-    # 信号来源：数据需求以公告文本为主（含文本、且不需要量价以外的其他数据）→ 文本信号研究；研究员可在页面上修改
-    cats = {n["category"] for n in out["data_needs"]}
-    out["signal_source"] = "text" if "text" in cats else "price_volume"
+    # 信号来源：以第一条数据需求为主。text 只是附加条件 / 数据缺口时不能把整份研究判成文本信号研究
+    # （例如 FX/量价假设里提到“公告语气条件腿”，RD-Agent 仍应跑 price_volume）。
+    primary = out["data_needs"][0]["category"] if out["data_needs"] else "price_volume"
+    out["signal_source"] = "text" if primary == "text" else "price_volume"
     free_text = inputs.get("_free_text") or []
     for t in raw.get("mandate_interpretations") or []:
         term = str(t.get("term") or "").strip()
@@ -231,6 +232,9 @@ def make_draft(inputs: dict) -> dict:
             tokens[k] += int(usage.get(k) or 0)
         try:
             draft = _validate(json.loads(text), inputs)
+            extra = [str(x).strip() for x in inputs.get("exclusions") or [] if str(x).strip()]
+            if extra:                                   # 研究员带入的排除方向必须保留，不能只靠 AI 草稿
+                draft["exclusions"] = list(dict.fromkeys([*extra, *draft["exclusions"]]))
             break
         except (json.JSONDecodeError, DraftError) as e:
             if attempt == 1:

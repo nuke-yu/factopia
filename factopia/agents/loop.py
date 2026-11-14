@@ -8,10 +8,12 @@ P0 是同步 CLI：只生成事实、诊断、计划，以及 new_version 的下
     Checkpoint=每个节点后的原子写，Interrupt=awaiting_human，Resume=runner 重新入队（P1）。
 """
 import json
+from pathlib import Path
 
-from factopia.agents import llm, observe, policy as policy_mod, report, store, tools
+from factopia.agents import children, llm, observe, policy as policy_mod, report, store, tools
 from factopia.lang import llm_language
 from factopia.research import store as research_store
+from factopia.research import verdict
 
 
 class AgentStateError(RuntimeError):
@@ -26,7 +28,7 @@ VALID_TRANSITIONS = {
     "awaiting_human": {"acting", "stopped", "failed"},
     "acting": {"evaluating", "waiting_children", "stopped", "failed"},
     "waiting_children": {"evaluating", "stopped", "failed"},
-    "evaluating": {"observing", "done", "stopped", "failed"},
+    "evaluating": {"observing", "queued", "done", "stopped", "failed"},
     "done": set(),
     "stopped": set(),
     "failed": set(),
@@ -45,77 +47,27 @@ def _advance(agent: dict, target: str, note: str | None = None) -> None:
 
 def run(research_id: str, version: int, rounds: int = 1, dry_run: bool = False, approve: bool = False,
         policy: dict | None = None, chat=None) -> dict:
-    """从一个研究版本启动 Agent。返回最终的 agent 记录。
+    """从一个研究版本启动 Agent（P0/P1 同步入口）。返回最终的 agent 记录。
 
-    dry_run：只做事实、诊断、规划，不执行工具；approve：跳过人工闸门（演示 / 自动化）。
-    chat：测试注入，签名 (prompt, task) -> (text, usage, model)。
+    dry_run：只做事实、诊断、规划；approve：自动批准原草稿（演示 / 测试）。
+    P1 正常流程不带 approve：在 awaiting_human 后用 approve 命令。
     """
     spec = research_store.load_version(research_id, version)
     pol = policy or policy_mod.load()
-    markets = list(spec.get("markets") or pol.get("markets") or ["hk", "uk", "fr"])
-    agent = store.create(research_id, version, pol, markets, int(spec.get("horizon") or 20))
-    memory = store.memory(agent["agent_id"])
-    chat = chat or llm.chat
-
+    markets = list(spec.get("markets") or ["hk", "uk", "fr"])
+    agent = store.create(research_id, version, pol, markets, int(spec.get("horizon") or 20), dry_run=dry_run)
+    agent["round_limit"] = min(int(rounds), int(pol["max_rounds"]))
+    agent["auto_approve"] = bool(approve)
+    store.save(agent)
     try:
-        for n in range(1, int(rounds) + 1):
-            reason = policy_mod.should_stop(agent, memory, pol)
-            if reason:
-                agent["stop_reason"] = reason
-                _advance(agent, "stopped")
+        while True:
+            result = advance(agent, chat=chat)
+            agent = result["agent"]
+            if result["status"] in ("waiting", "awaiting_human", "done", "stopped", "failed"):
                 break
-            agent["current_round"] = n
-            store.save(agent)
-
-            _advance(agent, "observing")
-            facts = observe.build(research_id, version)
-            store.write_round(agent["agent_id"], n, "facts", facts)
-            store.append_trace(agent["agent_id"], {"kind": "facts", "round": n, "count": len(facts["facts"])})
-
-            _advance(agent, "diagnosing")
-            diagnosis = _diagnose(facts, memory, pol, chat, agent)
-            store.write_round(agent["agent_id"], n, "diagnosis", diagnosis)
-            store.add_usage(agent, diagnosis.get("usage"))
-
-            _advance(agent, "planning")
-            plan = _plan(facts, diagnosis, memory, pol, chat, agent)
-            store.write_round(agent["agent_id"], n, "plan", plan)
-            store.add_usage(agent, plan.get("usage"))
-
-            if plan["action"] == "stop":
-                agent["stop_reason"] = (plan.get("args") or {}).get("reason") or "agent stop"
-                _advance(agent, "done")
-                break
-            if dry_run:
-                agent["stop_reason"] = "dry-run：只生成事实、诊断与计划，未执行动作"
-                _advance(agent, "stopped")
-                break
-            if policy_mod.needs_gate(pol, plan["action"]) and not approve:
-                agent["stop_reason"] = f"等待人工批准动作 {plan['action']}"
-                _advance(agent, "awaiting_human")
-                break
-
-            _advance(agent, "acting")
-            action = tools.execute(plan["action"], plan.get("args") or {}, {
-                "agent_id": agent["agent_id"], "agent": agent, "round": n,
-                "research_id": research_id, "version": int(version), "spec": spec,
-                "fact_ids": [f["id"] for f in facts["facts"]],
-            })
-            store.write_round(agent["agent_id"], n, "action", action)
-            store.add_usage(agent, action.get("usage"))
-            if action.get("child_jobs"):
-                agent["child_jobs"] = action["child_jobs"]
-                _advance(agent, "waiting_children")
-                break
-
-            _advance(agent, "evaluating")
-            evaluation = _evaluate(plan, action, n)
-            store.write_round(agent["agent_id"], n, "evaluation", evaluation)
-            _update_memory(agent, memory, n, plan, evaluation)
-            agent["stop_reason"] = ("P0：下一版草稿已生成；运行并验证新版本后再开始下一轮 Agent"
-                                    if plan["action"] == "new_version" else "P0：动作完成，本轮结束")
-            _advance(agent, "stopped")
-            break
+        if agent.get("auto_approve") and agent.get("state") == "waiting_children":
+            from factopia.agents import approve as approve_mod
+            approve_mod.ensure_job(agent)          # 子任务已创建，交给 runner 等待/继续
     except Exception as e:
         agent["last_error"] = str(e)[:2000]
         if agent.get("state") not in ("done", "stopped", "failed"):
@@ -128,6 +80,247 @@ def run(research_id: str, version: int, rounds: int = 1, dry_run: bool = False, 
     finally:
         report.write(agent)
     return agent
+
+
+def advance(agent: dict, chat=None) -> dict:
+    """按 agent.state 执行阶段，直到等待/终态；每个阶段已写检查点。"""
+    chat = chat or llm.chat
+    root = agent["root"]
+    while True:
+        state = agent.get("state")
+        n = int(agent.get("current_round") or 0)
+        if state == "queued":
+            if n >= int(agent.get("round_limit") or agent["policy"]["max_rounds"]):
+                agent["stop_reason"] = f"达到最大轮数 {agent.get('round_limit')}"
+                _advance(agent, "stopped")
+                return _result(agent)
+            agent["current_round"] = n + 1
+            store.save(agent)
+            _advance(agent, "observing")
+            continue
+        if state == "observing":
+            facts = observe.build(root["research_id"], int(agent["current_version"]))
+            store.write_round(agent["agent_id"], agent["current_round"], "facts", facts)
+            store.append_trace(agent["agent_id"], {"kind": "facts", "round": agent["current_round"],
+                                                   "count": len(facts["facts"])})
+            _advance(agent, "diagnosing")
+            continue
+        if state == "diagnosing":
+            facts = _round(agent, "facts")
+            diagnosis = _diagnose(facts, store.memory(agent["agent_id"]), agent["policy"], chat, agent)
+            store.write_round(agent["agent_id"], agent["current_round"], "diagnosis", diagnosis)
+            store.add_usage(agent, diagnosis.get("usage"))
+            _advance(agent, "planning")
+            continue
+        if state == "planning":
+            spec = research_store.load_version(root["research_id"], int(agent["current_version"]))
+            rule = verdict.rules(spec)
+            facts = _round(agent, "facts")
+            diagnosis = _round(agent, "diagnosis")
+            plan = _plan(facts, diagnosis, store.memory(agent["agent_id"]), agent["policy"], chat, agent, rule)
+            store.write_round(agent["agent_id"], agent["current_round"], "plan", plan)
+            store.add_usage(agent, plan.get("usage"))
+            if plan["action"] == "stop":
+                agent["stop_reason"] = (plan.get("args") or {}).get("reason") or "agent stop"
+                _advance(agent, "done")
+                return _result(agent)
+            if agent.get("dry_run"):
+                agent["stop_reason"] = "dry-run：只生成事实、诊断与计划，未执行动作"
+                _advance(agent, "stopped")
+                return _result(agent)
+            if plan["action"] == "new_version" and not _round(agent, "next_version_draft"):
+                draft_action = tools.execute("new_version", plan.get("args") or {},
+                                             _ctx(agent, spec, int(agent["current_version"])))
+                store.write_round(agent["agent_id"], agent["current_round"], "draft_action", draft_action)
+                store.add_usage(agent, draft_action.get("usage"))
+            gate = plan["action"] == "new_version" or policy_mod.needs_gate(agent["policy"], plan["action"])
+            if gate and not agent.get("approved"):
+                if agent.get("auto_approve"):
+                    _advance(agent, "awaiting_human")
+                    from factopia.agents import approve as approve_mod
+                    approve_mod.auto_approve(agent, run=bool(agent.get("approved_run", True)))
+                    agent = store.load(agent["agent_id"])
+                    continue
+                agent["stop_reason"] = f"等待人工批准动作 {plan['action']}"
+                _advance(agent, "awaiting_human")
+                return _result(agent)
+            _advance(agent, "acting")
+            continue
+        if state == "awaiting_human":
+            if (agent.get("approved") or {}).get("decision") != "approved":
+                return _result(agent, status="awaiting_human")
+            _advance(agent, "acting")
+            continue
+        if state == "acting":
+            spec = research_store.load_version(root["research_id"], int(agent["current_version"]))
+            plan = _round(agent, "plan")
+            action = _act(agent, spec, plan, n)
+            store.write_round(agent["agent_id"], n, "action", action)
+            store.add_usage(agent, action.get("usage"))
+            if action.get("child_jobs"):
+                agent["child_jobs"] = list(dict.fromkeys(action["child_jobs"]))
+                agent["last_action"] = {"action": plan.get("action"), "status": action.get("status"),
+                                        "child_jobs": agent["child_jobs"], "at": store.now()}
+                store.save(agent)
+                _advance(agent, "waiting_children")
+                return _result(agent, status="waiting")
+            if action.get("status") in ("saved", "done"):
+                agent["stop_reason"] = action.get("reason") or "下一版已保存；未自动运行"
+                _advance(agent, "done")
+                return _result(agent)
+            _advance(agent, "evaluating")
+            continue
+        if state == "waiting_children":
+            if not children.ready(agent):
+                return _result(agent, status="waiting")
+            child_jobs = children.jobs(agent)
+            _add_child_costs(agent, child_jobs)
+            _diagnose_children(agent, child_jobs)
+            new_ids = _ensure_validation(agent, child_jobs)
+            if new_ids:
+                agent["child_jobs"] = list(dict.fromkeys([*(agent.get("child_jobs") or []), *new_ids]))
+                store.save(agent)
+                if not children.ready(agent):
+                    return _result(agent, status="waiting")
+            _advance(agent, "evaluating")
+            continue
+        if state == "evaluating":
+            plan = _round(agent, "plan")
+            action = _round(agent, "action")
+            evaluation = _evaluate(agent, plan, action)
+            spec = research_store.load_version(root["research_id"], int(agent["current_version"]))
+            evaluation["precheck"] = _rule_precheck(agent, spec)
+            if evaluation.get("verdict") in ("not_improved", "inconclusive"):
+                idea = _agent_feedback(agent, evaluation)
+                if idea:
+                    evaluation["idea_id"] = idea["id"]
+            store.write_round(agent["agent_id"], n, "evaluation", evaluation)
+            _update_memory(agent, store.memory(agent["agent_id"]), n, plan, evaluation)
+            reason = policy_mod.should_stop(agent, store.memory(agent["agent_id"]), agent["policy"])
+            if reason:
+                agent["stop_reason"] = reason
+                _advance(agent, "stopped")
+                return _result(agent)
+            if n >= int(agent.get("round_limit") or agent["policy"]["max_rounds"]):
+                agent["stop_reason"] = f"完成 {n} 轮"
+                _advance(agent, "stopped")
+                return _result(agent)
+            _advance(agent, "queued")
+            continue
+        return _result(agent)
+
+
+def advance_by_id(agent_id: str, chat=None) -> dict:
+    """runner 入口：从磁盘加载 Agent 后推进到等待/终态，返回 agent 记录。"""
+    return advance(store.load(agent_id), chat=chat)["agent"]
+
+
+def _result(agent: dict, status: str | None = None) -> dict:
+    return {"status": status or agent.get("state"), "agent": agent,
+            "child_jobs": agent.get("child_jobs") or []}
+
+
+def _round(agent: dict, name: str) -> dict | None:
+    return store.read_round(agent["agent_id"], int(agent.get("current_round") or 0), name)
+
+
+def _ctx(agent: dict, spec: dict, version: int) -> dict:
+    facts = _round(agent, "facts") or {}
+    return {"agent_id": agent["agent_id"], "agent": agent, "round": int(agent.get("current_round") or 0),
+            "research_id": agent["root"]["research_id"], "version": int(version), "spec": spec,
+            "fact_ids": [f["id"] for f in facts.get("facts") or []]}
+
+
+def _act(agent: dict, spec: dict, plan: dict, n: int) -> dict:
+    """执行本轮计划。new_version 必须先由人工 approve 保存版本。"""
+    action = plan.get("action")
+    if action == "new_version":
+        approved = agent.get("approved") or {}
+        version = int(approved.get("saved_version") or 0)
+        if not version:
+            raise AgentStateError("new_version 需要人工 approve 保存版本后才能运行")
+        new_spec = research_store.load_version(agent["root"]["research_id"], version)
+        if not approved.get("run", True):
+            return {"status": "saved", "version": version,
+                    "path": str(research_store.version_path(agent["root"]["research_id"], version)),
+                    "reason": "下一版已保存；未自动运行"}
+        tool = "run_text" if new_spec.get("signal_source") == "text" else "run_rdagent"
+        markets = new_spec.get("markets") or agent["root"]["markets"]
+        policy = agent["policy"]
+        budget = float(policy.get("child_budget_usd") or
+                       max(0.1, float(policy.get("budget_usd") or 2.0) / max(1, len(markets))))
+        args = {"version": version, "markets": list(markets),
+                "horizon": int(new_spec.get("horizon") or 20),
+                "loops": int(policy.get("child_loops") or 2),
+                "budget_usd": budget}
+        return tools.execute(tool, args, _ctx(agent, new_spec, version))
+    return tools.execute(action, plan.get("args") or {}, _ctx(agent, spec, int(agent["current_version"])))
+
+
+def _add_child_costs(agent: dict, child_jobs: list[dict]) -> None:
+    """把子任务费用累加到 Agent（按 job_id 去重），供 policy 预算判断。"""
+    costed = set(agent.get("costed_jobs") or [])
+    total = float(agent.get("cost_usd") or 0.0)
+    for job in child_jobs:
+        jid = job.get("job_id")
+        if not jid or jid in costed:
+            continue
+        total += float(job.get("cost_usd") or 0.0)
+        costed.add(jid)
+    agent["costed_jobs"] = sorted(costed)
+    agent["cost_usd"] = round(total, 6)
+    store.save(agent)
+
+
+def _diagnose_children(agent: dict, child_jobs: list[dict]) -> None:
+    """导出完成后补跑诊断；失败不影响评估（facts 会标记数据缺失）。"""
+    results = research_store.RUNTIME / "results" / "runs"
+    for job in child_jobs:
+        rid = job.get("run_id")
+        if not rid or job.get("kind") == "validate":
+            continue
+        try:
+            from factopia.diagnostics import diagnose_run
+            n = diagnose_run(results / rid)
+            store.append_trace(agent["agent_id"], {"kind": "diagnose", "run_id": rid, "rounds": n})
+        except Exception as e:
+            store.append_trace(agent["agent_id"], {"kind": "diagnose_error", "run_id": rid,
+                                                   "error": str(e)[:500]})
+
+
+def _ensure_validation(agent: dict, child_jobs: list[dict]) -> list[str]:
+    """为 RD-Agent 子运行创建/复用可信度检查 job；文本研究已自带，跳过。"""
+    results = research_store.RUNTIME / "results" / "runs"
+    ids = []
+    for job in child_jobs:
+        if job.get("kind") in ("validate", "text") or not job.get("run_id"):
+            continue
+        run_id = job["run_id"]
+        run = _read_json(results / run_id / "run.json")
+        rounds = _read_json(results / run_id / "rounds.json") or []
+        if not isinstance(run, dict) or not isinstance(rounds, list):
+            continue
+        focus = verdict.focus_round(rounds)
+        if not focus:
+            continue
+        existing = [j for j in research_store.list_jobs()
+                    if j.get("kind") == "validate" and j.get("target_run") == run_id
+                    and j.get("loop") == focus["loop"]]
+        if existing:
+            ids.append(existing[-1]["job_id"])
+            continue
+        try:
+            ids.append(research_store.create_validate_job(run, focus["loop"])["job_id"])
+        except Exception:
+            continue
+    return ids
+
+
+def _read_json(path: Path):
+    try:
+        return json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
 
 
 def _diagnose(facts: dict, memory: dict, policy: dict, chat, agent: dict) -> dict:
@@ -189,7 +382,7 @@ def _keep(item, fact_ids: set[str]) -> dict | None:
     return {"text": text[:2000], "cites": cites}
 
 
-def _plan(facts: dict, diagnosis: dict, memory: dict, policy: dict, chat, agent: dict) -> dict:
+def _plan(facts: dict, diagnosis: dict, memory: dict, policy: dict, chat, agent: dict, rule: dict) -> dict:
     version = policy["prompts"]["planner"]
     available = policy_mod.available_tools(policy, tools.REGISTRY)
     prompt = llm.prompt(
@@ -205,7 +398,7 @@ def _plan(facts: dict, diagnosis: dict, memory: dict, policy: dict, chat, agent:
                                                "prompt_version": version, "prompt": prompt + note, "response": raw})
         try:
             data = llm.parse_json(raw)
-            out = _validate_plan(data, {f["id"] for f in facts["facts"]}, available)
+            out = _validate_plan(data, {f["id"] for f in facts["facts"]}, available, rule)
             out.update({"model": model, "prompt_version": version, "usage": usage, "at": store.now()})
             return out
         except (llm.LLMError, AgentStateError) as e:
@@ -213,7 +406,7 @@ def _plan(facts: dict, diagnosis: dict, memory: dict, policy: dict, chat, agent:
     raise store.AgentError("规划两次都没有给出合法动作")
 
 
-def _validate_plan(data: dict, fact_ids: set[str], available: list[str]) -> dict:
+def _validate_plan(data: dict, fact_ids: set[str], available: list[str], rule: dict | None = None) -> dict:
     action = str(data.get("action") or "").strip()
     if action not in available:
         raise AgentStateError(f"动作 {action!r} 不在白名单中；可用：{', '.join(available)}")
@@ -243,6 +436,13 @@ def _validate_plan(data: dict, fact_ids: set[str], available: list[str]) -> dict
     direction = str(criteria.get("direction") or "").lower()
     if direction not in ("increase", "decrease", "maintain", "positive", "negative"):
         raise AgentStateError("success_criteria.direction 必须是 increase / decrease / maintain / positive / negative")
+    if rule and "rank_ic" in str(criteria.get("metric") or "").lower():
+        sign = int(rule.get("ric_sign") or 1)
+        allowed = ("increase", "positive") if sign > 0 else ("decrease", "negative")
+        if direction not in allowed:
+            raise AgentStateError(
+                f"success_criteria.direction={direction!r} 与假设的 rank IC 方向"
+                f"（{'正' if sign > 0 else '负'}）不一致；应为 {' / '.join(allowed)}")
     expected = str(data.get("expected_outcome") or "").strip()
     stop_condition = str(data.get("stop_condition") or "").strip()
     if not expected or not stop_condition:
@@ -263,14 +463,131 @@ def _validate_plan(data: dict, fact_ids: set[str], available: list[str]) -> dict
             "stop_condition": stop_condition[:1000]}
 
 
-def _evaluate(plan: dict, action: dict, n: int) -> dict:
-    if plan["action"] == "new_version":
-        return {"round": n, "verdict": "inconclusive",
-                "reason": "P0 只生成下一版草稿，没有运行新回测；需运行并验证后才能判定是否改进。",
-                "success_criteria": plan.get("success_criteria"), "evidence": plan["rationale"]["cites"],
-                "at": store.now()}
-    return {"round": n, "verdict": "stopped", "reason": (plan.get("args") or {}).get("reason") or "agent stop",
-            "success_criteria": plan.get("success_criteria"), "evidence": plan["rationale"]["cites"],
+def _focus_for(run_id: str) -> dict | None:
+    """读取一个运行采纳轮次的指标、可证伪判定与可信度状态（评估用，给人看）。"""
+    run = _read_json(children.RESULTS / "runs" / run_id / "run.json")
+    rounds = _read_json(children.RESULTS / "runs" / run_id / "rounds.json") or []
+    if not isinstance(run, dict) or not isinstance(rounds, list):
+        return None
+    rs = run.get("research") or {}
+    if not rs.get("id") or rs.get("version") is None:
+        return None
+    try:
+        spec = research_store.load_version(rs["id"], int(rs["version"]))
+        rule = verdict.rules(spec)
+    except Exception:
+        return None
+    focus = verdict.focus_round(rounds)
+    if not focus:
+        return {"run_id": run_id, "market": run.get("market"), "metrics": None,
+                "passed": False, "credibility": "unchecked", "baseline": {}}
+    judged = {v["loop"]: v for v in verdict.judge_rounds(run, rounds, rule)}
+    val = _read_json(children.RESULTS / "runs" / run_id / "validation" / f"{focus['loop']}.json")
+    try:
+        cred = verdict.credibility(val, None, rule, None) if val else {"state": "unchecked"}
+    except Exception:
+        cred = {"state": "unknown"}
+    return {"run_id": run_id, "market": run.get("market"), "focus_loop": focus["loop"],
+            "metrics": focus.get("metrics") or {}, "passed": judged.get(focus["loop"], {}).get("passed"),
+            "credibility": cred.get("state"),
+            "baseline": (run.get("baseline") or {}).get("metrics") or {}}
+
+
+def _parent_focus(agent: dict, market: str) -> dict | None:
+    version = int(agent.get("parent_version") or agent["root"]["version"])
+    rid = agent["root"]["research_id"]
+    d = children.RESULTS / "runs"
+    if not d.exists():
+        return None
+    for path in sorted(d.glob("*/run.json"), reverse=True):
+        run = _read_json(path)
+        if not isinstance(run, dict) or run.get("market") != market:
+            continue
+        rs = run.get("research") or {}
+        if rs.get("id") == rid and rs.get("version") == version:
+            out = _focus_for(run["run_id"])
+            if out and out.get("metrics"):
+                return out
+    return None
+
+
+def _rule_precheck(agent: dict, spec: dict) -> dict:
+    """评估后的确定性 setup 规则预检；只保存摘要，完整结果仍在风控台。"""
+    try:
+        from factopia import rules
+        from factopia.rules import context as rule_ctx
+        res = rules.evaluate(rule_ctx.setup_context(spec), ["setup"])
+        return {"blocked": res.get("blocked"), "counts": res.get("counts"),
+                "approval_path": res.get("approval_path"),
+                "hits": [{k: h.get(k) for k in ("rule_id", "title", "severity", "severity_zh", "market",
+                                                 "reason", "pack_version")}
+                         for h in res.get("hits") or []]}
+    except Exception as e:
+        return {"error": str(e)[:500]}
+
+
+def _agent_feedback(agent: dict, evaluation: dict) -> dict | None:
+    """未改进 / 无法判定时自动写一张「研究 Agent 反馈」线索；失败不影响评估。"""
+    try:
+        from factopia import ideas
+        run_ids = [j["run_id"] for j in children.jobs(agent)
+                   if j.get("run_id") and j.get("kind") != "validate"]
+        return ideas.agent_feedback(agent["agent_id"], agent["root"]["research_id"],
+                                    int(agent["current_version"]), int(agent.get("current_round") or 0),
+                                    str(evaluation.get("verdict") or ""), str(evaluation.get("reason") or ""),
+                                    agent["root"]["markets"], run_ids[0] if run_ids else None)
+    except Exception:
+        return None
+
+
+def _evaluate(agent: dict, plan: dict, action: dict | None) -> dict:
+    """按预注册标准比较 parent / child；评估给人看，可以含具体数值。"""
+    n = int(agent.get("current_round") or 0)
+    evidence = (plan.get("rationale") or {}).get("cites") or []
+    if plan.get("action") != "new_version":
+        return {"round": n, "verdict": "stopped",
+                "reason": (plan.get("args") or {}).get("reason") or "agent stop",
+                "success_criteria": plan.get("success_criteria"), "evidence": evidence, "at": store.now()}
+    if (action or {}).get("status") == "saved":
+        return {"round": n, "verdict": "inconclusive", "reason": "下一版已保存但未运行",
+                "success_criteria": plan.get("success_criteria"), "evidence": evidence, "at": store.now()}
+    child_jobs = children.jobs(agent)
+    child_runs = [j for j in child_jobs if j.get("run_id") and j.get("kind") != "validate"]
+    if not child_runs:
+        return {"round": n, "verdict": "inconclusive", "reason": "没有子运行结果",
+                "success_criteria": plan.get("success_criteria"), "evidence": evidence, "at": store.now()}
+    spec = research_store.load_version(agent["root"]["research_id"], int(agent["current_version"]))
+    rule = verdict.rules(spec)
+    primary = rule["primary"]
+    child = next((x for x in (_focus_for(j["run_id"]) for j in child_runs) if x and x.get("market") == primary), None)
+    parent = _parent_focus(agent, primary)
+    criteria = plan.get("success_criteria") or {}
+    sign = int(rule.get("ric_sign") or 1)
+    try:
+        delta = float(criteria.get("min_delta") or 0.0)
+    except (TypeError, ValueError):
+        delta = 0.0
+    c_ric = (child or {}).get("metrics", {}).get("rank_ic") if child else None
+    p_ric = (parent or {}).get("metrics", {}).get("rank_ic") if parent else None
+    aligned = None if c_ric is None else c_ric * sign
+    p_aligned = None if p_ric is None else p_ric * sign
+    metric_ok = aligned is not None and p_aligned is not None and aligned >= p_aligned + delta
+    cred_ok = (child or {}).get("credibility") not in ("doubtful",)
+    passed = (child or {}).get("passed")
+    if child is None or c_ric is None:
+        outcome, reason = "inconclusive", "子运行没有采纳轮次或缺少指标"
+    elif passed is False:
+        outcome, reason = "not_improved", "子版本未通过预注册证伪检验"
+    elif p_aligned is None:
+        outcome, reason = "inconclusive", "缺少父版本对照指标"
+    elif metric_ok and cred_ok:
+        outcome, reason = "improved", "预注册指标达到门槛且可信度未见否决项"
+    else:
+        outcome, reason = "not_improved", "预注册指标未达到门槛或可信度存疑"
+    return {"round": n, "verdict": outcome, "reason": reason,
+            "success_criteria": criteria, "parent": parent, "child": child,
+            "evidence": evidence,
+            "note": "P1 用平台测试期 verdict/credibility 对照；验证期组合指标尚不可得",
             "at": store.now()}
 
 

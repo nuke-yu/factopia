@@ -25,6 +25,7 @@ if not RUNTIME.exists():                       # 本地直接运行（不在容�
     RUNTIME = Path(__file__).resolve().parents[2] / "runtime"
 AGENTS_DIR = RUNTIME / "agents"
 AGENT_ID = re.compile(r"^agt_\d{14}_[0-9a-f]{4}$")
+API_UID = int(os.environ.get("FACTOPIA_API_UID", "10001"))   # runner 以 root 运行；新文件交给 API 用户读写
 
 
 class AgentError(RuntimeError):
@@ -50,11 +51,30 @@ def _dumps(obj, indent: int | None = None) -> str:
     return json.dumps(_json_safe(obj), ensure_ascii=False, indent=indent, allow_nan=False)
 
 
+def _own(path: Path) -> None:
+    """runner 以 root 写文件时，把文件与目录交给 API 用户（10001），否则 API 无法写 approval/trace。"""
+    if os.geteuid() != 0:
+        return
+    try:
+        for p in (path, path.parent):
+            os.chown(p, API_UID, API_UID)
+            if p.is_dir():
+                os.chmod(p, 0o775)
+            else:
+                os.chmod(p, 0o664)
+        if path.parent.parent != AGENTS_DIR and AGENTS_DIR in path.parent.parent.parents:
+            os.chown(path.parent.parent, API_UID, API_UID)
+            os.chmod(path.parent.parent, 0o775)
+    except OSError:
+        pass
+
+
 def _atomic_write(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + f".tmp{secrets.token_hex(3)}")
     tmp.write_text(text, encoding="utf-8")
     tmp.replace(path)
+    _own(path)
 
 
 def new_id() -> str:
@@ -67,7 +87,8 @@ def dir_path(agent_id: str) -> Path:
     return AGENTS_DIR / agent_id
 
 
-def create(research_id: str, version: int, policy: dict, markets: list[str], horizon: int) -> dict:
+def create(research_id: str, version: int, policy: dict, markets: list[str], horizon: int,
+           dry_run: bool = False) -> dict:
     """新建一个 Agent 记录；根研究版本、策略与预算在启动时固定。"""
     agent = {
         "agent_id": new_id(), "kind": "iteration", "state": "queued",
@@ -76,10 +97,20 @@ def create(research_id: str, version: int, policy: dict, markets: list[str], hor
                  "markets": list(markets), "horizon": int(horizon)},
         "policy": policy,
         "current_round": 0,
+        "current_version": int(version),
+        "parent_version": int(version),
+        "child_version": None,
+        "round_limit": int(policy.get("max_rounds") or 5),
         "rounds": [],
+        "dry_run": bool(dry_run),
+        "auto_approve": False,
+        "approved": None,
+        "approved_run": True,
         "cost_usd": 0.0,
+        "costed_jobs": [],
         "usage": {"prompt_tokens": 0, "completion_tokens": 0},
         "child_jobs": [],
+        "last_action": None,
         "stop_reason": None,
         "last_error": None,
     }
@@ -133,6 +164,7 @@ def append_trace(agent_id: str, entry: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as f:
         f.write(_dumps(record) + "\n")
+    _own(path)
 
 
 def add_usage(agent: dict, usage: dict | None) -> float:

@@ -23,7 +23,7 @@ SPEC = {
     "hypothesis_zh": "波动率调整后的动量预测未来收益。",
     "directions": ["volatility-adjusted momentum"],
     "exclusions": ["plain short-term reversal"],
-    "falsification": "Hong Kong rank IC must be positive; annual return with cost must be above the baseline; "
+    "falsification": "Hong Kong must show a positive rank IC; annual return with cost must be above the baseline; "
                      "max drawdown must not be worse than the baseline.",
     "markets": ["hk", "uk"],
     "horizon": 20,
@@ -173,7 +173,7 @@ class AgentP0Tests(unittest.TestCase):
         ctx = {"agent_id": agent["agent_id"], "round": 1, "agent": agent, "spec": SPEC,
                "research_id": "test_study", "version": 1, "fact_ids": ["F1"]}
         with self.assertRaises(tools.ToolError):
-            tools.execute("run_rdagent", {}, ctx)
+            tools.execute("redundancy", {}, ctx)
         with self.assertRaises(tools.ToolError):
             tools.execute("new_version", {"changes": {}, "cites": ["F1"]}, ctx)
         out = tools.execute("stop", {"reason": "done"}, ctx)

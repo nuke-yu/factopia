@@ -141,6 +141,20 @@ def create_paper_job(signal_id: str, market: str) -> dict:
     return job
 
 
+def create_agent_job(agent_id: str, research_id: str, version: int, markets: list[str],
+                     horizon: int, budget_usd: float) -> dict:
+    """研究迭代 Agent 的 runner 任务（kind = "agent"）：等待子任务时不占并行槽。"""
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    job = {"job_id": f"{stamp}_{secrets.token_hex(2)}_0_all", "batch_id": f"{stamp}_a",
+           "kind": "agent", "agent_id": agent_id, "research_id": research_id, "version": int(version),
+           "market": "all", "horizon": int(horizon), "loops": 0, "budget_usd": float(budget_usd),
+           "state": "queued", "created_at": now(), "started_at": None, "ended_at": None,
+           "run_id": None, "cost_usd": 0.0, "rounds": 0, "error": None,
+           "child_jobs": [], "agent_state": "queued"}
+    write_job(job)
+    return job
+
+
 def write_job(job: dict) -> None:
     _atomic_write(JOBS_DIR / f"{job['job_id']}.json", _dumps(job, indent=2))
 
@@ -245,5 +259,16 @@ def retry_job(job: dict) -> dict:
         run = json.loads((RUNTIME / "results" / "runs" / job["target_run"] / "run.json").read_text(encoding="utf-8"))
         new = create_validate_job(run, job["loop"], job.get("placebo_n", 20))
         return {"batch_id": new["batch_id"], "jobs": [new]}
+    if job.get("kind") == "agent":
+        try:                                      # 重置 Agent 状态，让它从检查点继续
+            from factopia.agents import store as agent_store
+            agent = agent_store.load(job["agent_id"])
+            agent.update(state="queued", last_error=None, stop_reason=None)
+            agent_store.save(agent)
+        except Exception:
+            pass
+        job.update(state="queued", error=None, ended_at=None, agent_state="queued")
+        write_job(job)
+        return {"batch_id": job["batch_id"], "jobs": [job]}
     return create_jobs(job["research_id"], job["version"], [job["market"]], job["horizon"], job["loops"], job["budget_usd"],
                        job.get("kind"))

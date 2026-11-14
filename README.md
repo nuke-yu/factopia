@@ -47,12 +47,28 @@ docker compose -f docker-compose.yml -f compose.local.yml run --rm app python sp
 # Alpha158 三市场评估与迁移性分类 → /workspace/runtime/results/alpha158/
 docker compose -f docker-compose.yml -f compose.local.yml run --rm app python -m factopia.factors.evaluate
 
+# 结果页的 Alpha158 迁移性立方体 / 时间曲面（读取上一步的逐日 IC）→ cube.json / surface.json
+docker compose -f docker-compose.yml -f compose.local.yml run --rm app python -m factopia.export.alpha158 --horizon 20
+
 # RD-Agent 各市场模板的持股数按股票池比例设置（股票池变化后重新运行）
 docker compose -f docker-compose.yml -f compose.local.yml run --rm app python -m factopia.mining.topk
 
 # RD-Agent：环境检查 / 在指定市场（hk / uk / fr）跑一轮因子挖掘
 docker compose run --rm rdagent rdagent health_check
 docker compose -f docker-compose.yml -f compose.local.yml run --rm -e FACTOPIA_MARKET=hk rdagent rdagent fin_factor --loop-n 1
+
+# 研究迭代 Agent（P0/P1）：先生成 v2 草稿并停在人工闸门（awaiting_human）
+DC="docker compose -f docker-compose.yml -f compose.local.yml"
+$DC run --rm app python -m factopia.agents run --research <研究编号> --version <版本>
+$DC run --rm app python -m factopia.agents show <agent_id>       # 查看事实/诊断/计划/next_version_draft.json
+$DC run --rm app python -m factopia.agents approve <agent_id> --file <edited.json> --run   # 审改后批准并自动运行
+$DC run --rm app python -m factopia.agents approve <agent_id> --no-run                      # 只保存 vN+1，不运行
+$DC run --rm app python -m factopia.agents reject <agent_id> --reason "..."                  # 拒绝本轮
+$DC run --rm app python -m unittest tests.test_agents tests.test_agents_p1 -v
+# 页面：结果页「继续研究」→ 让 Agent 自动迭代；Agent 页 /agents（审改、批准、trace、报告）
+# 演示脚本：docs/Agent工作流-演示脚本.md（含规则预检、自动线索回流、因子库重叠、红队与讲解口径）
+# runner 生命周期测试（rdagent 镜像；Windows 路径按实际仓库位置替换）
+# MSYS_NO_PATHCONV=1 $DC run --rm -T -w /workspace -v "D:/sandbox/projects/factopia/tests:/workspace/tests:ro" --entrypoint "" runner python -m unittest tests.test_runner_agent -v
 
 # RD-Agent 日志界面 → http://localhost:19899（RDAGENT_UI_MARKET 选择市场，默认 hk）
 RDAGENT_UI_MARKET=hk docker compose -f docker-compose.yml -f compose.local.yml --profile ui up -d rdagent-ui

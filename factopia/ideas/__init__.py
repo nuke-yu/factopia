@@ -44,6 +44,7 @@ CHANNELS = {
     "paper_trading": {"zh": "模拟盘反馈", "manual": False},
     "portfolio": {"zh": "组合归因建议", "manual": False},
     "approval": {"zh": "审批退回 / 拒绝", "manual": False},
+    "agent": {"zh": "研究 Agent 反馈", "manual": False},
 }
 STATUS_ZH = {"new": "待处理", "converted": "已转立项", "duplicate": "重复", "dismissed": "不跟进"}
 ACTION_ZH = {"create": "创建", "extract": "抽取候选因子", "ai_hypothesis": "AI 改写为研究假设", "convert": "转为研究立项", "duplicate": "标为重复",
@@ -273,6 +274,9 @@ def create(body: dict) -> dict:
             "markets": _clean_markets(body.get("markets")), "submitted_by": by, "role": str(body.get("role") or "").strip()[:60] or None,
             "source_ref": None, "created_at": now(), "status": "new", "links": {}, "pii_checked": True,
             "fields": {k: str(body.get(k) or "").strip()[:500] for k in ("direction", "period", "feedback_role") if body.get(k)}}
+    ref = body.get("source_ref")
+    if isinstance(ref, dict):
+        idea["source_ref"] = {k: str(ref[k])[:200] for k in ("research", "run", "note") if ref.get(k)} or None
     if ch == "feedback" and idea["fields"].get("feedback_role") not in FEEDBACK_ROLES + (None,):
         idea["fields"]["feedback_role"] = "其他"
     if ch == "paper":
@@ -496,6 +500,32 @@ def _auto(key: str, idx: dict, channel: str, title: str, body: str, markets: lis
     _save(idea)
     _append(iid, {"action": "create", "by": SYSTEM_BY, "channel": channel, "source": key})
     idx[key] = iid
+
+
+def agent_feedback(agent_id: str, research_id: str, version: int, round_no: int, verdict: str,
+                   reason: str, markets: list[str], run_id: str | None = None) -> dict:
+    """研究迭代 Agent 评估未改进/无法判定时自动回流线索；按 agent + 轮次 + 结论去重。"""
+    DIR.mkdir(parents=True, exist_ok=True)
+    idx = _sources()
+    key = f"agent:{agent_id}:{round_no}:{verdict}"
+    if key in idx:
+        try:
+            return load(idx[key])
+        except IdeaError:
+            pass
+    label = {"not_improved": "未改进", "inconclusive": "无法判定", "improved": "改进"}.get(verdict, verdict)
+    title = f"研究 Agent 评估{label}：{research_id} v{version} 第 {round_no} 轮"
+    body = (f"研究迭代 Agent 对 {research_id} v{version} 第 {round_no} 轮的评估为「{label}」。\n"
+            f"原因：{reason}\n\n"
+            "自动回流说明：建议先查看诊断与可信度检查，再决定修改假设、换方向或停止。")
+    ref = {"research": f"{research_id}.v{version}", "note": "研究迭代 Agent 自动回流"}
+    if run_id:
+        ref["run"] = run_id
+    _auto(key, idx, "agent", title, body, markets, ref)
+    tmp = DIR / "sources.json.tmp"
+    tmp.write_text(json.dumps(idx, ensure_ascii=False, indent=0), encoding="utf-8")
+    tmp.replace(DIR / "sources.json")
+    return load(idx[key])
 
 
 def _migrate_monitor_keys(idx: dict) -> None:

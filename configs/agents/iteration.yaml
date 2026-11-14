@@ -4,6 +4,8 @@ max_rounds: 5
 budget_usd: 2.0
 no_improve_patience: 2
 human_gate: costly_actions        # all | costly_actions | none
+child_loops: 2                    # 每轮 RD-Agent 子运行跑几轮（P1 默认 2，控制费用/时间）
+child_budget_usd: 0.6             # 每个市场子运行的预算上限（美元）
 tools:
   - new_version
   - run_rdagent

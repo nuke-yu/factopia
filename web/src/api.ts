@@ -106,6 +106,10 @@ export type Project = {
   id: string; title: string; markets: Market[]; horizon: number; hypothesis: string; versions: number[]; example: boolean;
   status: ProjectStatus; runs: ProjectRun[]; jobs: Job[];
 };
+/** 研究项目页的 AI 搜索：按向量相似度匹配项目标题与假设正文；向量不可用时后端退回关键词。 */
+export type ProjectSearchHit = { id: string; title: string; hypothesis: string; score: number; snippet: string };
+export type ProjectSearch = { query: string; method: "embedding" | "keyword" | "none"; model: string | null;
+  error: string | null; results: ProjectSearchHit[] };
 
 // ── 研究规格：授权、起草、版本、运行任务（Spec 第 16 章）──
 export type Mandate = {
@@ -133,6 +137,7 @@ export type DraftResult = {
 };
 export type DraftInput = {
   hypothesis: string; direction: string; markets: Market[]; horizon: number; mandate: string; groups: string[]; include_past_runs: boolean;
+  exclusions?: string[];
   idea_id?: string | null; idea_ids?: string[]; combo_id?: string | null; based_on?: string | null;
 };
 export type RegionDiff = {
@@ -247,6 +252,44 @@ export type Study = {
   cross_market: { months: number; pairs: { a: Market; b: Market; corr: number | null }[]; note: string } | null;
 };
 export type RunnerStatus = { paused: { reason: string; at: string } | null; queued: number; running: number };
+
+// ---------------------------------------------------------------- 研究迭代 Agent（WF-02）
+export type AgentState = "queued" | "observing" | "diagnosing" | "planning" | "awaiting_human" | "acting"
+  | "waiting_children" | "evaluating" | "done" | "stopped" | "failed";
+export type AgentApproval = { decision: "approved" | "rejected"; by: string; at: string; run?: boolean;
+  saved_version?: number; draft_sha256?: string; reason?: string };
+export type AgentJob = Omit<Job, "kind" | "market" | "state"> & {
+  kind?: "agent" | "validate" | "monitor" | "paper" | "text";
+  market: string; state: JobState | "waiting_children" | "awaiting_human";
+  agent_id?: string; child_jobs?: string[]; agent_state?: string;
+};
+export type Agent = {
+  agent_id: string; kind: string; state: AgentState; created_at: string; updated_at: string;
+  root: { research_id: string; version: number; markets: Market[]; horizon: number };
+  policy: Record<string, unknown>; current_round: number; current_version: number; parent_version: number;
+  child_version: number | null; round_limit: number; dry_run: boolean; auto_approve: boolean;
+  approved: AgentApproval | null; cost_usd: number; costed_jobs: string[];
+  usage: { prompt_tokens: number; completion_tokens: number }; child_jobs: string[];
+  last_action: unknown; stop_reason: string | null; last_error: string | null; job_state?: string | null;
+};
+export type AgentFact = { id: string; key: string; market: Market | null; period: string; text: string; redacted: boolean };
+export type AgentRound = {
+  n: number; facts: { facts: AgentFact[]; summary: Record<string, unknown> } | null;
+  diagnosis: any | null; plan: any | null; draft_action: any | null;
+  next_version_draft: { draft: Record<string, any>; meta: Record<string, any> } | null;
+  approval: AgentApproval | null; action: Record<string, any> | null; evaluation: Record<string, any> | null;
+};
+export type AgentTrace = { at: string; kind: string; role?: string; model?: string; usage?: Record<string, unknown>;
+  prompt_version?: string; prompt?: string; response?: string; from?: string; to?: string;
+  tool?: string; args?: unknown; result?: unknown; count?: number; [key: string]: unknown };
+export type AgentDetail = { agent: Agent; rounds: AgentRound[]; children: AgentJob[]; job: AgentJob | null; report: string | null };
+export type AgentOverlapPair = { key: string; title?: string | null; kind?: string | null; approved: boolean;
+  corr: number | null; ic_corr: number | null; redundant: boolean };
+export type AgentOverlapMarket = { ok: boolean; reason?: string;
+  current?: { rank_ic?: number | null; ir?: number | null; t?: number | null; factors?: string[] } | null;
+  pairs?: AgentOverlapPair[]; max_abs?: number | null; redundant?: boolean; complement?: string | null; note?: string };
+export type AgentOverlap = { agent_id: string; research_id: string; version: number;
+  markets: Partial<Record<Market, AgentOverlapMarket>> };
 export type Preview = { market: Market; test_start: string; dates: Record<string, string>; text: string; chars: number };
 
 type EventBase = { index: number; t: number; loop: number; step: string; has_prompt: boolean };
@@ -583,7 +626,7 @@ const post = <T,>(path: string, body: unknown) =>
   request<T>(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
 // ---------------------------------------------------------------- 研究线索池（Spec 第 17 章）
-export type IdeaChannel = "hypothesis" | "paper" | "experience" | "feedback" | "monitor" | "portfolio" | "approval";
+export type IdeaChannel = "hypothesis" | "paper" | "experience" | "feedback" | "monitor" | "paper_trading" | "portfolio" | "approval" | "agent";
 export type IdeaStatus = "new" | "converted" | "duplicate" | "dismissed";
 export type IdeaFactor = { key: string; name: string; description_zh: string; formula: string; logic_zh: string; data_needs: string[];
   availability: { ok: boolean; missing: string[]; needs_zh: string[] }; cites: number[]; quotes: { p: number; text: string }[] };
@@ -613,7 +656,8 @@ export type IdeaInput = { channel: IdeaChannel; title: string; body: string; mar
   confirm_no_client_data: boolean; direction?: string; period?: string; feedback_role?: string;
   document?: { name?: string; content_base64?: string; source: string; licence: string; licence_note?: string; published?: string;
     sample_start?: string; sample_end?: string };
-  ai_suggestion?: IdeaSuggestion | null };
+  ai_suggestion?: IdeaSuggestion | null;
+  source_ref?: { research?: string; run?: string; note?: string } };
 export type IdeaSuggestion = { id: string; channel: IdeaChannel; title: string; body: string; direction: string; period: string; feedback_role: string;
   markets: Market[]; why_zh: string; grounds: (string | IdeaGround)[]; angle: string; model: string; prompt_version: string; at: string;
   focus_market?: Market | null; selection?: string[]; candidates?: { angle: string; market: Market; score: number }[]; seed?: string; evidence_n?: number;
@@ -746,6 +790,7 @@ export const api = {
   run: (id: string) => get<{
     run: Run & { state: ProjectRun["state"] }; rounds: Round[]; job: Job | null; batch: Job[];
     verdicts: RoundVerdict[] | null; rule: VerdictRule | null;
+    agent: { agent_id: string; state: string; current_version: number; research_id: string } | null;
   }>(`/runs/${id}`),
   validation: (runId: string) => get<{ items: Record<string, Validation>; jobs: Job[] }>(`/runs/${runId}/validation`),
   validate: (runId: string, loop?: number) => post<Job>(`/runs/${runId}/validate`, loop == null ? {} : { loop }),
@@ -756,6 +801,7 @@ export const api = {
   quantiles: (id: string) => get<Record<string, Quantiles>>(`/runs/${id}/quantiles`),
   positions: (id: string, key: string, step = 5) => get<Positions>(`/runs/${id}/positions/${key}?step=${step}`),
   projects: () => get<Project[]>("/projects"),
+  projectSearch: (q: string) => get<ProjectSearch>(`/projects/search?q=${encodeURIComponent(q)}`),
   events: (id: string) => get<RunEvent[]>(`/runs/${id}/events`),
   prompt: (id: string, index: number) => get<{ system: string; user: string; response: string | null }>(`/runs/${id}/events/${index}/prompt`),
   researchExamples: () => get<ResearchSpec[]>("/research/examples"),
@@ -766,6 +812,19 @@ export const api = {
   versions: (id: string) => get<Spec[]>(`/research/${id}/versions`),
   startRuns: (id: string, version: number, body: { markets: Market[]; loops: number; budget_usd: number }) =>
     post<{ batch_id: string; jobs: Job[] }>(`/research/${id}/versions/${version}/runs`, body),
+  agents: () => get<Agent[]>("/agents"),
+  agent: (id: string) => get<AgentDetail>(`/agents/${id}`),
+  agentTrace: (id: string) => get<{ items: AgentTrace[] }>(`/agents/${id}/trace`),
+  agentReport: (id: string) => get<{ markdown: string }>(`/agents/${id}/report`),
+  agentOverlap: (id: string) => get<AgentOverlap>(`/agents/${id}/overlap`),
+  createAgent: (body: { research_id: string; version: number; rounds?: number; markets?: Market[]; budget_usd?: number }) =>
+    post<{ agent: Agent; job: AgentJob }>("/agents", body),
+  approveAgent: (id: string, body: { draft?: Record<string, unknown>; run?: boolean; by?: string }) =>
+    post<{ agent: Agent; saved: Spec; job: AgentJob | null }>(`/agents/${id}/approve`, body),
+  rejectAgent: (id: string, body: { reason: string; by?: string }) =>
+    post<{ agent: Agent; job: AgentJob | null }>(`/agents/${id}/reject`, body),
+  stopAgent: (id: string, body: { reason?: string; by?: string } = {}) =>
+    post<{ agent: Agent; jobs: AgentJob[] }>(`/agents/${id}/stop`, body),
   jobs: (batch?: string) => get<Job[]>(`/jobs${batch ? `?batch=${batch}` : ""}`),
   job: (id: string) => get<JobDetail>(`/jobs/${id}`),
   cancelJob: (id: string) => post<{ ok: boolean }>(`/jobs/${id}/cancel`, {}),

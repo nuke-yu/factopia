@@ -20,7 +20,7 @@ const BODY_LABEL: Record<string, [string, string]> = {
   feedback: [t("反馈内容"), t("例：客户团队反映，跨境客户更关心信号在市场急跌时的表现")],
 };
 const STATUS_TONE = { new: "accent", converted: "good", duplicate: "muted", dismissed: "muted" } as const;
-const AUTO = new Set<IdeaChannel>(["monitor", "portfolio", "approval"]);
+const AUTO = new Set<IdeaChannel>(["monitor", "paper_trading", "portfolio", "approval", "agent"]);
 const ACTOR_KEY = "factopia-idea-actor";
 
 function readActor() { try { return localStorage.getItem(ACTOR_KEY) ?? ""; } catch { return ""; } }
@@ -37,10 +37,20 @@ function fileToBase64(f: File): Promise<string> {
 
 function Submit({ meta, actor, setActor, onCreated, onSuggestion }: { meta: IdeaList; actor: string; setActor: (v: string) => void; onCreated: (i: Idea) => void;
   onSuggestion: (s: IdeaSuggestion | null) => void }) {
+  const [params] = useSearchParams();
+  const preTitle = params.get("prefill_title") || "";
+  const preBody = params.get("prefill_body") || "";
+  const preMarkets = (params.get("prefill_markets") || "").split(",")
+    .filter((m): m is Market => m === "hk" || m === "uk" || m === "fr");
+  const prefilled = !!(preTitle || preBody);
+  const sourceRef = (params.get("prefill_research") || params.get("prefill_run")) ? {
+    ...(params.get("prefill_research") ? { research: params.get("prefill_research")! } : {}),
+    ...(params.get("prefill_run") ? { run: params.get("prefill_run")! } : {}),
+  } : undefined;
   const [ch, setCh] = useState<IdeaChannel>("hypothesis");
-  const [title, setTitle] = useState("");
-  const [body, setBody] = useState("");
-  const [markets, setMarkets] = useState<Market[]>(visibleMarkets());
+  const [title, setTitle] = useState(preTitle);
+  const [body, setBody] = useState(preBody);
+  const [markets, setMarkets] = useState<Market[]>(preMarkets.length ? preMarkets : visibleMarkets());
   const [extra, setExtra] = useState<Record<string, string>>({});
   const [file, setFile] = useState<File | null>(null);
   const [confirm, setConfirm] = useState(false);
@@ -64,7 +74,7 @@ function Submit({ meta, actor, setActor, onCreated, onSuggestion }: { meta: Idea
       if (r.markets.length) setMarkets(r.markets.filter((m) => visibleMarkets().includes(m)));
     } catch (e) { setSugErr((e as Error).message); } finally { setSugBusy(false); }
   }
-  useEffect(() => { suggest(ch); }, [ch]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (!prefilled) suggest(ch); }, [ch]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { onSuggestion(ch === "paper" ? null : sug); }, [sug, ch]); // eslint-disable-line react-hooks/exhaustive-deps
   const edited = !!sug && (sug.title !== title.trim() || sug.body !== body.trim());
   const x = (k: string) => extra[k] ?? "";
@@ -73,7 +83,7 @@ function Submit({ meta, actor, setActor, onCreated, onSuggestion }: { meta: Idea
     setBusy(true); setError(null);
     try {
       const input: IdeaInput = { channel: ch, title: title.trim(), body: body.trim(), markets, submitted_by: actor.trim(), confirm_no_client_data: confirm,
-        ai_suggestion: ch !== "paper" ? sug : null };
+        ai_suggestion: ch !== "paper" ? sug : null, ...(sourceRef ? { source_ref: sourceRef } : {}) };
       if (ch === "hypothesis") input.direction = x("direction");
       if (ch === "experience") input.period = x("period");
       if (ch === "feedback") input.feedback_role = x("feedback_role") || meta.feedback_roles[0];
@@ -204,7 +214,8 @@ function Card({ i, active, onClick, checked, onCheck }: { i: Idea; active: boole
 function SourceLink({ ref_ }: { ref_: Record<string, string> }) {
   if (ref_.signal_id) return <Link className="text-accent" to={`/signals?sid=${ref_.signal_id}`}>{t("信号目录")} · {ref_.signal_id}</Link>;
   if (ref_.submission) return <Link className="text-accent" to="/approvals">{t("审批台")} · {ref_.submission}</Link>;
-  if (ref_.research) return <Link className="text-accent" to="/portfolio">{t("组合台")} · {ref_.research}</Link>;
+  if (ref_.run) return <Link className="text-accent" to={`/results?run=${ref_.run}`}>{t("结果")} · {ref_.run}</Link>;
+  if (ref_.research) return <Link className="text-accent" to="/projects">{t("研究")} · {ref_.research}</Link>;
   return null;
 }
 

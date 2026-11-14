@@ -14,6 +14,14 @@ const LIVE_POLL_MS = 5000;
 const SPEEDS = [10, 30, 60, 120];
 const mmss = (s: number) => `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
 
+function agentRunNotice(state: string): string {
+  if (state === "waiting_children") return t("研究 Agent 正在进行可信度检查，完成后会自动评估");
+  if (state === "evaluating") return t("研究 Agent 正在评估");
+  if (state === "stopped" || state === "done") return t("研究 Agent 已完成评估，点击查看结论");
+  if (state === "failed") return t("研究 Agent 处理失败，点击查看错误");
+  return t("研究 Agent 正在继续，点击查看进度");
+}
+
 export default function RunPage() {
   const [params, setParams] = useSearchParams();
   const jobId = params.get("job");
@@ -163,7 +171,7 @@ function Replay({ runId }: { runId: string }) {
     if (detail.error || events.error) return <ErrorBox error={(detail.error ?? events.error)!} />;
     return <Loading what={t("运行过程")} />;
   }
-  const { run, rounds, job, batch } = detail.data;
+  const { run, rounds, job, batch, agent } = detail.data;
   const visible = events.data.filter((e) => e.t <= clock);
   const finished = !running && clock >= total;
 
@@ -228,7 +236,13 @@ function Replay({ runId }: { runId: string }) {
       )}
       {finished && (
         <Notice tone="accent" title={run.state === "已完成" ? t("运行结束") : tf("运行{s}", { s: t(run.state) })}>
-          {tf("共 {r} 轮，采纳 {a} 轮，大模型费用 {c}。", { r: run.rounds, a: run.adopted, c: `$${run.cost_usd.toFixed(2)}` })}<Link to={`/results?run=${run.run_id}`} className="text-accent underline">{t("查看结果分析 →")}</Link>
+          {tf("共 {r} 轮，采纳 {a} 轮，大模型费用 {c}。", { r: run.rounds, a: run.adopted, c: `$${run.cost_usd.toFixed(2)}` })}
+          {agent ? (
+            <>
+              <Link to={`/agents/${agent.agent_id}`} className="text-accent underline">{agentRunNotice(agent.state)} →</Link>
+              <Link to={`/results?run=${run.run_id}`} className="text-muted underline ml-2">{t("查看本次结果")}</Link>
+            </>
+          ) : <Link to={`/results?run=${run.run_id}`} className="text-accent underline">{t("查看结果分析 →")}</Link>}
           {job && <span className="text-muted">{t("（回测明细在运行结束后约 1 分钟内导出）")}</span>}
         </Notice>
       )}

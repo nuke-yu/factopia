@@ -116,6 +116,11 @@ h1, h2, h3 { text-wrap: balance; }
 }
 @media (prefers-reduced-motion: reduce) { .live-in, .live-bar { animation: none; } }
 
+/* Agent 运行中的状态徽标轻微闪烁 */
+@keyframes state-flash { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+.state-flash { display: inline-flex; animation: state-flash 1.1s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .state-flash { animation: none; } }
+
 /* KaTeX 数学公式（因子 formulation / 变量名）：贴紧页面节奏，长公式横向滚动 */
 .katex { font-size: 1.04em; }
 .katex-display { margin: 0.3em 0; }

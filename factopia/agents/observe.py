@@ -52,6 +52,8 @@ def _runs(research_id: str, version: int) -> list[dict]:
             continue
         r = run.get("research") or {}
         if r.get("id") == research_id and r.get("version") == version:
+            if run.get("context_leak"):
+                continue                         # 受数据泄漏影响的运行不能作为 Agent 决策证据（MINE-11）
             out.append(run)
     return out
 
@@ -275,11 +277,15 @@ def _overall_facts(add, market_state: dict, rule: dict) -> dict:
     except Exception:
         over = {"state": "unknown", "label": "无法判定"}
     add("overall", f"Platform verdict: {over.get('label')}.", period="test (status only)", redacted=True)
-    try:
-        transfer = verdict.transfer(markets, rule, diags)
-    except Exception:
-        transfer = {"label": "unknown", "statistical": None}
-    add("transfer", f"Transfer classification: {transfer.get('label')}.", period="test (status only)", redacted=True)
+    if len(rule["markets"]) < 2:
+        transfer = {"label": "不适用（单市场）", "statistical": None}
+        add("transfer", "Transfer classification: not applicable (single-market study).", period="spec")
+    else:
+        try:
+            transfer = verdict.transfer(markets, rule, diags)
+        except Exception:
+            transfer = {"label": "unknown", "statistical": None}
+        add("transfer", f"Transfer classification: {transfer.get('label')}.", period="test (status only)", redacted=True)
     return {"overall": {"state": over.get("state"), "label": over.get("label")},
             "transfer": {"label": transfer.get("label"), "statistical": transfer.get("statistical")}}
 

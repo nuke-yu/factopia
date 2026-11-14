@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { api, MARKETS, type Market } from "../api";
 import { testPeriodMentions, useDraft, type Draft } from "../draft";
 import { cssVar, MARKET_LABEL, useAsync } from "../lib";
@@ -13,6 +13,8 @@ const HORIZONS: { value: Draft["horizon"]; label: string }[] = [
 export default function ResearchPage() {
   const { draft, update, setResult, setLocked } = useDraft();
   const navigate = useNavigate();
+  const [params] = useSearchParams();
+  const basedOnParam = params.get("based_on");
   const cube = useAsync(() => api.cube(20), []);
   const mandates = useAsync(() => api.mandates(), []);
   const [busy, setBusy] = useState(false);
@@ -21,6 +23,27 @@ export default function ResearchPage() {
   useEffect(() => {
     if (cube.data && draft.groups.length === 0) update({ groups: cube.data.groups });
   }, [cube.data]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 结果页「生成下一版本」：?based_on=<id>.v<N> 预填父版本内容，锁定后为同一研究的新版本
+  useEffect(() => {
+    const m = /^([a-z][a-z0-9_]{2,39})\.v(\d+)$/.exec(basedOnParam || "");
+    if (!m) return;
+    const rid = m[1], ver = Number(m[2]);
+    api.versions(rid).then((list) => {
+      const spec = list.find((x) => x.version === ver);
+      if (!spec) return;
+      update({
+        basedOn: { id: rid, version: ver },
+        hypothesis: spec.hypothesis_original || spec.hypothesis || spec.hypothesis_zh || "",
+        direction: spec.direction_original || (spec.directions || []).join("；"),
+        exclusions: (spec.exclusions || []).join("\n"),
+        markets: spec.markets,
+        horizon: spec.horizon as Draft["horizon"],
+        mandate: spec.mandate,
+        ideaId: null, ideaIds: [], comboId: null, ideaTitle: null,
+      });
+    }).catch(() => undefined);
+  }, [basedOnParam]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const mandate = mandates.data?.find((m) => m.id === draft.mandate);
   const allowed = mandate?.markets ?? MARKETS;
@@ -37,6 +60,7 @@ export default function ResearchPage() {
     try {
       const r = await api.draft({ hypothesis: draft.hypothesis, direction: draft.direction, markets: draft.markets, horizon: draft.horizon,
         mandate: draft.mandate, groups: draft.groups.length === cube.data?.groups.length ? [] : draft.groups, include_past_runs: draft.includePastRuns,
+        exclusions: draft.exclusions.split("\n").map((x) => x.trim()).filter(Boolean),
         idea_id: draft.ideaId ?? null, idea_ids: draft.ideaIds ?? [], combo_id: draft.comboId ?? null,
         based_on: draft.basedOn ? `${draft.basedOn.id}.v${draft.basedOn.version}` : null });
       setResult(r); setLocked(null);
@@ -67,6 +91,14 @@ export default function ResearchPage() {
           <span className="text-xs text-faint">{draft.basedOn
             ? tf("锁定后成为研究 {id} 的新版本（基于 v{v}，已检验的旧版本不变）；", { id: draft.basedOn.id, v: draft.basedOn.version })
             : t("锁定后成为一个新研究；")}{t('所有来源线索标记为"已转立项"并指向该版本，每条线索的防泄漏与文档许可确认项会出现在审核页')}</span>
+        </div>
+      )}
+      {draft.basedOn && !draft.ideaIds?.length && (
+        <div className="panel p-3 flex flex-wrap items-center gap-3 text-sm">
+          <span className="label">{t("继续研究")}</span>
+          <span className="num text-xs">{draft.basedOn.id}.v{draft.basedOn.version}</span>
+          <span className="text-muted">{t("已预填父版本的假设、方向、市场与周期；锁定后成为该研究的新版本，旧版本不变。")}</span>
+          <button type="button" className="btn h-7 px-2 text-xs ml-auto" onClick={() => update({ basedOn: null })}>{t("取消关联")}</button>
         </div>
       )}
       {draft.ideaId && (
@@ -136,6 +168,10 @@ export default function ResearchPage() {
             <textarea id="hyp" className="field mt-1 min-h-28 leading-relaxed" value={draft.hypothesis} onChange={(e) => update({ hypothesis: e.target.value })} />
             <label className="label mt-3 block" htmlFor="dir">{t("研究方向")}</label>
             <input id="dir" className="field mt-1" value={draft.direction} onChange={(e) => update({ direction: e.target.value })} />
+            <label className="label mt-3 block" htmlFor="excl">{t("排除方向（每行一条）")}</label>
+            <textarea id="excl" className="field mt-1 min-h-16 text-sm" value={draft.exclusions}
+              onChange={(e) => update({ exclusions: e.target.value })} placeholder={t("例：不做纯反转；不用公告文本")} />
+            <p className="text-xs text-faint mt-1">{t("会随研究规格带给 AI 起草，并在审核页保留。")}</p>
             {mentions.length > 0 && (
               <div className="mt-3">
                 <Notice title={tf("输入中出现了测试期内的年份：{l}", { l: joinList(mentions) })}>

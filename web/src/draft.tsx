@@ -8,6 +8,7 @@ export type Draft = {
   horizon: 1 | 5 | 20 | 60;
   hypothesis: string;
   direction: string;
+  exclusions: string;        // 研究员带入的排除方向（每行一条）
   groups: string[];          // 证据包中提供给 AI 的因子类型
   includePastRuns: boolean;  // 证据包中是否包含以往运行的假设与采纳结果
   ideaId?: string | null;    // 来自研究线索池（Spec 第 17 章）
@@ -23,6 +24,7 @@ const DEFAULT: Draft = {
   horizon: 20,
   hypothesis: "",
   direction: "",
+  exclusions: "",
   groups: [],
   includePastRuns: true,
 };
