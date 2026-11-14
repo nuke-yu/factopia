@@ -623,9 +623,15 @@ dependencies = [
     { name = "yfinance" },
 ]
 
+[package.optional-dependencies]
+paper = [
+    { name = "longport" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "exchange-calendars" },
+    { name = "longport", marker = "extra == 'paper'" },
     { name = "mlflow", specifier = "<3.13" },
     { name = "pandas" },
     { name = "pyarrow" },
@@ -635,6 +641,7 @@ requires-dist = [
     { name = "skfolio" },
     { name = "yfinance" },
 ]
+provides-extras = ["paper"]
 
 [[package]]
 name = "fastapi"
@@ -1429,6 +1436,20 @@ dependencies = [
 sdist = { url = "https://pypi.tuna.tsinghua.edu.cn/packages/3a/05/a1dae3dffd1116099471c643b8924f5aa6524411dc6c63fdae648c4f1aca/loguru-0.7.3.tar.gz", hash = "sha256:19480589e77d47b8d85b2c827ad95d49bf31b0dcde16593892eb51dd18706eb6", size = 63559 }
 wheels = [
     { url = "https://pypi.tuna.tsinghua.edu.cn/packages/0c/29/0348de65b8cc732daa3e33e67806420b2ae89bdce2b04af740289c5c6c8c/loguru-0.7.3-py3-none-any.whl", hash = "sha256:31a33c10c8e1e10422bfd431aeb5d351c7cf7fa671e3c4df004162264b28220c", size = 61595 },
+]
+
+[[package]]
+name = "longport"
+version = "4.3.7"
+source = { registry = "https://pypi.tuna.tsinghua.edu.cn/simple" }
+wheels = [
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/97/3a/2da8544744af7ff2b6a5fa3a705730a3fc2a52ee777df1532e3ca5af2542/longport-4.3.7-cp312-cp312-macosx_10_12_x86_64.whl", hash = "sha256:d65032742977248db8fa5f4f69d8b2ceff5a0db97bb0384ba661df6702d92ca3", size = 10211027 },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/91/26/13e1e7b04c4c3398be256ad6e607bf8f4fb2e7f713c4ddd9ba1a0653b3ca/longport-4.3.7-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:6dcb3ed72a99cfc2f6585f193e7d0d4d21bec4caaef9cf6ea8085eb549ec6ca1", size = 9759721 },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/d7/b0/60800b73c6bd48a47e987153a4340028f03f23758bd8f075c6fcf947326c/longport-4.3.7-cp312-cp312-manylinux_2_39_aarch64.whl", hash = "sha256:5333b24189381f0bb2cca8b731f7ec5b162f899c2ffafa2b29dfaf4d6e3ece2e", size = 10239654 },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/7e/b9/681e15f5c349d98f1ff41b790f3b19b9e236424de2b245f0eff2085711f7/longport-4.3.7-cp312-cp312-manylinux_2_39_x86_64.whl", hash = "sha256:2b8de13d906202d792645f71134191cf06b0f99532551374a4404a3938f5f0e0", size = 10416404 },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/2d/f0/5ee5860307663595039e2fbd085790e40e5e0f8aeea1d0efd0978793f2af/longport-4.3.7-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:4aecffb7fe178cbfa8add408399e644fba2131c787fa84c64cff62149d998a45", size = 10405881 },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/63/f2/e21d85c445c76f40af866cb3c78a0010560bf06360f2cab3eee651bfd707/longport-4.3.7-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:53b4a9f6490d1f0a46ae6344ad51d3a2d15ca7efdce81d6a22c2b3db69861893", size = 10671679 },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/27/31/370758b2ad0181414fbed253ae2086d37bb280e49dad9510887732696b31/longport-4.3.7-cp312-cp312-win_amd64.whl", hash = "sha256:ef3fa39d319e3daca6902c01f6b0045414ae580367aedb90bca43bab32bd2acc", size = 10947513 },
 ]
 
 [[package]]
