@@ -1,22 +1,23 @@
-# RD-Agent 回测镜像（替代官方只有 x86 版本的 pytorch/CUDA 镜像）。
+# Qlib 回测镜像（替代官方只有 x86 版本的 pytorch/CUDA 镜像）。
 # 多架构：Apple 芯片原生运行，x86 云服务器同样可用。不含 GPU / PyTorch（fin_factor 回测使用 LightGBM）。
+# 源码来自仓库内 qlibs/（Qlib commit 2fb9380 快照，与 RD-Agent 官方镜像固定版本一致），不再从 GitHub clone。
+
+# pip 源可通过 --build-arg PIP_INDEX_URL=... 覆盖（默认官方 PyPI；国内网络可传镜像加速）
+ARG PIP_INDEX_URL=https://pypi.org/simple
+
 FROM python:3.11-slim
 
-# Qlib 源码地址。默认 GitHub；直连 GitHub 不稳定时可改用镜像（如 Gitee）：
-#   docker compose --profile build-only build \
-#     --build-arg QLIB_GIT_URL=https://gitee.com/mirrors/qlib.git qlib-runner
-ARG QLIB_GIT_URL=https://github.com/microsoft/qlib.git
+ARG PIP_INDEX_URL
+ENV PIP_INDEX_URL=${PIP_INDEX_URL}
 
-RUN apt-get update && apt-get install -y --no-install-recommends build-essential git curl \
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# 与 RD-Agent 官方镜像使用相同的 Qlib 提交
-RUN git clone ${QLIB_GIT_URL} /workspace/qlib \
-    && cd /workspace/qlib && git reset --hard 2fb9380b342556ddb50a4b24e4fe8655d548b2b8
+COPY qlibs /workspace/qlib
 WORKDIR /workspace/qlib
 RUN pip install --no-cache-dir --upgrade cython \
     && pip install --no-cache-dir -e . "mlflow<3.13" \
     && pip install --no-cache-dir catboost xgboost tables
 
 # 把 Qlib 的 MLflow 指标写入改为同步，规避异步写入的竞态（见 sitecustomize.py）
-COPY sitecustomize.py /usr/local/lib/python3.11/site-packages/sitecustomize.py
+COPY docker/qlib/sitecustomize.py /usr/local/lib/python3.11/site-packages/sitecustomize.py
