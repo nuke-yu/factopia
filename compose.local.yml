@@ -16,16 +16,8 @@ services:
 
   # RD-Agent 各市场配置模板（本地开发挂载；云端部署时打包进镜像）
   # RD-Agent 扩展代码（factopia.mining.rdagent_ext）通过 PYTHONPATH 加载
+  # 源码来自仓库内 rdagents/ 快照（与 main 一致）
   rdagent:
-    # 本地源码构建：不用 Dockerfile（构建时从 GitHub 克隆 v1.0.0），改用 Dockerfile.local，
-    # 把本机的 RD-Agent 仓库整个拷进镜像（默认 ../rd-agent，可用 FACTOPIA_RDAGENT_SRC 指向其他路径）。
-    # 改动本地 RD-Agent 源码后：docker compose -f docker-compose.yml -f compose.local.yml build rdagent
-    build:
-      dockerfile: Dockerfile.local
-      additional_contexts:
-        rdagent_src: ${FACTOPIA_RDAGENT_SRC:-../rd-agent}
-      args:
-        APT_MIRROR: ${APT_MIRROR:-}
     environment:
       PYTHONPATH: /workspace/factopia
     volumes:
@@ -53,6 +45,9 @@ services:
     # 行情再断时先确认宿主机 Clash 是否常开。
     extra_hosts:
       - "openapi-quote.longportapp.com:127.0.0.1"
+      # 容器内直连百炼工作区端点会出现 SSL WRONG_VERSION_NUMBER（走 IPv6/Docker NAT 时），
+      # 固定为宿主机解析到的 IPv4，强制走 IPv4。
+      - "llm-tlndh47wd9ustbss.cn-beijing.maas.aliyuncs.com:39.106.184.160"
     command: ["sh", "-c", "while true; do python -m factopia.longport_fwd; sleep 5; done & exec python -m factopia.runner"]
   exporter:
     volumes:
@@ -60,11 +55,19 @@ services:
 
   # 后端接口：挂载源码并自动重载
   api:
+    # 同 runner：把大模型端点固定为宿主机解析到的 IPv4，避免容器内 IPv6/DNS 导致 TLS 失败。
+    extra_hosts:
+      - "llm-tlndh47wd9ustbss.cn-beijing.maas.aliyuncs.com:39.106.184.160"
     volumes:
       - ./factopia:/workspace/factopia/factopia:ro
       - ./configs:/workspace/configs:ro
     command: ["uvicorn", "factopia.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload",
               "--reload-dir", "/workspace/factopia/factopia"]
+
+  # 前端本地预览直接使用宿主机构建产物（web 容器 npm run build 后无需重建镜像；云端仍打包进镜像）
+  web:
+    volumes:
+      - ./web/dist:/usr/share/nginx/html:ro
 
   # 前端开发服务器（热更新）：docker compose -f docker-compose.yml -f compose.local.yml --profile dev up -d web-dev
   #   → http://localhost:5173 ；依赖装在命名卷中，避免与宿主机的系统架构混用
@@ -75,6 +78,9 @@ services:
     depends_on: [api]
     environment:
       API_UPSTREAM: http://api:8000
+      # Windows bind mount 下容器内 inotify 收不到宿主机的文件事件，热更新会失效；
+      # 用轮询监听（chokidar 3.x 识别该环境变量），仅本地开发需要
+      CHOKIDAR_USEPOLLING: "1"
     volumes:
       - ./web:/app
       - web_node_modules:/app/node_modules

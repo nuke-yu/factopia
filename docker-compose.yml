@@ -13,7 +13,8 @@ services:
   # RD-Agent 回测镜像：只构建，不常驻。构建后需载入 dind：见 README
   qlib-runner:
     build:
-      context: docker/qlib
+      context: .
+      dockerfile: docker/qlib/Dockerfile
     image: factopia-qlib:dev
     profiles: ["build-only"]
 
@@ -22,6 +23,7 @@ services:
   dind:
     image: docker:24-dind
     privileged: true
+    restart: unless-stopped   # Docker Desktop 重启后自动恢复，避免 runner 找不到回测引擎
     # dind 是独立 Docker 引擎，不继承宿主机 Docker Desktop 的镜像加速；国内网络通过镜像站拉取 Docker Hub 镜像
     # 可在 .env 中用 DIND_REGISTRY_MIRROR 覆盖（海外环境可改为 https://registry-1.docker.io）
     command: ["--registry-mirror=${DIND_REGISTRY_MIRROR:-https://docker.1panel.live}"]
@@ -34,7 +36,8 @@ services:
 
   rdagent: &rdagent
     build:
-      context: docker/rdagent
+      context: .
+      dockerfile: docker/rdagent/Dockerfile
     image: factopia-rdagent:dev
     env_file: .env
     depends_on: [dind]

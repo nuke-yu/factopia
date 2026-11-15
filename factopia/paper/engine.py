@@ -423,10 +423,11 @@ def _rebalance(sid: str, score: pd.DataFrame, state: dict, close: pd.DataFrame, 
     br = broker.LongPortBroker() if mode == "longport" else None
     for symbol, side, qty in plan:
         if mode == "longport":
-            n_lot = int(qty // broker.LOT) * broker.LOT
+            lot = br.lot_size(symbol) if hasattr(br, "lot_size") else broker.LOT
+            n_lot = int(qty // lot) * lot
             if n_lot <= 0:
                 _append_event(sid, {"event": "cancelled", "order_id": None, "symbol": symbol, "side": side, "qty": 0,
-                                    "reason": "按每手 100 股取整后数量为 0，未下单"})
+                                    "reason": f"按每手 {lot} 股取整后数量为 0，未下单"})
                 continue
             try:
                 oid = br.submit(symbol, side, n_lot)

@@ -106,6 +106,10 @@ export type Project = {
   id: string; title: string; markets: Market[]; horizon: number; hypothesis: string; versions: number[]; example: boolean;
   status: ProjectStatus; runs: ProjectRun[]; jobs: Job[];
 };
+/** 研究项目页的 AI 搜索：按向量相似度匹配项目标题与假设正文；向量不可用时后端退回关键词。 */
+export type ProjectSearchHit = { id: string; title: string; hypothesis: string; score: number; snippet: string };
+export type ProjectSearch = { query: string; method: "embedding" | "keyword" | "none"; model: string | null;
+  error: string | null; results: ProjectSearchHit[] };
 
 // ── 研究规格：授权、起草、版本、运行任务（Spec 第 16 章）──
 export type Mandate = {
@@ -118,6 +122,10 @@ export type EvidenceAlpha = {
   id: string; market: Market; source: string; period: { start: string; end: string }; test_start: string; significant: number;
   factors: { name: string; group: string; desc: string; t: number; ric: number; label: string }[];
 };
+/** 研究立项页可选联网检索结果：只采用测试期之前、日期可靠的公开资料。 */
+export type ExternalEvidence = { title: string; url: string; published: string | null; snippet: string; source?: string | null };
+export type WebSearch = { configured: boolean; provider: string; model?: string | null; query: string; before: string;
+  results: ExternalEvidence[]; error: string | null; warning?: string | null; raw_count: number; excluded: number };
 export type DraftResult = {
   draft: {
     id: string | null; title_zh: string; hypothesis: string; hypothesis_zh: string; rationale: Rationale;
@@ -129,11 +137,14 @@ export type DraftResult = {
   evidence: { groups: string[]; alpha158: EvidenceAlpha[]; internal?: InternalEvidence[]; past_runs: { run_id: string; market: Market; loop: number; hypothesis: string; adopted: boolean }[] };
   mandate: Mandate;
   meta: { model: string; prompt_version: string; prompt_tokens: number; completion_tokens: number; seconds: number; at: string; idea_id?: string | null;
-    idea_ids?: string[]; combo_id?: string | null; based_on?: string | null };
+    idea_ids?: string[]; combo_id?: string | null; based_on?: string | null; external_evidence?: ExternalEvidence[] };
 };
 export type DraftInput = {
   hypothesis: string; direction: string; markets: Market[]; horizon: number; mandate: string; groups: string[]; include_past_runs: boolean;
-  idea_id?: string | null; idea_ids?: string[]; combo_id?: string | null; based_on?: string | null; seeds?: SeedsInput | null;
+  idea_id?: string | null; idea_ids?: string[]; combo_id?: string | null; based_on?: string | null;
+  exclusions?: string[];
+  external_evidence?: ExternalEvidence[];
+  seeds?: SeedsInput | null;
 };
 
 // ── 起点因子：以因子库已有因子做变体 / 组合研究（Spec 第 16.7 节扩展）──
@@ -263,16 +274,66 @@ export type StudyMarket = {
       placebo: { n: number; share_ge_ai: number | null; share_ge_baseline: number | null; median: number | null } | null }) | null;
   } | null;
 };
+/** 人工终止研究：按研究编号终止，所有版本都不能再启动 Agent；version 只记录终止发生在哪个版本。 */
+export type ResearchTermination = {
+  research_id: string; version: number | null; at: string; by: string; reason: string;
+};
+/** 结果页「把新发现存入线索池」后，该研究版本已存在的来源线索。 */
+export type SavedIdea = { id: string; title: string; run: string | null };
 export type Study = {
   research_id: string; version: number; hypothesis: string; title: string | null;
   rule: { primary: Market; markets: Market[]; ric_sign: 1 | -1; sign_from_text: boolean; text: string };
   overall: { state: "pending" | "rejected" | "passed" | "insufficient"; label: string; reason: string };
   markets: Partial<Record<Market, StudyMarket>>;
   findings: { tone: "bad" | "warn" | "good"; text: string }[];
-  transfer: Transfer; explanation: Explanation | null;
+  transfer: Transfer; explanation: Explanation | null; terminated: ResearchTermination | null;
+  saved_ideas: SavedIdea[];
   cross_market: { months: number; pairs: { a: Market; b: Market; corr: number | null }[]; note: string } | null;
 };
 export type RunnerStatus = { paused: { reason: string; at: string } | null; queued: number; running: number };
+
+// ---------------------------------------------------------------- 研究迭代 Agent（WF-02）
+export type AgentState = "queued" | "observing" | "diagnosing" | "planning" | "awaiting_human" | "acting"
+  | "waiting_children" | "evaluating" | "done" | "stopped" | "failed";
+export type AgentApproval = { decision: "approved" | "rejected"; by: string; at: string; run?: boolean;
+  saved_version?: number; draft_sha256?: string; reason?: string };
+export type AgentJob = Omit<Job, "kind" | "market" | "state"> & {
+  kind?: "agent" | "validate" | "monitor" | "paper" | "text";
+  market: string; state: JobState | "waiting_children" | "awaiting_human";
+  agent_id?: string; child_jobs?: string[]; agent_state?: string;
+  target_run?: string | null; loop?: number | null;
+};
+export type Agent = {
+  agent_id: string; kind: string; state: AgentState; created_at: string; updated_at: string;
+  root: { research_id: string; version: number; markets: Market[]; horizon: number };
+  policy: Record<string, unknown>; current_round: number; current_version: number; parent_version: number;
+  child_version: number | null; round_limit: number; dry_run: boolean; auto_approve: boolean;
+  web_search?: boolean; deep_think?: boolean;
+  approved: AgentApproval | null; cost_usd: number; costed_jobs: string[];
+  usage: { prompt_tokens: number; completion_tokens: number }; child_jobs: string[];
+  last_action: unknown; stop_reason: string | null; last_error: string | null; job_state?: string | null;
+};
+export type AgentFact = { id: string; key: string; market: Market | null; period: string; text: string; redacted: boolean };
+export type AgentRound = {
+  n: number; facts: { facts: AgentFact[]; summary: Record<string, unknown> } | null;
+  external?: { query: string; provider?: string | null; model?: string | null; configured?: boolean; before?: string | null;
+    results: ExternalEvidence[]; error: string | null; warning?: string | null } | null;
+  diagnosis: any | null; plan: any | null; draft_action: any | null;
+  next_version_draft: { draft: Record<string, any>; meta: Record<string, any> } | null;
+  approval: AgentApproval | null; action: Record<string, any> | null; evaluation: Record<string, any> | null;
+};
+export type AgentTrace = { at: string; kind: string; role?: string; round?: number; model?: string; usage?: Record<string, unknown>;
+  prompt_version?: string; prompt?: string; response?: string; from?: string; to?: string;
+  tool?: string; args?: unknown; result?: unknown; count?: number; [key: string]: unknown };
+export type AgentDetail = { agent: Agent; rounds: AgentRound[]; children: AgentJob[]; job: AgentJob | null; report: string | null;
+  terminated: ResearchTermination | null };
+export type AgentOverlapPair = { key: string; title?: string | null; kind?: string | null; approved: boolean;
+  corr: number | null; ic_corr: number | null; redundant: boolean };
+export type AgentOverlapMarket = { ok: boolean; reason?: string;
+  current?: { rank_ic?: number | null; ir?: number | null; t?: number | null; factors?: string[] } | null;
+  pairs?: AgentOverlapPair[]; max_abs?: number | null; redundant?: boolean; complement?: string | null; note?: string };
+export type AgentOverlap = { agent_id: string; research_id: string; version: number;
+  markets: Partial<Record<Market, AgentOverlapMarket>> };
 export type Preview = { market: Market; test_start: string; dates: Record<string, string>; text: string; chars: number };
 
 type EventBase = { index: number; t: number; loop: number; step: string; has_prompt: boolean };
@@ -530,6 +591,15 @@ export type PaperResult = {
     monthly: Record<string, number> };
   trades: { fills: number; buy_value: number; sell_value: number; costs: number };
   positions: { count: number; cash: number; value: number; pending: number };
+  portfolio?: {
+    created: { date: string; symbols: number; buy_value: number } | null;
+    rebalances: number;
+    holdings: { symbol: string; name?: string; qty: number; avg_cost: number | null; price: number | null; value: number;
+      weight: number | null; pnl: number | null; pnl_pct: number | null }[];
+    contributions: { symbol: string; name?: string; realized: number | null; unrealized: number | null; cost: number | null;
+      contribution: number | null; contribution_pct: number | null }[];
+    note: string;
+  };
   alerts: { kind: string; level: string; title: string; detail: string }[];
   suggestion: string; suggestion_zh: string; thresholds: Record<string, number>; note: string;
 };
@@ -609,7 +679,7 @@ const post = <T,>(path: string, body: unknown) =>
   request<T>(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
 // ---------------------------------------------------------------- 研究线索池（Spec 第 17 章）
-export type IdeaChannel = "hypothesis" | "paper" | "experience" | "feedback" | "monitor" | "portfolio" | "approval";
+export type IdeaChannel = "hypothesis" | "paper" | "experience" | "feedback" | "monitor" | "paper_trading" | "portfolio" | "approval" | "agent";
 export type IdeaStatus = "new" | "converted" | "duplicate" | "dismissed";
 export type IdeaFactor = { key: string; name: string; description_zh: string; formula: string; logic_zh: string; data_needs: string[];
   availability: { ok: boolean; missing: string[]; needs_zh: string[] }; cites: number[]; quotes: { p: number; text: string }[] };
@@ -626,6 +696,7 @@ export type Idea = {
   similar?: { research: { kind: string; kind_zh: string; title: string; ref: string; score: number }[];
     ideas: { id: string; title: string; channel_zh: string; overlap: number }[]; note: string };
   extract_error?: string;
+  deduped?: boolean;
   ai_suggested?: { id: string; title: string; body: string; model: string; prompt_version: string; angle: string; why_zh: string; grounds: (string | IdeaGround)[]; edited: boolean;
     selection?: string[]; seed?: string };
   ai_hypothesis?: IdeaAiHypothesis;
@@ -639,7 +710,12 @@ export type IdeaInput = { channel: IdeaChannel; title: string; body: string; mar
   confirm_no_client_data: boolean; direction?: string; period?: string; feedback_role?: string;
   document?: { name?: string; content_base64?: string; source: string; licence: string; licence_note?: string; published?: string;
     sample_start?: string; sample_end?: string };
-  ai_suggestion?: IdeaSuggestion | null };
+  ai_suggestion?: IdeaSuggestion | null;
+  source_ref?: { research?: string; run?: string; note?: string } };
+export type IdeaUpdateInput = { title: string; body: string; markets: Market[]; submitted_by: string;
+  confirm_no_client_data: boolean; direction?: string; period?: string; feedback_role?: string;
+  document?: { name?: string; source?: string; licence?: string; licence_note?: string; published?: string;
+    sample_start?: string; sample_end?: string } };
 export type IdeaSuggestion = { id: string; channel: IdeaChannel; title: string; body: string; direction: string; period: string; feedback_role: string;
   markets: Market[]; why_zh: string; grounds: (string | IdeaGround)[]; angle: string; model: string; prompt_version: string; at: string;
   focus_market?: Market | null; selection?: string[]; candidates?: { angle: string; market: Market; score: number }[]; seed?: string; evidence_n?: number;
@@ -660,6 +736,10 @@ export type IdeaCombo = { id: string; by: string; at: string; idea_ids: string[]
   uses: { tag: string; how_zh: string }[]; unused: string[]; conflicts: string[]; not_testable: string[];
   markets: Market[]; questions: string[]; model: string; prompt_version: string };
 export type IdeaPrefill = { idea_id: string; hypothesis: string; direction: string; markets: Market[]; questions: string[]; channel_zh: string; title: string };
+/** 线索池 AI 查询：embedding 匹配标题 + 概述；向量不可用时后端退回关键词。 */
+export type IdeaSearchHit = { id: string; title: string; snippet: string; score: number };
+export type IdeaSearch = { query: string; method: "embedding" | "keyword" | "none"; model: string | null;
+  error: string | null; results: IdeaSearchHit[] };
 
 // ---------------------------------------------------------------- 因子库与语义检索（BR-25、35）
 export type LibraryItem = {
@@ -699,6 +779,7 @@ export const api = {
   library: () => get<Library>("/library"),
   complement: (m: Market, keys?: string[]) => get<Complement>(`/complement/${m}${keys && keys.length ? `?keys=${keys.join(",")}` : ""}`),
   knowledge: (q: string, llm = true) => get<KnowledgeSearch>(`/knowledge/search?q=${encodeURIComponent(q)}&llm=${llm}`),
+  webSearch: (q: string) => get<WebSearch>(`/web/search?q=${encodeURIComponent(q)}`),
   regions: (markets: Market[], mandate?: string) => get<RegionDiff>(`/research/regions?markets=${markets.join(",")}${mandate ? `&mandate=${mandate}` : ""}`),
   pit: () => get<PitStatus>("/pit"),
   rulePacks: () => get<RulePacks>("/rules/packs"),
@@ -772,16 +853,20 @@ export const api = {
   run: (id: string) => get<{
     run: Run & { state: ProjectRun["state"] }; rounds: Round[]; job: Job | null; batch: Job[];
     verdicts: RoundVerdict[] | null; rule: VerdictRule | null;
+    agent: { agent_id: string; state: string; current_version: number; research_id: string } | null;
   }>(`/runs/${id}`),
   validation: (runId: string) => get<{ items: Record<string, Validation>; jobs: Job[] }>(`/runs/${runId}/validation`),
   validate: (runId: string, loop?: number) => post<Job>(`/runs/${runId}/validate`, loop == null ? {} : { loop }),
   study: (id: string, version: number) => get<Study>(`/research/${id}/versions/${version}/study`),
+  terminateResearch: (id: string, body: { version?: number | null; reason?: string; by?: string } = {}) =>
+    post<{ terminated: ResearchTermination; agents: { agent_id: string; state: string }[] }>(`/research/${id}/terminate`, body),
   explain: (id: string, version: number) => post<Explanation>(`/research/${id}/versions/${version}/explain`, {}),
   backtest: (id: string) => get<Record<string, Columns>>(`/runs/${id}/backtest`),
   monthly: (id: string) => get<Record<string, Monthly>>(`/runs/${id}/monthly`),
   quantiles: (id: string) => get<Record<string, Quantiles>>(`/runs/${id}/quantiles`),
   positions: (id: string, key: string, step = 5) => get<Positions>(`/runs/${id}/positions/${key}?step=${step}`),
   projects: () => get<Project[]>("/projects"),
+  projectSearch: (q: string) => get<ProjectSearch>(`/projects/search?q=${encodeURIComponent(q)}`),
   events: (id: string) => get<RunEvent[]>(`/runs/${id}/events`),
   prompt: (id: string, index: number) => get<{ system: string; user: string; response: string | null }>(`/runs/${id}/events/${index}/prompt`),
   researchExamples: () => get<ResearchSpec[]>("/research/examples"),
@@ -794,8 +879,23 @@ export const api = {
   preview: (spec: Partial<Spec>, market: Market) => post<Preview>("/research/preview", { spec, market }),
   lock: (spec: Spec) => post<Spec>("/research/versions", spec),
   versions: (id: string) => get<Spec[]>(`/research/${id}/versions`),
+  researchTermination: (id: string) => get<{ terminated: ResearchTermination | null }>(`/research/${id}/termination`),
   startRuns: (id: string, version: number, body: { markets: Market[]; loops: number; budget_usd: number }) =>
     post<{ batch_id: string; jobs: Job[] }>(`/research/${id}/versions/${version}/runs`, body),
+  agents: () => get<Agent[]>("/agents"),
+  agent: (id: string) => get<AgentDetail>(`/agents/${id}`),
+  agentTrace: (id: string) => get<{ items: AgentTrace[] }>(`/agents/${id}/trace`),
+  agentReport: (id: string) => get<{ markdown: string }>(`/agents/${id}/report`),
+  agentOverlap: (id: string) => get<AgentOverlap>(`/agents/${id}/overlap`),
+  createAgent: (body: { research_id: string; version: number; rounds?: number; markets?: Market[]; budget_usd?: number;
+    web_search?: boolean; deep_think?: boolean }) =>
+    post<{ agent: Agent; job: AgentJob }>("/agents", body),
+  approveAgent: (id: string, body: { draft?: Record<string, unknown>; run?: boolean; by?: string }) =>
+    post<{ agent: Agent; saved: Spec; job: AgentJob | null }>(`/agents/${id}/approve`, body),
+  rejectAgent: (id: string, body: { reason: string; by?: string }) =>
+    post<{ agent: Agent; job: AgentJob | null }>(`/agents/${id}/reject`, body),
+  stopAgent: (id: string, body: { reason?: string; by?: string } = {}) =>
+    post<{ agent: Agent; jobs: AgentJob[] }>(`/agents/${id}/stop`, body),
   jobs: (batch?: string) => get<Job[]>(`/jobs${batch ? `?batch=${batch}` : ""}`),
   job: (id: string) => get<JobDetail>(`/jobs/${id}`),
   cancelJob: (id: string) => post<{ ok: boolean }>(`/jobs/${id}/cancel`, {}),
@@ -809,7 +909,10 @@ export const api = {
   ideas: (q: { channel?: string; status?: string; market?: string } = {}) =>
     get<IdeaList>(`/ideas?${new URLSearchParams(Object.entries(q).filter(([, v]) => v) as [string, string][]).toString()}`),
   idea: (id: string) => get<IdeaDetail>(`/ideas/${id}`),
+  ideaSearch: (q: string) => get<IdeaSearch>(`/ideas/search?q=${encodeURIComponent(q)}`),
   createIdea: (body: IdeaInput) => post<Idea>("/ideas", body),
+  updateIdea: (id: string, body: IdeaUpdateInput) =>
+    request<IdeaDetail>(`/ideas/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
   extractIdea: (id: string, by: string) => post<Idea>(`/ideas/${id}/extract?by=${encodeURIComponent(by)}`, {}),
   ideaAct: (id: string, body: { action: string; by: string; note?: string; target?: string }) => post<Idea>(`/ideas/${id}/act`, body),
   ideaPrefill: (id: string, factors: string[]) => post<IdeaPrefill>(`/ideas/${id}/convert`, { factors }),

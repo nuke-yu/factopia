@@ -34,6 +34,7 @@ from factopia.validate import jobs as validate_jobs
 
 ENTRYPOINT = os.environ.get("FACTOPIA_ENTRYPOINT", "/usr/local/bin/entrypoint.sh")
 POLL_S, EXPORT_EVERY_S, STOP_GRACE_S = 3, 15, 90
+HEARTBEAT_S = 60   # 运行中每 60 秒打印一条进度心跳（区分正常运行与卡死）
 QLIB_IMAGE = os.environ.get("QLIB_DOCKER_IMAGE", "factopia-qlib:dev")
 API_UID = int(os.environ.get("FACTOPIA_API_UID", "10001"))  # api 镜像以非 root 用户运行（docker/api/Dockerfile）
 MAX_PARALLEL = int(os.environ.get("FACTOPIA_MAX_PARALLEL", "3"))
@@ -45,12 +46,18 @@ def log(msg: str) -> None:
 
 
 def recover() -> None:
-    """运行器重启时，上次未结束的任务已随进程中断。"""
+    """运行器重启：普通任务标记中断；Agent 任务从检查点重新排队，waiting_children 保持。"""
     for job in store.list_jobs():
-        if job["state"] == "running":
-            job.update(state="failed", ended_at=store.now(), error="运行器重启，运行中断")
+        if job["state"] != "running":
+            continue
+        if job.get("kind") == "agent":
+            job.update(state="queued", error=None, ended_at=None, agent_state=job.get("agent_state"))
             store.write_job(job)
-            log(f"{job['job_id']}: 标记为中断")
+            log(f"{job['job_id']}: Agent 重新排队（检查点续跑）")
+            continue
+        job.update(state="failed", ended_at=store.now(), error="运行器重启，运行中断")
+        store.write_job(job)
+        log(f"{job['job_id']}: 标记为中断")
 
 
 def next_job(active: set[str] | None = None) -> dict | None:
@@ -67,12 +74,44 @@ def next_job(active: set[str] | None = None) -> dict | None:
     return None
 
 
-def export_progress(job: dict, log_dir: Path) -> dict | None:
-    """导出当前进度；日志正在写入或还没有任何一轮时返回 None。"""
+def resume_agents() -> None:
+    """等待子任务的 Agent：子任务结束且导出完成后重新入队；取消请求传给子任务。"""
+    if store.paused():
+        return
+    try:
+        from factopia.agents import children
+    except Exception:
+        return
+    for job in store.list_jobs():
+        if job.get("kind") != "agent" or job["state"] != "waiting_children":
+            continue
+        if store.cancel_requested(job["job_id"]):
+            for cid in job.get("child_jobs") or []:
+                store.request_cancel(cid)
+            job.update(state="cancelled", ended_at=store.now(), error="Agent 已取消")
+            store.write_job(job)
+            log(f"{job['job_id']}: Agent 取消，已请求停止子任务")
+            continue
+        if children.ready(job):
+            job.update(state="queued", child_ready_at=store.now())
+            store.write_job(job)
+            log(f"{job['job_id']}: 子任务完成，Agent 继续")
+
+
+def export_progress(job: dict, log_dir: Path, *, warned: dict | None = None) -> dict | None:
+    """导出当前进度；日志正在写入或还没有任何一轮时返回 None。
+
+    warned: 调用方传入的可变标记 {"export": bool}；首次失败打印告警（不刷屏），成功后重置。
+    """
     try:
         out = rdagent_run.export(log_dir)
-    except Exception:
+    except Exception as e:
+        if warned is not None and not warned.get("export"):
+            warned["export"] = True
+            log(f"{job['job_id']}: 导出进度失败（首轮完成前属正常）：<摘要> {type(e).__name__}: {str(e)[:120]}")
         return None
+    if warned is not None:
+        warned["export"] = False
     run = json.loads((out / "run.json").read_text())
     job.update(cost_usd=run["cost_usd"], rounds=run["rounds"])
     return run
@@ -128,6 +167,17 @@ def stop(proc: subprocess.Popen, prefixes: list[Path]) -> None:
         log(f"清理回测容器失败：{e}")
 
 
+def heartbeat(job: dict, live: LiveParser, started: float) -> None:
+    """运行中心跳：轮次 · 当前步骤 · 最近活动 · 已跑时长 · 费用。"""
+    st = live.state()
+    loop = f"第 {st['loop']} 轮" if st.get("loop") else st.get("phase", "准备中")
+    activity = st.get("activity") or []
+    act = activity[-1] if activity else "等待输出"
+    mins = int((time.time() - started) / 60)
+    log(f"{job['job_id']} ▸ {loop} · {st.get('step_zh') or act} · "
+        f"最近: {act} · 已跑 {mins}m · ${job.get('cost_usd', 0):.3f}")
+
+
 def run_job(job: dict) -> None:
     resume = store.resume_info(job) if job.get("resume") else None
     if job.get("resume") and not (resume and resume["ok"]):   # 要求续跑却没有检查点：不能悄悄改成从头开始
@@ -149,6 +199,8 @@ def run_job(job: dict) -> None:
         cmd = [ENTRYPOINT, "rdagent", "fin_factor", "--loop-n", str(job["loops"])]
         job.update(state="running", started_at=store.now(), run_id=run_id, log_dir=str(log_dir), resume=False)
         log(f"{job['job_id']}: 开始 {job['research_id']} v{job['version']} {job['market']} → {run_id}")
+    log(f"{job['job_id']}: 参数 市场={job['market']} 周期={job['horizon']} 轮数={job['loops']} "
+        f"预算=${job['budget_usd']:.2f} · 每 {HEARTBEAT_S}s 心跳 · 原始日志: {store.log_path(job['job_id'])}")
     store.write_job(job)
 
     src = SRC_ROOT / job["job_id"]
@@ -164,16 +216,22 @@ def run_job(job: dict) -> None:
         proc = subprocess.Popen(cmd,
                                 stdout=out, stderr=subprocess.STDOUT, env=env, start_new_session=True)
         reason, last_export, backtested = None, 0.0, 0
+        last_heartbeat = time.time()
+        started = time.time()
+        export_warned: dict = {"export": False}
         while proc.poll() is None:
             time.sleep(POLL_S)
             follow(tail, live, job)
+            if time.time() - last_heartbeat >= HEARTBEAT_S:
+                last_heartbeat = time.time()
+                heartbeat(job, live, started)
             if live.fatal:
                 reason = "fatal"
             elif store.cancel_requested(job["job_id"]):
                 reason = "cancelled"
             elif time.time() - last_export >= EXPORT_EVERY_S:
                 last_export = time.time()
-                if export_progress(job, log_dir) is not None:
+                if export_progress(job, log_dir, warned=export_warned) is not None:
                     store.write_job(job)
                     backtested = mark_new_backtests(run_id, backtested)
                 if job["cost_usd"] >= job["budget_usd"]:
@@ -203,7 +261,8 @@ def run_job(job: dict) -> None:
     store.write_job(job)
     if run is not None:  # 回测与持仓需要 Qlib 读取，由 exporter 服务（app 镜像）导出
         (rdagent_run.RUNS_DIR / run_id / ".backtest_pending").write_text(store.now())
-    log(f"{job['job_id']}: {job['state']}，{job['rounds']} 轮，${job['cost_usd']:.3f}")
+    log(f"{job['job_id']}: {job['state']}，{job['rounds']} 轮，${job['cost_usd']:.3f}"
+        + (f" · 详细日志: {log_file}" if job["state"] != "done" else ""))
     if job["state"] == "done":
         enqueue_validation(run_id)
 
@@ -294,15 +353,83 @@ def init_dirs() -> None:
     """研究规格、任务、组合、报告与审批目录由后端写入：交给 api 的用户，运行器以 root 运行仍可读写。"""
     for d in (store.RESEARCH_DIR, store.JOBS_DIR, store.RUNTIME / "portfolio", store.RUNTIME / "reports",
               store.RUNTIME / "approvals", store.RUNTIME / "signals", store.RUNTIME / "acceptance",
-              store.RUNTIME / "access", store.RUNTIME / "ideas", store.RUNTIME / "paper"):
+              store.RUNTIME / "access", store.RUNTIME / "ideas", store.RUNTIME / "paper",
+              store.RUNTIME / "agents"):
         d.mkdir(parents=True, exist_ok=True)
         os.chown(d, API_UID, API_UID)
         d.chmod(0o775)
+    # API 进程也要追加费用账本；旧文件可能由 root 创建，修正归属后才能从页面发起的大模型调用记账
+    ledger = store.RUNTIME / "llm_costs.jsonl"
+    try:
+        ledger.touch(exist_ok=True)
+        os.chown(ledger, API_UID, API_UID)
+        ledger.chmod(0o664)
+    except OSError:
+        pass
+    # Agent 轮次目录由 runner 以 root 创建；修复历史文件的归属，API 用户（approve/reject）才能写入
+    agents_dir = store.RUNTIME / "agents"
+    for root, _dirs, files in os.walk(agents_dir):
+        try:
+            os.chown(root, API_UID, API_UID)
+            os.chmod(root, 0o775)
+        except OSError:
+            pass
+        for name in files:
+            p = Path(root) / name
+            try:
+                os.chown(p, API_UID, API_UID)
+                os.chmod(p, 0o664)
+            except OSError:
+                pass
+
+
+def run_agent(job: dict) -> None:
+    """执行 Agent 任务的一个阶段；等待子任务时释放 runner 并行槽。"""
+    from factopia.agents import loop
+    from factopia.agents import store as agent_store
+    if store.cancel_requested(job["job_id"]):
+        for cid in job.get("child_jobs") or []:
+            store.request_cancel(cid)
+        job.update(state="cancelled", ended_at=store.now(), error="Agent 已取消")
+        store.write_job(job)
+        return
+    job.update(state="running", started_at=job.get("started_at") or store.now())
+    store.write_job(job)
+    try:
+        agent = loop.advance_by_id(job["agent_id"])
+    except Exception as e:
+        try:
+            agent = agent_store.load(job["agent_id"])
+            agent.update(state="failed", last_error=str(e)[:2000])
+            agent_store.save(agent)
+        except Exception:
+            agent = None
+        job.update(state="failed", ended_at=store.now(), error=str(e)[:1200])
+        store.write_job(job)
+        log(f"{job['job_id']}: Agent 失败：{job['error']}")
+        return
+    job.update(agent_state=agent["state"], cost_usd=agent.get("cost_usd") or 0.0,
+               rounds=int(agent.get("current_round") or 0),
+               child_jobs=agent.get("child_jobs") or [])
+    if agent["state"] == "waiting_children":
+        job["state"] = "waiting_children"
+    elif agent["state"] == "awaiting_human":
+        job["state"] = "awaiting_human"
+    elif agent["state"] in ("done", "stopped", "failed"):
+        job["state"] = agent["state"]
+        job["ended_at"] = store.now()
+        if agent["state"] == "failed":
+            job["error"] = agent.get("last_error")
+    else:
+        job["state"] = "queued"
+    store.write_job(job)
+    log(f"{job['job_id']}: {job['state']}（Agent {agent['state']}）")
 
 
 def execute(job: dict) -> None:
     try:
-        {"validate": run_validation, "monitor": run_monitor, "text": run_text, "paper": run_paper}.get(job.get("kind"), run_job)(job)
+        {"validate": run_validation, "monitor": run_monitor, "text": run_text,
+         "paper": run_paper, "agent": run_agent}.get(job.get("kind"), run_job)(job)
     except Exception:
         job.update(state="failed", ended_at=store.now(), error=traceback.format_exc()[-1200:])
         store.write_job(job)
@@ -310,6 +437,52 @@ def execute(job: dict) -> None:
 
 
 PAPER_HOUR_UTC = int(os.environ.get("FACTOPIA_PAPER_ADVANCE_UTC_HOUR", "9"))
+
+DATA_HOUR_UTC = int(os.environ.get("FACTOPIA_DATA_UPDATE_UTC_HOUR", "19"))
+_data_thread: threading.Thread | None = None
+
+
+def _data_updated_on() -> str:
+    try:
+        from factopia.paper import engine
+        return (engine.RUNTIME / "data" / ".daily_update").read_text().strip()[-10:]
+    except Exception:
+        return ""
+
+
+def _run_data_pipeline() -> None:
+    from factopia.paper import engine
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    marker = engine.RUNTIME / "data" / ".daily_update"
+    try:
+        from factopia.data import download, standardize   # import 也纳入 try：失败同样记标记，避免每分钟重试
+        download.main()
+        standardize.main()
+        marker.write_text(today)
+        log(f"数据管道：download → standardize 完成（{today}）")
+    except Exception:
+        marker.write_text(today)   # 失败也记当日标记：避免每分钟重试；次日自动再试，中间可手动补
+        log(f"数据管道：每日下载失败（{today} 当日不再重试）\n{traceback.format_exc()[-400:]}")
+
+
+def schedule_data_update() -> None:
+    """每日自动推进行情（download → standardize；模拟盘的成交与估值都依赖行情推进）。
+
+    幂等：状态文件 runtime/data/.daily_update 记录最近一次运行的 UTC 日，当日最多跑一次（成败都记）；
+    时刻由 FACTOPIA_DATA_UPDATE_UTC_HOUR 控制（UTC 时，默认 19 = 北京 03:00：港股 / 英股 / 法股
+    前一交易日均已收盘且数据源更新完毕）。下载在后台线程执行，不阻塞任务队列。
+    """
+    global _data_thread
+    now_dt = datetime.now(timezone.utc)
+    if now_dt.hour < DATA_HOUR_UTC:
+        return
+    if now_dt.strftime("%Y-%m-%d") <= _data_updated_on():
+        return
+    if _data_thread is not None and _data_thread.is_alive():
+        return
+    log("数据管道：每日 download → standardize 开始")
+    _data_thread = threading.Thread(target=_run_data_pipeline, name="data-daily", daemon=True)
+    _data_thread.start()
 
 
 def schedule_paper_daily() -> None:
@@ -351,9 +524,17 @@ def main() -> None:
         if time.time() - sched_at > 60:
             sched_at = time.time()
             try:
+                schedule_data_update()
+            except Exception:
+                log(f"数据管道调度检查失败\n{traceback.format_exc()[-400:]}")
+            try:
                 schedule_paper_daily()
             except Exception:
                 log(f"每日推进调度检查失败\n{traceback.format_exc()[-400:]}")
+        try:
+            resume_agents()
+        except Exception:
+            log(f"Agent 子任务检查失败\n{traceback.format_exc()[-400:]}")
         job = next_job(set(active)) if len(active) < MAX_PARALLEL else None
         if job is None:
             time.sleep(POLL_S)

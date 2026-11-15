@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { api, MARKETS, type Market, type SeedProposal, type SeedRef } from "../api";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { api, MARKETS, type ExternalEvidence, type Market, type ResearchTermination, type SeedProposal, type SeedRef, type WebSearch } from "../api";
 import { testPeriodMentions, useDraft, type Draft } from "../draft";
 import { cssVar, MARKET_LABEL, useAsync } from "../lib";
 import { t, tf, joinList, IS_ZH } from "../i18n";
@@ -14,14 +14,53 @@ const HORIZONS: { value: Draft["horizon"]; label: string }[] = [
 export default function ResearchPage() {
   const { draft, update, setResult, setLocked } = useDraft();
   const navigate = useNavigate();
+  const [params] = useSearchParams();
+  const basedOnParam = params.get("based_on");
   const cube = useAsync(() => api.cube(20), []);
   const mandates = useAsync(() => api.mandates(), []);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [parentTerm, setParentTerm] = useState<ResearchTermination | null>(null);
+  const [webQuery, setWebQuery] = useState("");
+  const [web, setWeb] = useState<WebSearch | null>(null);
+  const [webSelected, setWebSelected] = useState<string[]>([]);
+  const [webBusy, setWebBusy] = useState(false);
+  const [webError, setWebError] = useState<string | null>(null);
 
   useEffect(() => {
     if (cube.data && draft.groups.length === 0) update({ groups: cube.data.groups });
   }, [cube.data]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 结果页「生成下一版本」：?based_on=<id>.v<N> 预填父版本内容，锁定后为同一研究的新版本
+  useEffect(() => {
+    const m = /^([a-z][a-z0-9_]{2,39})\.v(\d+)$/.exec(basedOnParam || "");
+    if (!m) return;
+    const rid = m[1], ver = Number(m[2]);
+    api.versions(rid).then((list) => {
+      const spec = list.find((x) => x.version === ver);
+      if (!spec) return;
+      update({
+        basedOn: { id: rid, version: ver },
+        hypothesis: spec.hypothesis_original || spec.hypothesis || spec.hypothesis_zh || "",
+        direction: spec.direction_original || (spec.directions || []).join("；"),
+        exclusions: (spec.exclusions || []).join("\n"),
+        markets: spec.markets,
+        horizon: spec.horizon as Draft["horizon"],
+        mandate: spec.mandate,
+        ideaId: null, ideaIds: [], comboId: null, ideaTitle: null,
+      });
+    }).catch(() => undefined);
+  }, [basedOnParam]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 无论从结果页、Agent 页还是线索合并进入，都按父研究编号检查是否已人工终止。
+  useEffect(() => {
+    const rid = draft.basedOn?.id;
+    if (!rid) { setParentTerm(null); return; }
+    let alive = true;
+    setParentTerm(null);
+    api.researchTermination(rid).then((r) => { if (alive) setParentTerm(r.terminated); }).catch(() => undefined);
+    return () => { alive = false; };
+  }, [draft.basedOn?.id]);
 
   const mandate = mandates.data?.find((m) => m.id === draft.mandate);
   const allowed = mandate?.markets ?? MARKETS;
@@ -31,7 +70,26 @@ export default function ResearchPage() {
     return cube.data.factors.filter((f) => draft.groups.includes(f.group) && f.periods.train.label !== "无效");
   }, [cube.data, draft.groups]);
   const toggle = <T,>(list: T[], v: T) => (list.includes(v) ? list.filter((x) => x !== v) : [...list, v]);
-  const ready = draft.markets.length > 0 && draft.hypothesis.trim().length > 10 && !!mandate && !busy;
+  const terminatedParent = draft.basedOn ? parentTerm : null;
+  const ready = draft.markets.length > 0 && draft.hypothesis.trim().length > 10 && !!mandate && !busy && !terminatedParent;
+  const selectedEvidence: ExternalEvidence[] = (web?.results ?? []).filter((r) => webSelected.includes(r.url || r.title))
+    .map(({ title, url, published, snippet, source }) => ({ title, url, published: published ?? null, snippet, source: source ?? null }));
+
+  async function searchWeb() {
+    const q = (webQuery.trim() || `${draft.hypothesis} ${draft.direction}`).trim();
+    if (!q) { setWebError(t("请先填写假设或检索关键词")); return; }
+    setWebBusy(true); setWebError(null);
+    try {
+      const r = await api.webSearch(q);
+      setWeb(r); setWebSelected([]);
+    } catch (e) {
+      setWebError((e as Error).message);
+    } finally { setWebBusy(false); }
+  }
+
+  function toggleWeb(url: string) {
+    setWebSelected((xs) => xs.includes(url) ? xs.filter((x) => x !== url) : xs.length >= 8 ? xs : [...xs, url]);
+  }
 
   /** 采用 AI 构想：把构想的假设与方向写进立项，并记下起点因子与模型来源（供审核页追溯）。 */
   function adoptSeed(p: SeedProposal) {
@@ -50,9 +108,11 @@ export default function ResearchPage() {
     try {
       const r = await api.draft({ hypothesis: draft.hypothesis, direction: draft.direction, markets: draft.markets, horizon: draft.horizon,
         mandate: draft.mandate, groups: draft.groups.length === cube.data?.groups.length ? [] : draft.groups, include_past_runs: draft.includePastRuns,
+        exclusions: draft.exclusions.split("\n").map((x) => x.trim()).filter(Boolean),
         idea_id: draft.ideaId ?? null, idea_ids: draft.ideaIds ?? [], combo_id: draft.comboId ?? null,
         based_on: draft.basedOn ? `${draft.basedOn.id}.v${draft.basedOn.version}` : null,
-        seeds: draft.seeds ?? null });
+        seeds: draft.seeds ?? null,
+        external_evidence: selectedEvidence });
       setResult(r); setLocked(null);
       navigate("/audit");
     } catch (e) {
@@ -82,6 +142,21 @@ export default function ResearchPage() {
             ? tf("锁定后成为研究 {id} 的新版本（基于 v{v}，已检验的旧版本不变）；", { id: draft.basedOn.id, v: draft.basedOn.version })
             : t("锁定后成为一个新研究；")}{t('所有来源线索标记为"已转立项"并指向该版本，每条线索的防泄漏与文档许可确认项会出现在审核页')}</span>
         </div>
+      )}
+      {draft.basedOn && !draft.ideaIds?.length && (
+        <div className="panel p-3 flex flex-wrap items-center gap-3 text-sm">
+          <span className="label">{t("继续研究")}</span>
+          <span className="num text-xs">{draft.basedOn.id}.v{draft.basedOn.version}</span>
+          <span className="text-muted">{t("已预填父版本的假设、方向、市场与周期；锁定后成为该研究的新版本，旧版本不变。")}</span>
+          <button type="button" className="btn h-7 px-2 text-xs ml-auto" onClick={() => update({ basedOn: null })}>{t("取消关联")}</button>
+        </div>
+      )}
+      {terminatedParent && (
+        <Notice tone="warn" title={t("研究已终止")}>
+          {tf("该研究已人工终止（{by}，{at}），不能再生成新版本；如需继续，请取消关联并作为新研究立项。", {
+            by: terminatedParent.by, at: terminatedParent.at.slice(0, 16).replace("T", " "),
+          })}
+        </Notice>
       )}
       {draft.ideaId && (
         <div className="panel p-3 flex flex-wrap items-center gap-3 text-sm">
@@ -153,11 +228,64 @@ export default function ResearchPage() {
             <textarea id="hyp" className="field mt-1 min-h-28 leading-relaxed" value={draft.hypothesis} onChange={(e) => update({ hypothesis: e.target.value })} />
             <label className="label mt-3 block" htmlFor="dir">{t("研究方向")}</label>
             <input id="dir" className="field mt-1" value={draft.direction} onChange={(e) => update({ direction: e.target.value })} />
+            <label className="label mt-3 block" htmlFor="excl">{t("排除方向（每行一条）")}</label>
+            <textarea id="excl" className="field mt-1 min-h-16 text-sm" value={draft.exclusions}
+              onChange={(e) => update({ exclusions: e.target.value })} placeholder={t("例：不做纯反转；不用公告文本")} />
+            <p className="text-xs text-faint mt-1">{t("会随研究规格带给 AI 起草，并在审核页保留。")}</p>
             {mentions.length > 0 && (
               <div className="mt-3">
                 <Notice title={tf("输入中出现了测试期内的年份：{l}", { l: joinList(mentions) })}>
                   {t("RD-Agent 回测测试期从 2022 年开始。描述测试期内发生的事等于提前透露考题（MINE-11）。如确需保留，请在审核页确认。")}
                 </Notice>
+              </div>
+            )}
+          </Panel>
+
+          <Panel eyebrow={t("补充材料（可选）")} title={t("外部资料检索")}>
+            <p className="text-xs text-faint">{t("联网检索公开资料，只采用测试期（2022）之前、日期可靠的结果；网页内容仅作灵感，不作为平台事实。")}</p>
+            <div className="flex flex-wrap items-center gap-2 mt-2">
+              <label htmlFor="web-q" className="sr-only">{t("检索关键词")}</label>
+              <input id="web-q" className="field h-8 flex-1 min-w-[16rem]" value={webQuery} maxLength={300}
+                onChange={(e) => setWebQuery(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); searchWeb(); } }}
+                placeholder={t("检索关键词；留空则用假设与方向")} />
+              <button type="button" className="btn h-8 shrink-0 px-3 text-xs" disabled={webBusy} onClick={searchWeb}>
+                {webBusy ? t("检索中…") : t("联网检索")}
+              </button>
+            </div>
+            {webError && <div className="mt-2"><ErrorBox error={webError} /></div>}
+            {web?.configured === false && (
+              <div className="mt-2"><Notice tone="warn" title={t("未配置联网搜索")}>
+                {web.error || t("在 .env 设置 FACTOPIA_SEARCH_API_KEY（博查或 Tavily）后重启 api。")}
+              </Notice></div>
+            )}
+            {web?.configured && web.error && <div className="mt-2"><ErrorBox error={web.error} /></div>}
+            {web?.configured && !web.error && (
+              <div className="mt-3 flex flex-col gap-2">
+                <p className="text-xs text-muted">{tf("来源：{p} · 只采用 {d} 之前；已排除 {n} 条日期未知或晚于测试期的结果", {
+                  p: web.provider, d: web.before, n: web.excluded })}{web.model && <span className="text-faint"> · {web.model}</span>}</p>
+                {web.warning && <Notice tone="warn" title={t("联网搜索来源需人工核验")}>{t(web.warning)}</Notice>}
+                {web.results.length === 0 ? <p className="text-sm text-muted">{t("没有找到测试期之前、日期可靠的资料。")}</p> : (
+                  <ul className="flex flex-col gap-2">
+                    {web.results.map((r) => (
+                      <li key={r.url || r.title} className="border border-line rounded p-2 text-sm">
+                        <label className="flex items-start gap-2">
+                          <input type="checkbox" className="mt-1" checked={webSelected.includes(r.url || r.title)}
+                            onChange={() => toggleWeb(r.url || r.title)} />
+                          <span className="min-w-0">
+                            {r.url
+                              ? <a href={r.url} target="_blank" rel="noreferrer" className="text-accent hover:underline">{r.title}</a>
+                              : <span className="font-medium">{r.title}</span>}
+                            <span className="text-xs text-faint"> · {r.source || "web"}{r.published ? ` · ${r.published}` : ""}</span>
+                            <div className="text-xs text-muted mt-0.5 line-clamp-3">{r.snippet}</div>
+                          </span>
+                        </label>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {web.results.length > 0 && <p className="text-xs text-faint">
+                  {tf("已选 {n}/8 条；会随假设一起交给 AI 起草，并记录在审核页。", { n: webSelected.length })}</p>}
               </div>
             )}
           </Panel>
@@ -170,7 +298,7 @@ export default function ResearchPage() {
                 return (
                   <button key={g} type="button" aria-pressed={on} onClick={() => update({ groups: toggle(draft.groups, g) })}
                     className={`h-8 px-3 rounded-full border text-sm transition-colors ${on ? "border-accent text-text bg-accent/10" : "border-line-2 text-muted"}`}>
-                    {g}
+                    {t(g)}
                   </button>
                 );
               })}

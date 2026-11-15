@@ -37,6 +37,7 @@ const OverviewPage = lazyPage(() => import("./pages/OverviewPage"));
 const AcceptancePage = lazyPage(() => import("./pages/AcceptancePage"));
 const LibraryPage = lazyPage(() => import("./pages/LibraryPage"));
 const IdeasPage = lazyPage(() => import("./pages/IdeasPage"));
+const AgentsPage = lazyPage(() => import("./pages/AgentsPage"));
 
 /** 页面出错时显示原因与刷新按钮，而不是空白页。切换页面后自动恢复。 */
 class PageBoundary extends Component<{ children: ReactNode; resetKey: string }, { error: Error | null }> {
@@ -78,6 +79,8 @@ function Pages() {
           <Route path="/portfolio" element={<PortfolioPage />} />
           <Route path="/approvals" element={<ApprovalsPage />} />
           <Route path="/signals" element={<SignalsPage />} />
+          <Route path="/agents" element={<AgentsPage />} />
+          <Route path="/agents/:id" element={<AgentsPage />} />
           <Route path="/overview" element={<OverviewPage />} />
           <Route path="/acceptance" element={<AcceptancePage />} />
           <Route path="*" element={<Navigate to="/ideas" replace />} />
@@ -143,7 +146,7 @@ export default function App() {
               ))}
               <span className="mx-2 h-5 border-l border-line" aria-hidden />
               {[{ to: "/intel", name: t("情报台"), hint: t("多语言公告") }, { to: "/data", name: t("数据台"), hint: t("主数据与时间点") }, { to: "/library", name: t("因子库"), hint: t("因子库与知识检索") }, { to: "/rules", name: t("风控台"), hint: t("规则包与预检") }, { to: "/portfolio", name: t("组合台"), hint: t("授权组合与报告") }, { to: "/approvals", name: t("审批台"), hint: t("跨地区审批与审计") },
-                { to: "/signals", name: t("信号目录"), hint: t("分市场版本与监控") }, { to: "/overview", name: t("总览"), hint: t("管理总览") }, { to: "/acceptance", name: t("验收"), hint: t("成功标准与红队") }].map((d) => (
+                { to: "/signals", name: t("信号目录"), hint: t("分市场版本与监控") }, { to: "/agents", name: t("研究 Agent"), hint: t("迭代闭环") }, { to: "/overview", name: t("总览"), hint: t("管理总览") }, { to: "/acceptance", name: t("验收"), hint: t("成功标准与红队") }].map((d) => (
                 <NavLink
                   key={d.to}
                   to={d.to}

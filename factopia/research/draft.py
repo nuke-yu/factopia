@@ -19,8 +19,9 @@ from pathlib import Path
 from factopia.research import evidence, mandates, regions
 from factopia.research import seeds as seedlib
 from factopia.lang import llm_language
+from factopia import lang
 
-PROMPT_VERSION = "rs-draft-v4"   # v4：加入起点因子（因子库中已有因子做变体 / 组合，Spec 第 16.7 节扩展）
+PROMPT_VERSION = "rs-draft-v4"   # v4：起点因子（因子库中已有因子做变体 / 组合）+ 可选外部资料（仅测试期前、带引用）
 PROMPT_FILE = Path(__file__).parent / "prompts" / f"{PROMPT_VERSION}.md"
 ID_PATTERN = re.compile(r"^[a-z][a-z0-9_]{2,39}$")
 TEST_YEAR = re.compile(r"20(?:2[2-9]|[3-9]\d)")
@@ -46,21 +47,42 @@ class DraftError(RuntimeError):
     pass
 
 
-def llm_config() -> dict:
-    base, model, key = (os.environ.get(f"FACTOPIA_LLM_{k}") for k in ("BASE_URL", "MODEL", "API_KEY"))
-    if base and model and key:
-        return {"base_url": base.rstrip("/"), "model": model, "api_key": key}
+def llm_config(lite: bool = False, role: str = "main") -> dict:
+    """大模型配置。
+
+    - role="main"（默认）：Planner / 起草 / 标注等复杂任务，用 FACTOPIA_LLM_MODEL；
+    - role="critic"：深度思考的独立 Critic，优先 FACTOPIA_LLM_CRITIC_MODEL；
+      未配置或 403 时回退主模型（不会回退到 Lite）；
+    - lite=True：简单任务，用 FACTOPIA_LLM_LITE_MODEL。
+
+    返回的 lite_model 供 _chat 在“大模型无权限（403）”时自动降级：main 回退 Lite，
+    critic 回退主模型；Lite 不自动回退。
+    """
+    base = os.environ.get("FACTOPIA_LLM_BASE_URL")
+    model = os.environ.get("FACTOPIA_LLM_MODEL")
+    key = os.environ.get("FACTOPIA_LLM_API_KEY")
+    lite_model = (os.environ.get("FACTOPIA_LLM_LITE_MODEL") or "").strip()
+    critic_model = (os.environ.get("FACTOPIA_LLM_CRITIC_MODEL") or "").strip()
+    if lite:
+        chosen, fallback = (lite_model or model), (lite_model or None)
+    elif role == "critic":
+        chosen, fallback = (critic_model or model), (model if critic_model else None)
+    else:
+        chosen, fallback = model, (lite_model or None)
+    if base and key and chosen:
+        return {"base_url": base.rstrip("/"), "model": chosen, "api_key": key, "lite_model": fallback}
     chat = os.environ.get("CHAT_MODEL", "")
     if chat.startswith("litellm_proxy/") and os.environ.get("LITELLM_PROXY_API_KEY") and os.environ.get("LITELLM_PROXY_API_BASE"):
         return {"base_url": os.environ["LITELLM_PROXY_API_BASE"].rstrip("/"), "model": chat.split("/", 1)[1],
-                "api_key": os.environ["LITELLM_PROXY_API_KEY"]}
+                "api_key": os.environ["LITELLM_PROXY_API_KEY"], "lite_model": None}
     if chat.startswith("zhipu/") and os.environ.get("ZHIPUAI_API_KEY"):
         return {"base_url": "https://open.bigmodel.cn/api/paas/v4", "model": chat.split("/", 1)[1],
-                "api_key": os.environ["ZHIPUAI_API_KEY"]}
+                "api_key": os.environ["ZHIPUAI_API_KEY"], "lite_model": None}
     if chat.startswith("deepseek/") and os.environ.get("DEEPSEEK_API_KEY"):
-        return {"base_url": "https://api.deepseek.com", "model": chat.split("/", 1)[1], "api_key": os.environ["DEEPSEEK_API_KEY"]}
-    raise DraftError("未配置大模型：在 .env 中设置 CHAT_MODEL=litellm_proxy/... 与 LITELLM_PROXY_API_KEY"
-                     "（外加 LITELLM_PROXY_API_BASE，如硅基流动），或 FACTOPIA_LLM_BASE_URL / MODEL / API_KEY")
+        return {"base_url": "https://api.deepseek.com", "model": chat.split("/", 1)[1],
+                "api_key": os.environ["DEEPSEEK_API_KEY"], "lite_model": None}
+    raise DraftError(lang.t("未配置大模型：在 .env 中设置 CHAT_MODEL=litellm_proxy/... 与 LITELLM_PROXY_API_KEY"
+                            "（外加 LITELLM_PROXY_API_BASE，如硅基流动），或 FACTOPIA_LLM_BASE_URL / MODEL / API_KEY"))
 
 
 def _extra_body() -> dict:
@@ -71,26 +93,54 @@ def _extra_body() -> dict:
     try:
         v = json.loads(raw)
     except json.JSONDecodeError as e:
-        raise DraftError(f".env 中 FACTOPIA_LLM_EXTRA_BODY 不是合法 JSON：{e}") from e
+        raise DraftError(lang.t(".env 中 FACTOPIA_LLM_EXTRA_BODY 不是合法 JSON：{e}", e=e)) from e
     return v if isinstance(v, dict) else {}
 
 
-def _chat(prompt: str, cfg: dict, task: str = "其他") -> tuple[str, dict]:
+def _model_access_denied(message: str) -> bool:
+    s = (message or "").lower()
+    return "403" in s or "access_denied" in s or "model access denied" in s
+
+
+def _chat_once(prompt: str, cfg: dict, task: str = "其他") -> tuple[str, dict]:
     body = json.dumps({"model": cfg["model"], "temperature": 0.3, "response_format": {"type": "json_object"},
                        "messages": [{"role": "user", "content": prompt}], **_extra_body()}).encode()
     req = urllib.request.Request(f"{cfg['base_url']}/chat/completions", data=body, method="POST",
                                  headers={"Authorization": f"Bearer {cfg['api_key']}", "Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=180) as r:
-            data = json.loads(r.read())
-    except urllib.error.HTTPError as e:
-        raise DraftError(f"大模型接口返回 {e.code}：{e.read()[:300].decode(errors='replace')}") from e
-    except (urllib.error.URLError, TimeoutError) as e:
-        raise DraftError(f"无法连接大模型接口：{e}") from e
+    for attempt in range(3):                 # 网络抖动 / 网关 5xx：短暂重试
+        try:
+            with urllib.request.urlopen(req, timeout=180) as r:
+                data = json.loads(r.read())
+            break
+        except urllib.error.HTTPError as e:
+            if e.code in (429, 500, 502, 503, 504) and attempt < 2:
+                time.sleep(1.5 * (attempt + 1))
+                continue
+            raise DraftError(lang.t("大模型接口返回 {code}：{body}", code=e.code,
+                                    body=e.read()[:300].decode(errors="replace"))) from e
+        except (urllib.error.URLError, TimeoutError) as e:
+            if attempt < 2:
+                time.sleep(1.5 * (attempt + 1))
+                continue
+            raise DraftError(lang.t("无法连接大模型接口：{e}", e=e)) from e
     usage = data.get("usage") or {}
     from factopia import llm_cost
     usage["usd"] = llm_cost.record(task, cfg["model"], usage)         # 费用记录（runtime/llm_costs.jsonl）
+    usage["model"] = cfg["model"]
     return data["choices"][0]["message"]["content"], usage
+
+
+def _chat(prompt: str, cfg: dict, task: str = "其他") -> tuple[str, dict]:
+    """调用大模型；复杂任务用的模型无权限（403）时，自动退回 FACTOPIA_LLM_LITE_MODEL。"""
+    try:
+        return _chat_once(prompt, cfg, task)
+    except DraftError as e:
+        lite = cfg.get("lite_model")
+        if lite and lite != cfg.get("model") and _model_access_denied(str(e)):
+            text, usage = _chat_once(prompt, {**cfg, "model": lite}, f"{task}（轻量模型回退）")
+            usage["fallback_from"] = cfg.get("model")
+            return text, usage
+        raise
 
 
 def _evidence_text(items: list[dict]) -> str:
@@ -156,18 +206,20 @@ def _validate(raw: dict, inputs: dict) -> dict:
     }
     missing = [k for k in ("hypothesis", "falsification") if not out[k]] + ([] if out["rationale"]["note"] else ["rationale"])
     if missing or not out["directions"]:
-        raise DraftError(f"大模型返回的规格缺少必填内容：{', '.join(missing + ([] if out['directions'] else ['directions']))}")
+        raise DraftError(lang.t("大模型返回的规格缺少必填内容：{fields}",
+                                fields=', '.join(missing + ([] if out['directions'] else ['directions']))))
     english = [out[k] for k in ENGLISH_FIELDS] + [out["rationale"]["note"], *out["directions"], *out["exclusions"]]
     if any(CJK.search(t) for t in english):
-        raise DraftError("发给 RD-Agent 的字段须为英文，大模型返回了中文")
+        raise DraftError(lang.t("发给 RD-Agent 的字段须为英文，大模型返回了中文"))
     for d in raw.get("data_needs") or []:
         cat = d.get("category") if d.get("category") in DATA else "other"
         name, status, usable = DATA[cat]
         out["data_needs"].append({"category": cat, "name": name, "detail": str(d.get("detail") or "").strip(), "usable": usable,
                                   "status": {m: status[m] for m in inputs["markets"]}})
-    # 信号来源：数据需求以公告文本为主（含文本、且不需要量价以外的其他数据）→ 文本信号研究；研究员可在页面上修改
-    cats = {n["category"] for n in out["data_needs"]}
-    out["signal_source"] = "text" if "text" in cats else "price_volume"
+    # 信号来源：以第一条数据需求为主。text 只是附加条件 / 数据缺口时不能把整份研究判成文本信号研究
+    # （例如 FX/量价假设里提到“公告语气条件腿”，RD-Agent 仍应跑 price_volume）。
+    primary = out["data_needs"][0]["category"] if out["data_needs"] else "price_volume"
+    out["signal_source"] = "text" if primary == "text" else "price_volume"
     free_text = inputs.get("_free_text") or []
     for t in raw.get("mandate_interpretations") or []:
         term = str(t.get("term") or "").strip()
@@ -237,13 +289,21 @@ def _seeds_section(sd: dict | None) -> str:
     return "\n".join(lines)
 
 
-def make_draft(inputs: dict) -> dict:
-    """inputs：hypothesis、direction、markets、horizon、mandate、groups、include_past_runs、seeds。"""
+def make_draft(inputs: dict, on_llm=None) -> dict:
+    """inputs：hypothesis、direction、markets、horizon、mandate、groups、include_past_runs、seeds。
+
+    on_llm 可选：每次起草 LLM 调用后回调 (prompt, response, usage, model)，用于 Agent trace。
+    """
     mandate = mandates.parse(mandates.load(inputs["mandate"]))
     sd = seedlib.normalize(inputs.get("seeds")) if inputs.get("seeds") else None
     alpha = evidence.alpha158_findings(inputs["markets"], inputs["horizon"], inputs.get("groups") or None)
     past = evidence.past_runs(inputs["markets"], inputs["horizon"]) if inputs.get("include_past_runs", True) else []
     internal = internal_knowledge(inputs["hypothesis"] + " " + (inputs.get("direction") or ""))
+    external = [x for x in (inputs.get("external_evidence") or []) if isinstance(x, dict)][:8]
+    external_text = "\n".join(
+        f"- [W{i}] {x.get('title')} ({x.get('published') or 'date unknown'}; {x.get('url')}) {str(x.get('snippet') or '')[:600]}"
+        for i, x in enumerate(external, 1)
+    ) or "- none"
     prompt = PROMPT_FILE.read_text(encoding="utf-8").format(
         internal="\n".join(f"- [{x['kind']}] {x['title']}: {x['prompt']}" for x in internal) or "- none", language=llm_language(),
         markets=", ".join(inputs["markets"]), horizon=inputs["horizon"],
@@ -254,22 +314,33 @@ def make_draft(inputs: dict) -> dict:
         evidence=_evidence_text(alpha),
         seeds_section=_seeds_section(sd),
         past_runs="\n".join(f"- {line}" for line in evidence.past_runs_lines(past)) or "- none (runs affected by data leakage are excluded)",
+        external=external_text,
     )
     cfg = llm_config()
+    model_used = cfg["model"]
     t0 = time.time()
     tokens = {"prompt_tokens": 0, "completion_tokens": 0}
     inputs = {**inputs, "_free_text": mandate["free_text"]}
     retry_note = ""
     for attempt in range(2):  # JSON 格式、必填字段或语言不合格时，带上原因重试一次
         text, usage = _chat(prompt + retry_note, cfg, "研究规格起草")
+        model_used = usage.get("model") or model_used
+        if on_llm:
+            try:
+                on_llm(prompt + retry_note, text, usage, model_used)
+            except Exception:                       # 审计回调失败不应影响起草
+                pass
         for k in tokens:
             tokens[k] += int(usage.get(k) or 0)
         try:
             draft = _validate(json.loads(text), inputs)
+            extra = [str(x).strip() for x in inputs.get("exclusions") or [] if str(x).strip()]
+            if extra:                                   # 研究员带入的排除方向必须保留，不能只靠 AI 草稿
+                draft["exclusions"] = list(dict.fromkeys([*extra, *draft["exclusions"]]))
             break
         except (json.JSONDecodeError, DraftError) as e:
             if attempt == 1:
-                raise DraftError(f"大模型两次输出都不合格：{e}") from e
+                raise DraftError(lang.t("大模型两次输出都不合格：{e}", e=e)) from e
             retry_note = f"\n\nYour previous answer was rejected: {e}. Fix it and answer again with the full JSON object."
     draft["region_diff"] = regions.differences(inputs["markets"], mandates.load(inputs["mandate"]), draft["data_needs"])
     draft["system_questions"] = _system_questions(draft, inputs)
@@ -290,7 +361,8 @@ def make_draft(inputs: dict) -> dict:
         "draft": draft,
         "evidence": {"alpha158": alpha, "past_runs": past, "groups": inputs.get("groups") or [], "internal": internal},
         "mandate": mandate,
-        "meta": {"model": cfg["model"], "prompt_version": PROMPT_VERSION, **tokens, "idea_id": inputs.get("idea_id"),
+        "meta": {"model": model_used, "prompt_version": PROMPT_VERSION, **tokens, "idea_id": inputs.get("idea_id"),
                  "idea_ids": idea_ids, "combo_id": inputs.get("combo_id"), "based_on": inputs.get("based_on"),
+                 "external_evidence": [{k: x.get(k) for k in ("title", "url", "published", "snippet", "source")} for x in external],
                  "seconds": round(time.time() - t0, 1), "at": datetime.now(timezone.utc).isoformat(timespec="seconds")},
     }

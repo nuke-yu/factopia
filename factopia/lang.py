@@ -85,6 +85,9 @@ _EN = {
  "研究 {rid}": "research {rid}",
  "研究 {rid} v{version}（不涉及本地区市场）": "research {rid} v{version} (covers no market in this region)",
  "研究不存在或还没有锁定的版本：{rid}": "Research not found or no locked version yet: {rid}",
+ "研究已人工终止（{by}，{at}）：不能再启动 Agent": "The research was manually terminated ({by}, {at}); no new agent can be started",
+ "研究已人工终止（{by}，{at}）：不能再生成新版本": "The research was manually terminated ({by}, {at}); no new version can be created",
+ "联网搜索未配置：在 .env 设置 FACTOPIA_SEARCH_API_KEY 后重启 api": "Web search is not configured: set FACTOPIA_SEARCH_API_KEY in .env and restart the api service",
  "研究存储目录尚未初始化：请先启动后台运行器（runner 服务）": "Research storage is not initialised yet: start the background runner service first",
  "研究报告": "research report",
  "研究项目不存在": "Research project not found",
@@ -206,6 +209,20 @@ _EN = {
   "请先选择起点因子，或用一段话描述你想要的变体 / 组合": "Choose a starting factor, or describe the variation or combination you want",
   "因子库中还没有可用作起点的因子（需要先有 Alpha158 评估结果或获批信号）": "The factor library has no usable starting factor yet (run the Alpha158 evaluation or approve a signal first)",
   "AI 没有给出可用的构想（引用因子库编号或英文结论字段不合规）；请换个描述再试一次": "The AI produced no usable idea (unknown factor ids, or non-English conclusion fields); try a different description",
+ # 研究规格起草（research/draft.py）：大模型配置与输出的报错
+ "未配置大模型：在 .env 中设置 CHAT_MODEL=litellm_proxy/... 与 LITELLM_PROXY_API_KEY（外加 LITELLM_PROXY_API_BASE，如硅基流动），或 FACTOPIA_LLM_BASE_URL / MODEL / API_KEY": "LLM not configured: set CHAT_MODEL=litellm_proxy/... and LITELLM_PROXY_API_KEY in .env (plus LITELLM_PROXY_API_BASE, e.g. SiliconFlow), or FACTOPIA_LLM_BASE_URL / MODEL / API_KEY",
+ ".env 中 FACTOPIA_LLM_EXTRA_BODY 不是合法 JSON：{e}": ".env: FACTOPIA_LLM_EXTRA_BODY is not valid JSON: {e}",
+ "大模型接口返回 {code}：{body}": "LLM API returned {code}: {body}",
+ "无法连接大模型接口：{e}": "Cannot reach the LLM API: {e}",
+ "大模型返回的规格缺少必填内容：{fields}": "The LLM-returned spec is missing required content: {fields}",
+ "发给 RD-Agent 的字段须为英文，大模型返回了中文": "Fields sent to RD-Agent must be in English; the LLM returned Chinese",
+ "大模型两次输出都不合格：{e}": "Both LLM outputs were invalid: {e}",
+ # 获批信号的地区适用性 reasons（approval/labels，含占位符与规则包状态）
+ "t 值 {t} 介于迁移门槛的一半与门槛（{thr}）之间": "t-stat {t} lies between half the transfer threshold and the threshold ({thr})",
+ "规则包 {version} 状态：{status}": "Rule pack {version} status: {status}",
+ "合规例外：{rules}": "Compliance exceptions: {rules}",
+ "合规附加条件：{conditions}": "Compliance conditions attached: {conditions}",
+ "待本地合规确认": "pending local compliance confirmation",
 }
 
 _FR = {
@@ -285,6 +302,9 @@ _FR = {
  "研究 {rid}": "étude {rid}",
  "研究 {rid} v{version}（不涉及本地区市场）": "étude {rid} v{version} (ne couvre aucun marché de cette région)",
  "研究不存在或还没有锁定的版本：{rid}": "Étude introuvable ou sans version verrouillée : {rid}",
+ "研究已人工终止（{by}，{at}）：不能再启动 Agent": "La recherche a été terminée manuellement ({by}, {at}) ; impossible de démarrer un nouvel agent",
+ "研究已人工终止（{by}，{at}）：不能再生成新版本": "La recherche a été terminée manuellement ({by}, {at}) ; aucune nouvelle version ne peut être créée",
+ "联网搜索未配置：在 .env 设置 FACTOPIA_SEARCH_API_KEY 后重启 api": "La recherche web n'est pas configurée : définissez FACTOPIA_SEARCH_API_KEY dans .env et redémarrez le service api",
  "研究存储目录尚未初始化：请先启动后台运行器（runner 服务）": "Le répertoire de stockage de recherche n'est pas encore initialisé : démarrez d'abord le service d'exécution en arrière-plan (runner)",
  "研究报告": "rapport de recherche",
  "研究项目不存在": "Projet de recherche introuvable",
@@ -406,6 +426,20 @@ _FR = {
   "请先选择起点因子，或用一段话描述你想要的变体 / 组合": "Choisissez un facteur de départ ou décrivez la variante ou la combinaison souhaitée",
   "因子库中还没有可用作起点的因子（需要先有 Alpha158 评估结果或获批信号）": "La bibliothèque n'a pas encore de facteur de départ utilisable (exécutez l'évaluation Alpha158 ou approuvez un signal)",
   "AI 没有给出可用的构想（引用因子库编号或英文结论字段不合规）；请换个描述再试一次": "L'IA n'a produit aucune idée exploitable (identifiants inconnus ou champs de conclusion non anglais) ; essayez une autre description",
+ # 研究规格起草（research/draft.py）：大模型配置与输出的报错
+ "未配置大模型：在 .env 中设置 CHAT_MODEL=litellm_proxy/... 与 LITELLM_PROXY_API_KEY（外加 LITELLM_PROXY_API_BASE，如硅基流动），或 FACTOPIA_LLM_BASE_URL / MODEL / API_KEY": "Grand modèle non configuré : définissez CHAT_MODEL=litellm_proxy/... et LITELLM_PROXY_API_KEY dans .env (plus LITELLM_PROXY_API_BASE, p. ex. SiliconFlow), ou FACTOPIA_LLM_BASE_URL / MODEL / API_KEY",
+ ".env 中 FACTOPIA_LLM_EXTRA_BODY 不是合法 JSON：{e}": ".env : FACTOPIA_LLM_EXTRA_BODY n'est pas un JSON valide : {e}",
+ "大模型接口返回 {code}：{body}": "L'API du grand modèle a renvoyé {code} : {body}",
+ "无法连接大模型接口：{e}": "Impossible de se connecter à l'API du grand modèle : {e}",
+ "大模型返回的规格缺少必填内容：{fields}": "La spécification renvoyée par le grand modèle manque de contenu obligatoire : {fields}",
+ "发给 RD-Agent 的字段须为英文，大模型返回了中文": "Les champs envoyés à RD-Agent doivent être en anglais ; le grand modèle a renvoyé du chinois",
+ "大模型两次输出都不合格：{e}": "Les deux sorties du grand modèle sont non conformes : {e}",
+ # 获批信号的地区适用性 reasons（approval/labels，含占位符与规则包状态）
+ "t 值 {t} 介于迁移门槛的一半与门槛（{thr}）之间": "La t-stat {t} se situe entre la moitié du seuil de transfert et le seuil ({thr})",
+ "规则包 {version} 状态：{status}": "Statut du pack de règles {version} : {status}",
+ "合规例外：{rules}": "Exceptions de conformité : {rules}",
+ "合规附加条件：{conditions}": "Conditions de conformité jointes : {conditions}",
+ "待本地合规确认": "confirmation de conformité locale en attente",
 }
 
 _HK = {
@@ -485,6 +519,9 @@ _HK = {
  "研究 {rid}": "研究 {rid}",
  "研究 {rid} v{version}（不涉及本地区市场）": "研究 {rid} v{version}（不涉及本地區市場）",
  "研究不存在或还没有锁定的版本：{rid}": "研究不存在或還沒有鎖定的版本：{rid}",
+ "研究已人工终止（{by}，{at}）：不能再启动 Agent": "研究已人工終止（{by}，{at}）：不能再啟動 Agent",
+ "研究已人工终止（{by}，{at}）：不能再生成新版本": "研究已人工終止（{by}，{at}）：不能再生成新版本",
+ "联网搜索未配置：在 .env 设置 FACTOPIA_SEARCH_API_KEY 后重启 api": "聯網搜尋未配置：在 .env 設定 FACTOPIA_SEARCH_API_KEY 後重啟 api",
  "研究存储目录尚未初始化：请先启动后台运行器（runner 服务）": "研究存儲目錄尚未初始化：請先啓動後台運行器（runner 服務）",
  "研究报告": "研究報告",
  "研究项目不存在": "研究項目不存在",
@@ -606,6 +643,20 @@ _HK = {
   "请先选择起点因子，或用一段话描述你想要的变体 / 组合": "請先選擇起點因子，或用一段話描述你想要的變體 / 組合",
   "因子库中还没有可用作起点的因子（需要先有 Alpha158 评估结果或获批信号）": "因子庫中還沒有可用作起點的因子（需要先有 Alpha158 評估結果或獲批信號）",
   "AI 没有给出可用的构想（引用因子库编号或英文结论字段不合规）；请换个描述再试一次": "AI 沒有給出可用的構想（引用因子庫編號或英文結論字段不合規）；請換個描述再試一次",
+ # 研究规格起草（research/draft.py）：大模型配置与输出的报错
+ "未配置大模型：在 .env 中设置 CHAT_MODEL=litellm_proxy/... 与 LITELLM_PROXY_API_KEY（外加 LITELLM_PROXY_API_BASE，如硅基流动），或 FACTOPIA_LLM_BASE_URL / MODEL / API_KEY": "未配置大模型：在 .env 中設置 CHAT_MODEL=litellm_proxy/... 與 LITELLM_PROXY_API_KEY（外加 LITELLM_PROXY_API_BASE，如矽基流動），或 FACTOPIA_LLM_BASE_URL / MODEL / API_KEY",
+ ".env 中 FACTOPIA_LLM_EXTRA_BODY 不是合法 JSON：{e}": ".env 中 FACTOPIA_LLM_EXTRA_BODY 不是合法 JSON：{e}",
+ "大模型接口返回 {code}：{body}": "大模型接口返回 {code}：{body}",
+ "无法连接大模型接口：{e}": "無法連接大模型接口：{e}",
+ "大模型返回的规格缺少必填内容：{fields}": "大模型返回的規格缺少必填內容：{fields}",
+ "发给 RD-Agent 的字段须为英文，大模型返回了中文": "發給 RD-Agent 的字段須為英文，大模型返回了中文",
+ "大模型两次输出都不合格：{e}": "大模型兩次輸出都不合格：{e}",
+ # 获批信号的地区适用性 reasons（approval/labels，含占位符与规则包状态）
+ "t 值 {t} 介于迁移门槛的一半与门槛（{thr}）之间": "t 值 {t} 介於遷移門檻的一半與門檻（{thr}）之間",
+ "规则包 {version} 状态：{status}": "規則包 {version} 狀態：{status}",
+ "合规例外：{rules}": "合規例外：{rules}",
+ "合规附加条件：{conditions}": "合規附加條件：{conditions}",
+ "待本地合规确认": "待本地合規確認",
 }
 
 # hq：键即原文（空表直接回退）；hk/uk/fr 查对应字典

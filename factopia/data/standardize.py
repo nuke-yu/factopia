@@ -31,7 +31,7 @@ MARKETS = {
 def _eod_delay() -> dict:
     import yaml
 
-    p = Path(os.environ.get("FACTOPIA_CONFIGS_DIR", "configs")) / "refdata" / "markets.yaml"
+    p = Path(os.environ.get("FACTOPIA_CONFIGS_DIR", "/workspace/configs")) / "refdata" / "markets.yaml"
     cfg = yaml.safe_load(p.read_text(encoding="utf-8")) if p.exists() else {"markets": {}}
     return {m: int(cfg["markets"].get(m, {}).get("eod_delay_min", 60)) for m in MARKETS}
 
