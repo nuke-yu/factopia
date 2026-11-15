@@ -1,4 +1,5 @@
-import type { ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import katex from "katex";
 import "katex/dist/katex.min.css";
 import { t, tf } from "../i18n";
@@ -20,13 +21,13 @@ export function Panel({ title, eyebrow, actions, children, className = "" }: {
   );
 }
 
-export function Seg<T extends string | number>({ value, options, onChange, label }: {
-  value: T; options: { value: T; label: string }[]; onChange: (v: T) => void; label: string;
+export function Seg<T extends string | number>({ value, options, onChange, label, disabled = false }: {
+  value: T; options: { value: T; label: string }[]; onChange: (v: T) => void; label: string; disabled?: boolean;
 }) {
   return (
     <div className="seg" role="group" aria-label={label}>
       {options.map((o) => (
-        <button key={String(o.value)} type="button" aria-pressed={o.value === value} onClick={() => onChange(o.value)}>
+        <button key={String(o.value)} type="button" aria-pressed={o.value === value} disabled={disabled} onClick={() => onChange(o.value)}>
           {o.label}
         </button>
       ))}
@@ -61,6 +62,34 @@ export function Notice({ tone = "warn", title, children }: { tone?: "warn" | "ba
       <div className={`text-sm font-semibold ${t}`}>{title}</div>
       <div className="text-sm text-muted mt-0.5">{children}</div>
     </div>
+  );
+}
+
+/** 右下角浮动提示：全站统一使用。portal 到 body、solid 背景，默认保持到用户点「知道了」。 */
+export function Toast({ open, onClose, title, tone = "accent", duration = null, children }: {
+  open: boolean; onClose: () => void; title: string; tone?: "warn" | "bad" | "accent";
+  duration?: number | null; children: ReactNode;
+}) {
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  useEffect(() => {
+    if (!open || !duration) return;
+    const timer = setTimeout(() => closeRef.current(), duration);
+    return () => clearTimeout(timer);
+  }, [open, duration]);
+  if (!open) return null;
+  return createPortal(
+    <div className="fixed bottom-6 right-6 z-[100] w-[min(92vw,30rem)] rounded border border-line bg-bg-2 p-1 shadow-2xl"
+      style={{ backgroundColor: "var(--bg-2)" }}
+      role="status" aria-live="polite">
+      <Notice tone={tone} title={title}>
+        <div className="flex items-start gap-3">
+          <div className="flex-1">{children}</div>
+          <button type="button" className="btn h-7 px-2 text-xs whitespace-nowrap" onClick={onClose}>{t("知道了")}</button>
+        </div>
+      </Notice>
+    </div>,
+    document.body,
   );
 }
 

@@ -15,12 +15,15 @@ class LLMError(RuntimeError):
     pass
 
 
-def chat(prompt: str, task: str) -> tuple[str, dict, str]:
-    """返回 (原文, usage, 模型名)；usage 含 token 与本次费用（draft._chat 已记账）。"""
+def chat(prompt: str, task: str, lite: bool = False) -> tuple[str, dict, str]:
+    """返回 (原文, usage, 实际使用的模型名)；usage 含 token 与本次费用（draft._chat 已记账）。
+
+    诊断 / 规划 / 下一版草稿等复杂任务用大模型；将来若有简单的结构化判断可传 lite=True。
+    """
     from factopia.research import draft
-    cfg = draft.llm_config()
+    cfg = draft.llm_config(lite=lite)
     text, usage = draft._chat(prompt, cfg, task)
-    return text, usage, cfg["model"]
+    return text, usage, usage.get("model") or cfg["model"]
 
 
 def parse_json(text: str) -> dict:

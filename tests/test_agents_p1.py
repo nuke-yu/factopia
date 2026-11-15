@@ -318,6 +318,67 @@ class AgentP1Tests(unittest.TestCase):
         self.assertIsNotNone(astore.read_round(agent["agent_id"], 1, "next_version_draft"))
         self.assertEqual(astore.load(agent["agent_id"])["state"], "awaiting_human")
 
+    def test_terminate_research_stops_active_agents_and_is_idempotent(self):
+        agent = astore.create("test_single", 1, POLICY, ["hk"], 20)
+        agent.update(state="acting")
+        astore.save(agent)
+        out = approve.terminate_research("test_single", 1, "人工终止", by="tester")
+        self.assertEqual(out["terminated"]["research_id"], "test_single")
+        self.assertEqual(out["terminated"]["version"], 1)
+        self.assertEqual(rstore.termination("test_single")["by"], "tester")
+        self.assertEqual(astore.load(agent["agent_id"])["state"], "stopped")
+
+        again = approve.terminate_research("test_single", 1, "再次终止", by="tester2")
+        self.assertEqual(again["terminated"]["at"], out["terminated"]["at"])
+        self.assertEqual(again["terminated"]["by"], "tester")
+
+    def test_terminate_research_leaves_finished_agents_untouched(self):
+        agent = astore.create("test_single", 1, POLICY, ["hk"], 20)
+        agent.update(state="done")
+        astore.save(agent)
+        out = approve.terminate_research("test_single", 1, "已完成", by="tester")
+        self.assertEqual(out["agents"], [])
+        self.assertEqual(astore.load(agent["agent_id"])["state"], "done")
+        self.assertIsNotNone(rstore.termination("test_single"))
+
+    def test_manual_idea_source_dedupe(self):
+        body = {"channel": "hypothesis", "title": "重复线索", "body": "这是一条足够长的线索正文。",
+                "markets": ["hk"], "submitted_by": "tester", "confirm_no_client_data": True,
+                "source_ref": {"research": "test_single.v1", "run": "run1"}}
+        with mock.patch.object(ideas, "similar", return_value={"research": [], "ideas": [], "note": ""}):
+            first = ideas.create(body)
+            second = ideas.create({**body, "source_ref": {"research": "test_single.v1", "run": "run2"}})
+        self.assertEqual(first["id"], second["id"])
+        self.assertTrue(second.get("deduped"))
+        self.assertEqual([i["id"] for i in ideas.find_by_source("test_single.v1")], [first["id"]])
+
+    def test_manual_idea_update(self):
+        body = {"channel": "hypothesis", "title": "待修改线索", "body": "这是一条足够长的原始线索正文。",
+                "markets": ["hk"], "submitted_by": "tester", "confirm_no_client_data": True,
+                "source_ref": {"research": "test_single.v1", "run": "run1"}}
+        with mock.patch.object(ideas, "similar", return_value={"research": [], "ideas": [], "note": ""}):
+            idea = ideas.create(body)
+            updated = ideas.update(idea["id"], {**body, "title": "修改后的线索",
+                                                "body": "修改后的线索正文足够长。", "markets": ["uk"],
+                                                "submitted_by": "editor", "confirm_no_client_data": True})
+        self.assertEqual(updated["title"], "修改后的线索")
+        self.assertEqual(updated["body"], "修改后的线索正文足够长。")
+        self.assertEqual(updated["markets"], ["uk"])
+        self.assertEqual(updated["submitted_by"], "editor")
+        self.assertTrue(any(e["action"] == "update" for e in updated["events"]))
+
+    def test_approve_blocked_after_research_terminated(self):
+        agent = astore.create("test_single", 1, POLICY, ["hk"], 20)
+        agent.update(state="awaiting_human", current_round=1, approved=None)
+        astore.save(agent)
+        astore.write_round(agent["agent_id"], 1, "next_version_draft",
+                           {"draft": DRAFT, "meta": {"model": "fake", "prompt_version": "test"}})
+        rstore.terminate("test_single", 1, "人工终止", by="tester")
+        with self.assertRaises(approve.ApprovalError) as ctx:
+            approve.approve(agent["agent_id"], run=False, by="tester")
+        self.assertIn("研究已人工终止", str(ctx.exception))
+        self.assertEqual(rstore.versions("test_single"), [1])
+
 
 if __name__ == "__main__":
     unittest.main()

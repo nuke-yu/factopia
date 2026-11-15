@@ -418,6 +418,12 @@ def research_draft(body: DraftIn):
     _check_markets(body.markets)
     if body.horizon not in HORIZONS:
         raise HTTPException(422, t("预测周期必须是 {horizons} 之一", horizons=joinlist(HORIZONS)))
+    if body.based_on:
+        parent_id = body.based_on.split(".", 1)[0]
+        term = store.termination(parent_id)
+        if term:
+            raise HTTPException(409, t("研究已人工终止（{by}，{at}）：不能再生成新版本",
+                                       by=term.get("by") or "—", at=term.get("at") or "—"))
     try:
         return drafting.make_draft(body.model_dump())
     except KeyError:
@@ -502,6 +508,10 @@ def _prepare_spec(raw: dict, lock: bool) -> dict:
 def lock_version(body: dict):
     """锁定研究规格（RS-08）：生成新的版本号，此后不可修改。锁定前先做立项预检（BR-21）：命中阻断规则不允许锁定。"""
     spec = _prepare_spec(body, lock=True)
+    term = store.termination(spec.get("id"))
+    if term:
+        raise HTTPException(409, t("研究已人工终止（{by}，{at}）：不能再生成新版本",
+                                   by=term.get("by") or "—", at=term.get("at") or "—"))
     pre = rulebook.evaluate(rule_ctx.setup_context(spec), ["setup"])
     if pre["blocked"]:
         hits = [f"{h['rule_id']} {h['title']}（{h['reason']}）" for h in pre["hits"] if h["severity"] == "block"]
@@ -540,6 +550,13 @@ def ideas_list(channel: str | None = None, status: str | None = None, market: st
     return _ideas().listing(channel, status, market)
 
 
+@app.get("/api/ideas/search")
+def ideas_search(q: str = Query(..., min_length=1, max_length=300)):
+    """线索池 AI 查询：用 embedding 匹配标题与概述；向量不可用时退回关键词。"""
+    from factopia.research import semantic
+    return semantic.search_ideas(q, _ideas().listing()["items"])
+
+
 @app.get("/api/ideas/{iid}")
 def ideas_detail(iid: str):
     return _idea_call(_ideas().detail, iid)
@@ -561,6 +578,18 @@ class IdeaIn(BaseModel):
     source_ref: dict | None = None
 
 
+class IdeaUpdateIn(BaseModel):
+    title: str = Field(max_length=200)
+    body: str = Field("", max_length=20000)
+    markets: list[str] = []
+    submitted_by: str = Field(max_length=60)
+    confirm_no_client_data: bool = False
+    direction: str | None = None
+    period: str | None = None
+    feedback_role: str | None = None
+    document: dict | None = None
+
+
 @app.post("/api/ideas")
 def ideas_create(body: IdeaIn):
     """提交线索；论文渠道文件以 base64 传入（≤ 20 MB），提交后自动抽取候选因子（失败不影响提交）。"""
@@ -574,6 +603,15 @@ def ideas_create(body: IdeaIn):
         except (I.IdeaError, drafting.DraftError) as e:
             idea = {**idea, "extract_error": str(e)}
     return idea
+
+
+@app.put("/api/ideas/{iid}")
+def ideas_update(iid: str, body: IdeaUpdateIn):
+    """修改人工线索的文本、市场与渠道字段；自动回流线索不可修改。"""
+    _idea_check(iid)
+    for m in body.markets:
+        access.require(m, t("在其他地区市场提交线索"))
+    return _idea_call(_ideas().update, iid, body.model_dump())
 
 
 class IdeaSuggestIn(BaseModel):
@@ -1001,6 +1039,41 @@ def study_view(research_id: str, version: int):
             "region_view": access.role()["name"]}
 
 
+class ResearchTerminateIn(BaseModel):
+    version: int | None = None          # 终止操作发生在哪个版本，仅用于追溯
+    reason: str = "人工终止当前研究"
+    by: str = "研究员（演示，未登录）"
+
+
+@app.get("/api/research/{research_id}/termination")
+def research_termination(research_id: str):
+    """研究是否已人工终止；研究立项页据此禁止再生成新版本。"""
+    vs = store.versions(research_id) if drafting.ID_PATTERN.match(research_id) else []
+    if not vs:
+        raise HTTPException(404, t("研究不存在或还没有锁定的版本：{rid}", rid=research_id))
+    spec = store.load_version(research_id, vs[-1])
+    markets = spec.get("markets") or []
+    if markets and not any(access.can(m) for m in markets):
+        access.deny(t("研究 {rid} v{version}（不涉及本地区市场）", rid=research_id, version=vs[-1]))
+    return {"terminated": store.termination(research_id)}
+
+
+@app.post("/api/research/{research_id}/terminate")
+def terminate_research(research_id: str, body: ResearchTerminateIn):
+    """人工终止当前研究：写终止标记并停止该研究下所有活动 Agent；之后不能再启动 Agent。"""
+    vs = store.versions(research_id) if drafting.ID_PATTERN.match(research_id) else []
+    if not vs:
+        raise HTTPException(404, t("研究不存在或还没有锁定的版本：{rid}", rid=research_id))
+    version = body.version if body.version in vs else vs[-1]
+    spec = store.load_version(research_id, version)
+    markets = spec.get("markets") or []
+    if markets and not any(access.can(m) for m in markets):
+        access.deny(t("研究 {rid} v{version}（不涉及本地区市场）", rid=research_id, version=version))
+    out = agent_approve.terminate_research(research_id, version, body.reason, body.by)
+    return {"terminated": out["terminated"],
+            "agents": [{"agent_id": x["agent"]["agent_id"], "state": x["agent"]["state"]} for x in out["agents"]]}
+
+
 def study(research_id: str, version: int):
     """研究结论（Spec 第 14.5 节）：同一锁定版本在各市场的结果，按可证伪测试判定。"""
     spec = get_version(research_id, version)
@@ -1011,13 +1084,17 @@ def study(research_id: str, version: int):
     markets = {m: _study_market(m, runs, jobs, rule) for m in rule["markets"]}
     diags = {m: (e.get("focus") or {}).get("diagnostics") for m, e in markets.items()}
     exp = store.RESEARCH_DIR / research_id / f"explain_v{version}.json"
+    from factopia import ideas as ideas_mod
+    saved_ideas = [{"id": i["id"], "title": i["title"], "run": (i.get("source_ref") or {}).get("run")}
+                   for i in ideas_mod.find_by_source(f"{research_id}.v{version}")]
     return {"research_id": research_id, "version": version, "hypothesis": spec.get("hypothesis"),
             "title": spec.get("title_zh") or spec.get("title"),
             "rule": {k: rule[k] for k in ("primary", "markets", "ric_sign", "sign_from_text", "text")},
             "overall": verdict.overall(markets, rule), "transfer": verdict.transfer(markets, rule, diags),
             "cross_market": _cross_market(markets),
             "markets": markets, "findings": _study_findings(markets, rule),
-            "explanation": json.loads(exp.read_text(encoding="utf-8")) if exp.exists() else None}
+            "explanation": json.loads(exp.read_text(encoding="utf-8")) if exp.exists() else None,
+            "terminated": store.termination(research_id), "saved_ideas": saved_ideas}
 
 
 @app.post("/api/research/{research_id}/versions/{version}/explain")
@@ -2024,6 +2101,10 @@ def create_agent(body: AgentIn):
         raise HTTPException(422, t("市场必须是 {markets} 中的一个或多个", markets=", ".join(MARKETS)))
     for m in markets:
         access.require(m, t("研究 {rid} v{version}", rid=body.research_id, version=body.version))
+    term = store.termination(body.research_id)
+    if term:
+        raise HTTPException(409, t("研究已人工终止（{by}，{at}）：不能再启动 Agent",
+                                   by=term.get("by") or "—", at=term.get("at") or "—"))
     policy = agent_policy.load()
     if body.budget_usd is not None:
         policy["budget_usd"] = float(body.budget_usd)
@@ -2047,9 +2128,11 @@ def get_agent(agent_id: str):
         except (FileNotFoundError, OSError):
             continue
     report_path = agent_store.dir_path(agent_id) / "report.md"
+    root = agent.get("root") or {}
     return {"agent": agent, "rounds": _agent_rounds(agent), "children": children,
             "job": _job_public(job) if job else None,
-            "report": report_path.read_text(encoding="utf-8") if report_path.exists() else None}
+            "report": report_path.read_text(encoding="utf-8") if report_path.exists() else None,
+            "terminated": store.termination(root.get("research_id"))}
 
 
 @app.get("/api/agents/{agent_id}/trace")

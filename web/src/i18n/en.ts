@@ -861,7 +861,7 @@ export default {
   "{n} 轮假设（只含方向与是否采纳）": "{n} loops of hypotheses (directions and adoption only)",
   "{n} 项各市场不同 · {v} · 规则包 {p}": "{n} items differ across markets · {v} · rule packs {p}",
   "{n} 字符 · 测试期 {a} 至 {b}": "{n} chars · test period {a} to {b}",
-  "01 研究立项": "01 Proposal",
+  "02 研究立项": "02 Proposal",
   "03 · 审核": "03 · Review",
   "AI 起草": "AI-drafted",
   "AI 起草：{m} · 提示词模板 {v} · {n} tokens · {s} 秒": "AI-drafted: {m} · prompt template {v} · {n} tokens · {s} s",
@@ -2099,4 +2099,55 @@ export default {
   "没有其他历史项目。": "No other historical projects.",
   "历史项目已收起；展开后可按标题或 AI 语义搜索。": "Historical projects are collapsed; expand them to search by title or AI.",
   "匹配度 {s}": "Similarity {s}",
+
+  // ── Research termination (results / agent pages) ──
+  "研究已终止": "Research terminated",
+  "当前研究已终止": "Current research terminated",
+  "终止当前研究": "Terminate research",
+  "确认终止": "Confirm termination",
+  "终止中…": "Terminating…",
+  "启动中…": "Starting…",
+  "该研究已人工终止，不能再让 Agent 迭代": "This research was manually terminated; the agent cannot be started again",
+  "该研究已终止，不能生成新版本": "This research is terminated; no new version can be created",
+  "该研究已人工终止（{by}，{at}），不能再生成新版本；如需继续，请取消关联并作为新研究立项。": "This research was manually terminated ({by}, {at}); no new version can be created. To continue, unlink it and start a new research.",
+  "确认终止当前研究？终止后该研究不能再启动 Agent。": "Terminate this research? Afterwards no agent can be started for it.",
+  "人工结束当前研究；终止后不能再启动 Agent": "Manually end this research; no agent can be started afterwards",
+  "已终止当前研究；该研究不能再启动 Agent。": "Research terminated; no agent can be started for it.",
+  "人工终止当前研究；终止后该研究不能再启动 Agent": "Manually terminate this research; no agent can be started afterwards",
+  "由 {by} 于 {at} 人工终止": "Manually terminated by {by} at {at}",
+  "由 {by} 于 {at} 人工终止；该研究不能再启动 Agent。": "Manually terminated by {by} at {at}; no agent can be started for this research.",
+  "原因：{r}": "Reason: {r}",
+
+  // ── Continue menu wording (Results page) ──
+  "生成下一版（{n}）": "Generate next version ({n})",
+  "AI 生成下一版假设（v{n}）并自动运行": "AI generates the next hypothesis (v{n}) and runs automatically",
+  "AI 诊断并生成下一版草稿；人工批准后自动运行与评估": "AI diagnoses and drafts the next version; it runs and is evaluated automatically after human approval.",
+  "在结果页点“继续研究 → AI 生成下一版假设并自动运行”即可启动；Agent 会先停在人工闸门。": "Start it from the Results page via “Continue → AI generates the next hypothesis and runs automatically”; the agent still stops at the human gate first.",
+
+  // ── Idea pool: new idea toast / flash ──
+  "保存中…": "Saving…",
+  "知道了": "Got it",
+  "新线索已存入": "New idea saved",
+  "线索 {id} 已加入线索池，可查看相似研究与合并。": "Idea {id} has been added to the pool; review similar research and combine it.",
+  "新线索已加入线索池，可查看相似研究与合并。": "The new idea has been added to the pool; review similar research and combine it.",
+  "当前发现已经被加入线索池": "This finding has already been added to the idea pool",
+  "该发现已在线索池中": "This finding is already in the idea pool",
+  "该发现之前已加入线索池，已定位到线索 {id}。": "This finding was already added to the idea pool; located idea {id}.",
+
+  // ── Idea pool: list search ──
+  "按标题或概述查找线索": "Search ideas by title or summary",
+  "按标题或概述查找线索，回车搜索": "Search ideas by title or summary; press Enter",
+  "AI 查询": "AI search",
+  "AI 查询中…": "AI searching…",
+  "线索（{m}/{n}）": "Ideas ({m}/{n})",
+  "没有匹配的线索。": "No matching ideas.",
+  "向量检索暂不可用，已用关键词查询": "Vector search is temporarily unavailable; keyword search was used",
+  "可以稍后重试 AI 查询。": "You can retry the AI search later.",
+  "技术原因": "Technical details",
+
+  // ── Idea pool: edit idea ──
+  "修改线索": "Edit idea",
+  "取消修改": "Cancel edit",
+  "正在修改线索 {id}": "Editing idea {id}",
+  "当前文件：{name}；修改时不重新上传，原文件保留。": "Current file: {name}; editing keeps the original file.",
 } satisfies Record<string, string>;

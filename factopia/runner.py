@@ -329,6 +329,14 @@ def init_dirs() -> None:
         d.mkdir(parents=True, exist_ok=True)
         os.chown(d, API_UID, API_UID)
         d.chmod(0o775)
+    # API 进程也要追加费用账本；旧文件可能由 root 创建，修正归属后才能从页面发起的大模型调用记账
+    ledger = store.RUNTIME / "llm_costs.jsonl"
+    try:
+        ledger.touch(exist_ok=True)
+        os.chown(ledger, API_UID, API_UID)
+        ledger.chmod(0o664)
+    except OSError:
+        pass
     # Agent 轮次目录由 runner 以 root 创建；修复历史文件的归属，API 用户（approve/reject）才能写入
     agents_dir = store.RUNTIME / "agents"
     for root, _dirs, files in os.walk(agents_dir):

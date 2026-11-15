@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { api, MARKETS, type Market } from "../api";
+import { api, MARKETS, type Market, type ResearchTermination } from "../api";
 import { testPeriodMentions, useDraft, type Draft } from "../draft";
 import { cssVar, MARKET_LABEL, useAsync } from "../lib";
 import { t, tf, joinList, IS_ZH } from "../i18n";
@@ -19,6 +19,7 @@ export default function ResearchPage() {
   const mandates = useAsync(() => api.mandates(), []);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [parentTerm, setParentTerm] = useState<ResearchTermination | null>(null);
 
   useEffect(() => {
     if (cube.data && draft.groups.length === 0) update({ groups: cube.data.groups });
@@ -45,6 +46,16 @@ export default function ResearchPage() {
     }).catch(() => undefined);
   }, [basedOnParam]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // 无论从结果页、Agent 页还是线索合并进入，都按父研究编号检查是否已人工终止。
+  useEffect(() => {
+    const rid = draft.basedOn?.id;
+    if (!rid) { setParentTerm(null); return; }
+    let alive = true;
+    setParentTerm(null);
+    api.researchTermination(rid).then((r) => { if (alive) setParentTerm(r.terminated); }).catch(() => undefined);
+    return () => { alive = false; };
+  }, [draft.basedOn?.id]);
+
   const mandate = mandates.data?.find((m) => m.id === draft.mandate);
   const allowed = mandate?.markets ?? MARKETS;
   const mentions = testPeriodMentions(`${draft.hypothesis} ${draft.direction}`);
@@ -53,7 +64,8 @@ export default function ResearchPage() {
     return cube.data.factors.filter((f) => draft.groups.includes(f.group) && f.periods.train.label !== "无效");
   }, [cube.data, draft.groups]);
   const toggle = <T,>(list: T[], v: T) => (list.includes(v) ? list.filter((x) => x !== v) : [...list, v]);
-  const ready = draft.markets.length > 0 && draft.hypothesis.trim().length > 10 && !!mandate && !busy;
+  const terminatedParent = draft.basedOn ? parentTerm : null;
+  const ready = draft.markets.length > 0 && draft.hypothesis.trim().length > 10 && !!mandate && !busy && !terminatedParent;
 
   async function startDraft() {
     setBusy(true); setError(null);
@@ -100,6 +112,13 @@ export default function ResearchPage() {
           <span className="text-muted">{t("已预填父版本的假设、方向、市场与周期；锁定后成为该研究的新版本，旧版本不变。")}</span>
           <button type="button" className="btn h-7 px-2 text-xs ml-auto" onClick={() => update({ basedOn: null })}>{t("取消关联")}</button>
         </div>
+      )}
+      {terminatedParent && (
+        <Notice tone="warn" title={t("研究已终止")}>
+          {tf("该研究已人工终止（{by}，{at}），不能再生成新版本；如需继续，请取消关联并作为新研究立项。", {
+            by: terminatedParent.by, at: terminatedParent.at.slice(0, 16).replace("T", " "),
+          })}
+        </Notice>
       )}
       {draft.ideaId && (
         <div className="panel p-3 flex flex-wrap items-center gap-3 text-sm">

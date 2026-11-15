@@ -13,6 +13,7 @@ import json
 import math
 import os
 import re
+import time
 import urllib.error
 import urllib.request
 from collections import Counter
@@ -99,7 +100,7 @@ def expand(query: str, use_llm: bool = True) -> dict:
     try:
         if not use_llm:
             raise RuntimeError("未使用大模型")
-        text, usage = draft._chat(prompt, draft.llm_config(), "语义检索改写")
+        text, usage = draft._chat(prompt, draft.llm_config(lite=True), "语义检索改写")
         d = json.loads(text)
         return {"method": "llm", "terms": {k: [str(x) for x in (d.get(k) or [])][:8] for k in ("en", "zh", "fr")},
                 "intent": str(d.get("intent") or ""), "tokens": int(usage.get("total_tokens") or 0)}
@@ -176,13 +177,21 @@ def _embed_batch(cfg: dict, batch: list[str]) -> list[list[float]]:
     body = json.dumps({"model": cfg["model"], "input": batch, "encoding_format": "float"}).encode()
     req = urllib.request.Request(f"{cfg['base_url']}/embeddings", data=body, method="POST",
                                  headers={"Authorization": f"Bearer {cfg['api_key']}", "Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=60) as r:
-            data = json.loads(r.read())
-    except urllib.error.HTTPError as e:
-        raise RuntimeError(f"向量接口返回 {e.code}：{e.read()[:300].decode(errors='replace')}") from e
-    except (urllib.error.URLError, TimeoutError) as e:
-        raise RuntimeError(f"无法连接向量接口：{e}") from e
+    for attempt in range(3):                 # 网络抖动 / 网关 5xx：短暂重试，避免直接退回关键词
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                data = json.loads(r.read())
+            break
+        except urllib.error.HTTPError as e:
+            if e.code in (429, 500, 502, 503, 504) and attempt < 2:
+                time.sleep(1.5 * (attempt + 1))
+                continue
+            raise RuntimeError(f"向量接口返回 {e.code}：{e.read()[:300].decode(errors='replace')}") from e
+        except (urllib.error.URLError, TimeoutError) as e:
+            if attempt < 2:
+                time.sleep(1.5 * (attempt + 1))
+                continue
+            raise RuntimeError(f"无法连接向量接口：{e}") from e
     rows = sorted(data.get("data") or [], key=lambda x: x.get("index", 0))
     if len(rows) != len(batch):
         raise RuntimeError("向量接口返回的结果数量与输入不一致")
@@ -267,3 +276,30 @@ def search_projects(query: str, items: list[dict], limit: int = 20) -> dict:
     return {"query": query, "method": method, "model": model, "error": error,
             "results": [{"id": h["id"], "title": h["title"], "hypothesis": h["hypothesis"], "score": h["score"],
                          "snippet": h["snippet"]} for h in hits[:limit]]}
+
+
+def search_ideas(query: str, items: list[dict], limit: int = 60) -> dict:
+    """线索池的 AI 查询：比较查询与线索标题 + 概述（正文前 200 字）。
+
+    embedding 不可用时退回 BM25；返回结构与项目搜索一致，前端按 id 与当前列表取交集。
+    """
+    query = (query or "").strip()
+    docs = []
+    for it in items:
+        title = str(it.get("title") or "")
+        excerpt = str(it.get("excerpt") or it.get("body") or "")
+        docs.append({"id": it.get("id"), "title": title, "hypothesis": excerpt, "snippet": excerpt[:240]})
+    if not query or not docs:
+        return {"query": query, "method": "none", "model": None, "error": None, "results": []}
+    try:
+        vectors = embed([f"{d['title']}\n{d['hypothesis']}" for d in docs])
+        qv = embed_query(query)
+        hits = [{**d, "score": round(max(0.0, _cosine(qv, v)), 4)} for d, v in zip(docs, vectors)]
+        method, error, model = "embedding", None, embedding_config()["model"]
+    except Exception as e:                                   # 未配置 / 网络故障：关键词保底
+        hits = _keyword_project_hits(query, docs)
+        method, error, model = "keyword", str(e)[:300], None
+    hits.sort(key=lambda h: (-h["score"], h["title"]))
+    return {"query": query, "method": method, "model": model, "error": error,
+            "results": [{"id": h["id"], "title": h["title"], "snippet": h["snippet"], "score": h["score"]}
+                        for h in hits[:limit]]}

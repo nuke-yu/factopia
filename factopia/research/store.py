@@ -83,6 +83,37 @@ def research_ids() -> list[str]:
     return sorted(p.name for p in RESEARCH_DIR.glob("*") if p.is_dir() and versions(p.name))
 
 
+# ── 人工终止研究（结果页 / 研究 Agent 页）────────────────────
+# 按研究编号（而不是单个版本）终止：终止后该研究的任何版本都不能再启动 Agent。
+# 版本字段只记录终止操作发生在哪个版本，便于追溯；已终止的研究不会自动解除。
+
+def termination_path(research_id: str) -> Path:
+    return RESEARCH_DIR / research_id / "terminated.json"
+
+
+def termination(research_id: str | None) -> dict | None:
+    if not research_id:
+        return None
+    path = termination_path(research_id)
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def terminate(research_id: str, version: int | None = None, reason: str = "人工终止当前研究",
+              by: str = "研究员（演示，未登录）") -> dict:
+    """写入终止标记；重复调用返回第一次的记录（幂等）。"""
+    existing = termination(research_id)
+    if existing:
+        return existing
+    rec = {"research_id": research_id, "version": version, "at": now(), "by": by, "reason": str(reason)[:1000]}
+    _atomic_write(termination_path(research_id), _dumps(rec, indent=2))
+    return rec
+
+
 # ── 运行任务 ─────────────────────────────────────────────────
 
 def create_jobs(research_id: str, version: int, markets: list[str], horizon: int, loops: int, budget_usd: float,

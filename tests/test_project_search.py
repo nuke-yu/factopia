@@ -37,5 +37,27 @@ class ProjectSearchTests(unittest.TestCase):
         self.assertEqual(r["results"], [])
 
 
+IDEA_ITEMS = [
+    {"id": "idea_1", "title": "量价背离反转", "excerpt": "成交量放大后的价格背离预测短期反转。"},
+    {"id": "idea_2", "title": "动量延续", "excerpt": "过去一个月的强势股在下一周继续跑赢。"},
+]
+
+
+class IdeaSearchTests(unittest.TestCase):
+    def test_embedding_ranks_by_cosine(self):
+        with mock.patch.object(semantic, "embed", return_value=[[1.0, 0.0], [0.0, 1.0]]), \
+             mock.patch.object(semantic, "embed_query", return_value=[0.1, 0.9]), \
+             mock.patch.object(semantic, "embedding_config", return_value={"model": "test-embed"}):
+            r = semantic.search_ideas("动量", IDEA_ITEMS)
+        self.assertEqual(r["method"], "embedding")
+        self.assertEqual([x["id"] for x in r["results"]], ["idea_2", "idea_1"])
+
+    def test_keyword_fallback(self):
+        with mock.patch.object(semantic, "embed", side_effect=RuntimeError("no vector endpoint")):
+            r = semantic.search_ideas("动量", IDEA_ITEMS)
+        self.assertEqual(r["method"], "keyword")
+        self.assertEqual(r["results"][0]["id"], "idea_2")
+
+
 if __name__ == "__main__":
     unittest.main()

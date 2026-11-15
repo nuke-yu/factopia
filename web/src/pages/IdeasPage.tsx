@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { Badge, ErrorBox, Loading, Notice, Panel, Seg } from "../components/ui";
-import { api, visibleMarkets, type Idea, type IdeaChannel, type IdeaCombo, type IdeaDetail, type IdeaInput, type IdeaList, type IdeaSuggestion, type Market } from "../api";
+import { Badge, ErrorBox, Loading, Notice, Panel, Seg, Toast } from "../components/ui";
+import { api, visibleMarkets, type Idea, type IdeaChannel, type IdeaCombo, type IdeaDetail, type IdeaInput, type IdeaList, type IdeaSearch, type IdeaSuggestion, type IdeaUpdateInput, type Market } from "../api";
 import { useDraft } from "../draft";
 import { MARKET_LABEL, useAsync } from "../lib";
 import SuggestionBasis from "../components/SuggestionBasis";
@@ -35,8 +35,11 @@ function fileToBase64(f: File): Promise<string> {
   });
 }
 
-function Submit({ meta, actor, setActor, onCreated, onSuggestion }: { meta: IdeaList; actor: string; setActor: (v: string) => void; onCreated: (i: Idea) => void;
-  onSuggestion: (s: IdeaSuggestion | null) => void }) {
+function Submit({ meta, actor, setActor, onCreated, onUpdated, onCancelEdit, editing, onSuggestion, suppressSuggest = false }: {
+  meta: IdeaList; actor: string; setActor: (v: string) => void; onCreated: (i: Idea) => void;
+  onUpdated: (i: IdeaDetail) => void; onCancelEdit: () => void; editing: IdeaDetail | null;
+  onSuggestion: (s: IdeaSuggestion | null) => void; suppressSuggest?: boolean;
+}) {
   const [params] = useSearchParams();
   const preTitle = params.get("prefill_title") || "";
   const preBody = params.get("prefill_body") || "";
@@ -62,19 +65,62 @@ function Submit({ meta, actor, setActor, onCreated, onSuggestion }: { meta: Idea
   const [sugErr, setSugErr] = useState<string | null>(null);
   const [seen, setSeen] = useState<string[]>([]);
   const [seed, setSeed] = useState("");             // 研究员的想法种子：填了就以它为主线，不填由平台按证据选方向
+  const prevEditing = useRef(false);
+  const actorBeforeEdit = useRef("");
+  const editingRef = useRef(false);
+  const suggestSeq = useRef(0);
+  useEffect(() => {
+    if (editing) {
+      prevEditing.current = true;
+      editingRef.current = true;
+      suggestSeq.current += 1;          // 作废仍在飞的 AI 建议，避免它覆盖回填内容
+      setSugBusy(false);
+      actorBeforeEdit.current = actor;
+      setCh(editing.channel as IdeaChannel);
+      setTitle(editing.title);
+      setBody(editing.body);
+      const vm = visibleMarkets();
+      const ms = (editing.markets || []).filter((m) => vm.includes(m));
+      setMarkets(ms.length ? ms : vm);
+      setActor(editing.submitted_by);
+      const doc = editing.document;
+      setExtra({
+        ...(editing.fields || {}),
+        ...(editing.channel === "paper" && doc ? {
+          source: doc.source, licence: doc.licence, licence_note: doc.licence_note,
+          published: doc.published ?? "", sample_start: doc.sample_start ?? "", sample_end: doc.sample_end ?? "",
+        } : {}),
+      });
+      setFile(null); setConfirm(true); setSug(null); setSugErr(null); setError(null);
+      return;
+    }
+    if (!prevEditing.current) return;
+    prevEditing.current = false;
+    editingRef.current = false;
+    setTitle(""); setBody(""); setExtra({}); setFile(null); setConfirm(false); setSug(null); setSugErr(null); setError(null);
+    setMarkets(visibleMarkets());
+    setActor(actorBeforeEdit.current);
+  }, [editing]); // eslint-disable-line react-hooks/exhaustive-deps
   async function suggest(channel: IdeaChannel, another = false) {
-    if (channel === "paper") { setSug(null); return; }
+    if (editingRef.current) return;
+    if (channel === "paper") { suggestSeq.current += 1; setSug(null); setSugBusy(false); return; }
+    const seq = ++suggestSeq.current;
     setSugBusy(true); setSugErr(null);
     try {
       const r = await api.ideaSuggest(channel, markets.length ? markets : visibleMarkets(), seen.slice(-20), seed.trim(),
         another && !seed.trim() && sug ? sug.angle : null);
+      if (seq !== suggestSeq.current || editingRef.current) return;   // 已被编辑/新请求取代
       setSug(r); setSeen((xs) => [...xs, r.title]);
       setTitle(r.title); setBody(r.body);
       setExtra((e) => ({ ...e, direction: r.direction, period: r.period, feedback_role: r.feedback_role }));
       if (r.markets.length) setMarkets(r.markets.filter((m) => visibleMarkets().includes(m)));
-    } catch (e) { setSugErr((e as Error).message); } finally { setSugBusy(false); }
+    } catch (e) {
+      if (seq === suggestSeq.current && !editingRef.current) setSugErr((e as Error).message);
+    } finally {
+      if (seq === suggestSeq.current) setSugBusy(false);
+    }
   }
-  useEffect(() => { if (!prefilled) suggest(ch); }, [ch]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (!prefilled && !suppressSuggest && !editing) suggest(ch); }, [ch]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { onSuggestion(ch === "paper" ? null : sug); }, [sug, ch]); // eslint-disable-line react-hooks/exhaustive-deps
   const edited = !!sug && (sug.title !== title.trim() || sug.body !== body.trim());
   const x = (k: string) => extra[k] ?? "";
@@ -82,6 +128,19 @@ function Submit({ meta, actor, setActor, onCreated, onSuggestion }: { meta: Idea
   async function submit() {
     setBusy(true); setError(null);
     try {
+      if (editing) {
+        const input: IdeaUpdateInput = { title: title.trim(), body: body.trim(), markets, submitted_by: actor.trim(),
+          confirm_no_client_data: confirm };
+        if (ch === "hypothesis") input.direction = x("direction");
+        if (ch === "experience") input.period = x("period");
+        if (ch === "feedback") input.feedback_role = x("feedback_role") || meta.feedback_roles[0];
+        if (ch === "paper") input.document = { source: x("source"), licence: x("licence"), licence_note: x("licence_note"),
+          published: x("published"), sample_start: x("sample_start"), sample_end: x("sample_end") };
+        saveActor(actor.trim());
+        const updated = await api.updateIdea(editing.id, input);
+        onUpdated(updated);
+        return;
+      }
       const input: IdeaInput = { channel: ch, title: title.trim(), body: body.trim(), markets, submitted_by: actor.trim(), confirm_no_client_data: confirm,
         ai_suggestion: ch !== "paper" ? sug : null, ...(sourceRef ? { source_ref: sourceRef } : {}) };
       if (ch === "hypothesis") input.direction = x("direction");
@@ -102,10 +161,12 @@ function Submit({ meta, actor, setActor, onCreated, onSuggestion }: { meta: Idea
   }
   const [bodyLabel, placeholder] = BODY_LABEL[ch];
   return (
-    <Panel eyebrow={t("人工渠道：提交后进入线索列表，由研究员挑选转为研究立项")} title={t("提交线索")}>
+    <Panel eyebrow={editing ? tf("正在修改线索 {id}", { id: editing.id }) : t("人工渠道：提交后进入线索列表，由研究员挑选转为研究立项")}
+      title={editing ? t("修改线索") : t("提交线索")}>
       <div className="flex flex-col gap-3">
-        <Seg label={t("渠道")} value={ch} options={MANUAL} onChange={(v) => { setCh(v); setError(null); setTitle(""); setBody(""); setExtra({}); }} />
-        {ch !== "paper" && (
+        <Seg label={t("渠道")} value={ch} options={MANUAL} disabled={!!editing}
+          onChange={(v) => { setCh(v); setError(null); setTitle(""); setBody(""); setExtra({}); }} />
+        {ch !== "paper" && !editing && (
           <div className="border border-accent/40 bg-accent/5 rounded p-3 text-sm flex flex-col gap-1">
             <div className="flex flex-wrap items-center gap-2">
               <Badge tone="accent">{t("AI 默认假设")}</Badge>
@@ -147,8 +208,11 @@ function Submit({ meta, actor, setActor, onCreated, onSuggestion }: { meta: Idea
             {meta.feedback_roles.map((r) => <option key={r}>{r}</option>)}</select></label>}
         {ch === "paper" && (
           <div className="grid gap-3 sm:grid-cols-2 border border-line rounded p-3">
-            <label className="text-sm sm:col-span-2">{t("文件（PDF / TXT / Markdown，≤ 20 MB；也可只粘贴摘要）")}
-              <input id="idea-file" type="file" accept=".pdf,.txt,.md" className="field mt-1" onChange={(e) => setFile(e.target.files?.[0] ?? null)} /></label>
+            {!editing && <label className="text-sm sm:col-span-2">{t("文件（PDF / TXT / Markdown，≤ 20 MB；也可只粘贴摘要）")}
+              <input id="idea-file" type="file" accept=".pdf,.txt,.md" className="field mt-1" onChange={(e) => setFile(e.target.files?.[0] ?? null)} /></label>}
+            {editing?.document?.name && (
+              <p className="text-xs text-faint sm:col-span-2">{tf("当前文件：{name}；修改时不重新上传，原文件保留。", { name: editing.document.name })}</p>
+            )}
             <label className="text-sm">{t("来源（必填）")}
               <input id="idea-source" className="field mt-1" value={x("source")} onChange={(e) => setX("source", e.target.value)} placeholder={t("例：SSRN / 券商研报 / 团队内部")} /></label>
             <label className="text-sm">{t("许可类型（必填）")}
@@ -182,31 +246,51 @@ function Submit({ meta, actor, setActor, onCreated, onSuggestion }: { meta: Idea
           <span>{t("确认内容不含真实客户身份信息（不要输入客户姓名；平台会拦截电子邮件、电话、身份证号、IBAN 等格式明确的信息）")}</span>
         </label>
         {error && <ErrorBox error={error} />}
-        <button className="btn btn-primary self-start" disabled={busy || !title.trim() || !actor.trim() || !confirm} onClick={submit}>
-          {busy ? (ch === "paper" ? t("提交并抽取候选因子（约 30–60 秒）…") : t("提交中…")) : t("提交线索")}</button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button className="btn btn-primary" disabled={busy || !title.trim() || !actor.trim() || !confirm} onClick={submit}>
+            {busy ? (editing ? t("保存中…") : ch === "paper" ? t("提交并抽取候选因子（约 30–60 秒）…") : t("提交中…"))
+              : editing ? t("修改线索") : t("提交线索")}</button>
+          {editing && <button type="button" className="btn" disabled={busy} onClick={onCancelEdit}>{t("取消修改")}</button>}
+        </div>
       </div>
     </Panel>
   );
 }
 
-function Card({ i, active, onClick, checked, onCheck }: { i: Idea; active: boolean; onClick: () => void; checked: boolean; onCheck?: () => void }) {
+function Card({ i, active, flash = false, locked = false, editing = false, onEdit, onCancelEdit, onClick, checked, onCheck }: {
+  i: Idea; active: boolean; flash?: boolean; locked?: boolean; editing?: boolean;
+  onEdit: () => void; onCancelEdit: () => void;
+  onClick: () => void; checked: boolean; onCheck?: () => void;
+}) {
   const dup = (i.similar?.ideas.length ?? 0) > 0;
+  const editable = !AUTO.has(i.channel);
   return (
-    <div className={`flex gap-2 p-3 rounded border transition-colors ${checked ? "border-accent bg-accent/5" : active ? "border-accent/60 bg-accent/10" : "border-line hover:border-accent/40"}`}>
-    {onCheck ? <input id={`idea-pick-${i.id}`} type="checkbox" className="mt-1 shrink-0" checked={checked} onChange={onCheck} aria-label={tf("选择线索：{title}", { title: i.title })} />
+    <div id={`idea-card-${i.id}`} className={`flex gap-2 p-3 rounded border transition-colors ${locked ? "cursor-not-allowed" : "cursor-pointer"} ${flash ? "idea-flash" : ""} ${checked ? "border-accent bg-accent/5" : active ? "border-accent/60 bg-accent/10" : "border-line hover:border-accent/40"}`}>
+    {onCheck ? <input id={`idea-pick-${i.id}`} type="checkbox" className="mt-1 shrink-0" checked={checked} disabled={locked} onChange={onCheck} aria-label={tf("选择线索：{title}", { title: i.title })} />
       : <span className="w-[13px] shrink-0" title={t("重复 / 不跟进的线索不能合并")} />}
-    <button type="button" onClick={onClick} className="min-w-0 flex-1 text-left">
-      <div className="flex flex-wrap items-center gap-1.5">
-        <Badge tone={AUTO.has(i.channel) ? "warn" : "accent"}>{t(i.channel_zh)}</Badge>
-        <Badge tone={STATUS_TONE[i.status]}>{({ new: t("待处理"), converted: t("已转立项"), duplicate: t("重复"), dismissed: t("不跟进") })[i.status]}</Badge>
-        {dup && <Badge tone="warn">{t("可能重复")}</Badge>}
-        {i.leakage?.overlap && <Badge tone="bad">{t("防泄漏提示")}</Badge>}
-        <span className="ml-auto text-xs text-faint num">{i.created_at.slice(0, 16).replace("T", " ")}</span>
+    <div className="min-w-0 flex-1">
+      <button type="button" aria-disabled={locked} onClick={() => { if (!locked) onClick(); }}
+        className={`w-full text-left ${locked ? "cursor-not-allowed" : "cursor-pointer"}`}>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <Badge tone={AUTO.has(i.channel) ? "warn" : "accent"}>{t(i.channel_zh)}</Badge>
+          <Badge tone={STATUS_TONE[i.status]}>{({ new: t("待处理"), converted: t("已转立项"), duplicate: t("重复"), dismissed: t("不跟进") })[i.status]}</Badge>
+          {dup && <Badge tone="warn">{t("可能重复")}</Badge>}
+          {i.leakage?.overlap && <Badge tone="bad">{t("防泄漏提示")}</Badge>}
+          <span className="ml-auto text-xs text-faint num">{i.created_at.slice(0, 16).replace("T", " ")}</span>
+        </div>
+        <div className="mt-1.5 font-medium text-sm">{i.title}</div>
+        <div className="text-xs text-muted mt-0.5 line-clamp-2">{i.excerpt}</div>
+      </button>
+      <div className={`flex items-center gap-2 mt-1 ${locked ? "cursor-not-allowed" : "cursor-pointer"}`}
+        onClick={(e) => { if (!locked && !(e.target as HTMLElement).closest("button")) onClick(); }}>
+        <span className="text-xs text-faint">{i.submitted_by} · {i.markets.length ? i.markets.map((m) => MARKET_LABEL[m]).join(" / ") : t("不限市场")}</span>
+        {active && editable && (
+          <button type="button" className="btn h-6 px-2 text-[11px] ml-auto" onClick={editing ? onCancelEdit : onEdit}>
+            {editing ? t("取消修改") : t("修改线索")}
+          </button>
+        )}
       </div>
-      <div className="mt-1.5 font-medium text-sm">{i.title}</div>
-      <div className="text-xs text-muted mt-0.5 line-clamp-2">{i.excerpt}</div>
-      <div className="text-xs text-faint mt-1">{i.submitted_by} · {i.markets.length ? i.markets.map((m) => MARKET_LABEL[m]).join(" / ") : t("不限市场")}</div>
-    </button>
+    </div>
     </div>
   );
 }
@@ -307,7 +391,7 @@ function CombineResult({ c, onClose }: { c: IdeaCombo; onClose: () => void }) {
   );
 }
 
-function Detail({ id, actor, onChanged }: { id: string; actor: string; onChanged: () => void }) {
+function Detail({ id, actor, onChanged, flash = false }: { id: string; actor: string; onChanged: () => void; flash?: boolean }) {
   const { data, error, loading, reload } = useAsync(() => api.idea(id), [id]);
   const [picked, setPicked] = useState<string[]>([]);
   const [note, setNote] = useState("");
@@ -345,7 +429,7 @@ function Detail({ id, actor, onChanged }: { id: string; actor: string; onChanged
   const who = actor.trim();
   const open = d.status === "new" || d.status === "converted";
   return (
-    <Panel eyebrow={tf("{id} · {ch} · {by}{role} · {at} UTC", { id: d.id, ch: t(d.channel_zh), by: d.submitted_by, role: d.role ? tf("（{role}）", { role: t(d.role) }) : "", at: d.created_at.slice(0, 16).replace("T", " ") })} title={d.title}
+    <Panel className={flash ? "idea-flash" : ""} eyebrow={tf("{id} · {ch} · {by}{role} · {at} UTC", { id: d.id, ch: t(d.channel_zh), by: d.submitted_by, role: d.role ? tf("（{role}）", { role: t(d.role) }) : "", at: d.created_at.slice(0, 16).replace("T", " ") })} title={d.title}
       actions={<Badge tone={STATUS_TONE[d.status]}>{({ new: t("待处理"), converted: t("已转立项"), duplicate: t("重复"), dismissed: t("不跟进") } as Record<string, string>)[d.status] ?? d.status_zh[d.status]}</Badge>}>
       <div className="grid gap-5 xl:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]">
         <div className="flex flex-col gap-4 min-w-0">
@@ -473,7 +557,72 @@ export default function IdeasPage() {
   const [picked, setPicked] = useState<string[]>([]);
   const [combo, setCombo] = useState<IdeaCombo | null>(null);
   const [sugShown, setSugShown] = useState<IdeaSuggestion | null>(null);
+  const [editing, setEditing] = useState<IdeaDetail | null>(null);
+  const [editError, setEditError] = useState<string | null>(null);
+  const [detailTick, setDetailTick] = useState(0);
+  const locked = !!editing;
   const pick = (id: string) => setPicked((xs) => xs.includes(id) ? xs.filter((x) => x !== id) : xs.length >= 8 ? xs : [...xs, id]);
+  async function startEdit(id: string) {
+    if (editing) return;
+    setEditError(null);
+    try { const d = await api.idea(id); setEditing(d); setPicked([]); }
+    catch (e) { setEditError((e as Error).message); }
+  }
+  // 线索列表查询：回车按标题/概述关键词，AI 查询走后端 embedding
+  const [query, setQuery] = useState("");
+  const [searched, setSearched] = useState("");
+  const [mode, setMode] = useState<"keyword" | "ai" | null>(null);
+  const [ai, setAi] = useState<IdeaSearch | null>(null);
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const allItems = meta?.items ?? [];
+  const keywordHits = mode === "keyword" && searched
+    ? allItems.filter((i) => `${i.title} ${i.excerpt ?? ""}`.toLocaleLowerCase().includes(searched.toLocaleLowerCase()))
+    : allItems;
+  const aiHits = mode === "ai" && ai
+    ? ai.results.flatMap((h) => {
+        const idea = allItems.find((i) => i.id === h.id);
+        return idea ? [{ hit: h, idea }] : [];
+      })
+    : [];
+  const shownItems = mode === "ai" ? aiHits.map((x) => x.idea) : keywordHits;
+  const shownCount = mode === "ai" ? (ai ? aiHits.length : null) : mode === "keyword" ? keywordHits.length : allItems.length;
+  function searchKeyword() {
+    if (aiBusy || locked) return;
+    const q = query.trim();
+    setSearched(q); setAi(null); setAiError(null);
+    setMode(q ? "keyword" : null);
+  }
+  async function searchAi() {
+    const q = query.trim();
+    if (!q || locked) return;
+    setAiBusy(true); setAi(null); setSearched(q); setAiError(null); setMode("ai");
+    try { setAi(await api.ideaSearch(q)); }
+    catch (e) { setMode(null); setAiError((e as Error).message); }
+    finally { setAiBusy(false); }
+  }
+  function clearSearch() {
+    setQuery(""); setSearched(""); setMode(null); setAi(null); setAiError(null);
+  }
+  // 结果页「把新发现存入线索池」带 created=1&id=<新线索> 跳转：卡片 flash 1 秒 + 右下角提示
+  const createdId = params.get("created") ? params.get("id") : null;
+  const [createdIdeaId] = useState<string | null>(createdId);
+  const [createdExisting] = useState(params.get("existing") === "1");
+  const [flashId, setFlashId] = useState<string | null>(createdId);
+  const [createdToast, setCreatedToast] = useState(!!createdId);
+  useEffect(() => {
+    if (!createdId) return;
+    const p = new URLSearchParams(params);
+    p.delete("created");
+    p.delete("existing");
+    setParams(p, { replace: true });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!flashId || !meta?.items.some((i) => i.id === flashId)) return;
+    document.getElementById(`idea-card-${flashId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+    const timer = setTimeout(() => setFlashId(null), 1000);
+    return () => clearTimeout(timer);
+  }, [flashId, meta]);
   return (
     <div className="flex flex-col gap-5">
       <div className="flex flex-wrap items-end gap-3">
@@ -484,6 +633,7 @@ export default function IdeasPage() {
         </div>
       </div>
       {list.error && <ErrorBox error={list.error} />}
+      {editError && <ErrorBox error={editError} />}
       {meta && (
         <div className="panel p-4 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
           <div><span className="label mr-2">{t("待处理")}</span><span className="font-display text-xl text-accent num">{meta.counts.status.new ?? 0}</span></div>
@@ -497,18 +647,57 @@ export default function IdeasPage() {
         </div>
       )}
       <div className="grid gap-5 xl:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
-        {meta ? <Submit meta={meta} actor={actor} setActor={setActor} onCreated={(i) => { list.reload(); set("id", i.id); }} onSuggestion={setSugShown} /> : <Loading what={t("线索池")} />}
-        <Panel eyebrow={t("人工提交（蓝）与自动回流（橙）")} title={tf("线索（{n}）", { n: meta?.items.length ?? 0 })}>
+        {meta ? <Submit meta={meta} actor={actor} setActor={setActor} onCreated={(i) => { list.reload(); set("id", i.id); }}
+          onUpdated={(d) => { setEditing(null); list.reload(); set("id", d.id); setDetailTick((x) => x + 1); }}
+          onCancelEdit={() => setEditing(null)} editing={editing}
+          onSuggestion={setSugShown} suppressSuggest={!!createdIdeaId} /> : <Loading what={t("线索池")} />}
+        <Panel eyebrow={t("人工提交（蓝）与自动回流（橙）")} title={tf("线索（{m}/{n}）", { m: shownCount ?? "…", n: allItems.length })}>
           <p className="text-xs text-faint mb-2">{t("点卡片查看并单独转立项；勾选多条可以合并为一个研究，或追加到已有研究（最多 8 条）。")}</p>
           <div className="flex flex-wrap items-center gap-2 mb-3">
-            <Seg label={t("状态")} value={st} onChange={(v) => set("status", v === "new" ? "" : v)}
+            <form className="flex min-w-0 items-center gap-2" onSubmit={(e) => { e.preventDefault(); searchKeyword(); }}>
+              <label htmlFor="idea-search" className="sr-only">{t("按标题或概述查找线索")}</label>
+              <input id="idea-search" className="field h-8 w-64 min-w-0 max-w-full" value={query} maxLength={200} disabled={locked}
+                onChange={(e) => setQuery(e.target.value)} placeholder={t("按标题或概述查找线索，回车搜索")} />
+              <button type="button" className="btn h-8 shrink-0 px-3 text-xs" disabled={aiBusy || locked || !query.trim()} onClick={searchAi}>
+                {aiBusy ? (
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className="size-1.5 rounded-full bg-accent animate-pulse" aria-hidden />
+                    {t("AI 查询中…")}
+                  </span>
+                ) : t("AI 查询")}
+              </button>
+              {(mode || query) && <button type="button" className="btn h-8 shrink-0 px-3 text-xs" disabled={locked} onClick={clearSearch}>{t("清除")}</button>}
+            </form>
+          </div>
+          {mode === "ai" && ai?.method === "keyword" && (
+            <div className="mb-3"><Notice tone="warn" title={t("向量检索暂不可用，已用关键词查询")}>
+              <div>{t("可以稍后重试 AI 查询。")}</div>
+              {ai.error && (
+                <details className="mt-1">
+                  <summary className="cursor-pointer">{t("技术原因")}</summary>
+                  <div className="text-xs break-all mt-0.5">{ai.error}</div>
+                </details>
+              )}
+            </Notice></div>
+          )}
+          {aiError && <div className="mb-3"><ErrorBox error={aiError} /></div>}
+          <div className="flex flex-wrap items-center gap-2 mb-3">
+            <Seg label={t("状态")} value={st} disabled={locked} onChange={(v) => set("status", v === "new" ? "" : v)}
               options={[{ value: "new", label: t("待处理") }, { value: "converted", label: t("已转立项") }, { value: "duplicate", label: t("重复") }, { value: "dismissed", label: t("不跟进") }, { value: "all", label: t("全部") }]} />
-            <Seg label={t("市场")} value={mk} onChange={(v) => set("market", v)}
+            <Seg label={t("市场")} value={mk} disabled={locked} onChange={(v) => set("market", v)}
               options={[{ value: "", label: t("全部市场") }, ...visibleMarkets().map((m) => ({ value: m as string, label: MARKET_LABEL[m] }))]} />
           </div>
-          {list.loading && !meta ? <Loading what={t("线索")} /> : meta && meta.items.length === 0 ? <p className="text-sm text-muted">{t("没有符合条件的线索。")}</p> : (
+          {aiBusy ? <p className="live-in flex items-center gap-2 text-sm text-muted" role="status">
+              <span className="size-2 rounded-full bg-accent animate-pulse" aria-hidden />
+              {t("AI 查询中…")}
+            </p>
+            : list.loading && !meta ? <Loading what={t("线索")} />
+            : meta && shownItems.length === 0 ? <p className="text-sm text-muted">{mode ? t("没有匹配的线索。") : t("没有符合条件的线索。")}</p>
+            : (
             <div className="flex flex-col gap-2 max-h-[40rem] overflow-y-auto pr-1">
-              {meta?.items.map((i) => <Card key={i.id} i={i} active={i.id === sel} onClick={() => set("id", i.id)} checked={picked.includes(i.id)}
+              {shownItems.map((i) => <Card key={i.id} i={i} active={i.id === sel} flash={i.id === flashId}
+                locked={locked} editing={editing?.id === i.id} onEdit={() => startEdit(i.id)} onCancelEdit={() => setEditing(null)}
+                onClick={() => set("id", i.id)} checked={picked.includes(i.id)}
                 onCheck={i.status === "new" || i.status === "converted" ? () => pick(i.id) : undefined} />)}
             </div>
           )}
@@ -517,7 +706,15 @@ export default function IdeasPage() {
       {sugShown && <SuggestionBasis key={sugShown.id} s={sugShown} />}
       {picked.length > 0 && <CombineBar picked={picked} items={meta?.items ?? []} actor={actor} onClear={() => setPicked([])} onDone={setCombo} />}
       {combo && <CombineResult key={combo.id} c={combo} onClose={() => setCombo(null)} />}
-      {sel && <Detail key={sel} id={sel} actor={actor} onChanged={list.reload} />}
+      {sel && <Detail key={`${sel}-${detailTick}`} id={sel} actor={actor} onChanged={list.reload} flash={sel === createdIdeaId} />}
+      <Toast open={createdToast} onClose={() => setCreatedToast(false)} tone="accent"
+        title={createdExisting ? t("该发现已在线索池中") : t("新线索已存入")}>
+        <span>{createdExisting
+          ? tf("该发现之前已加入线索池，已定位到线索 {id}。", { id: createdIdeaId ?? "" })
+          : createdIdeaId
+            ? tf("线索 {id} 已加入线索池，可查看相似研究与合并。", { id: createdIdeaId })
+            : t("新线索已加入线索池，可查看相似研究与合并。")}</span>
+      </Toast>
     </div>
   );
 }

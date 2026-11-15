@@ -36,7 +36,7 @@ export default function AuditPage() {
       <div className="flex flex-col gap-5">
         <Header locked={null} />
         <Notice tone="accent" title={t("还没有 AI 草稿")}>
-          {t("先在")} <Link to="/research" className="text-accent underline">{t("01 研究立项")}</Link> {t(`填写假设并点击"AI 起草研究规格"，草稿会带到这里审核。`)}
+          {t("先在")} <Link to="/research" className="text-accent underline">{t("02 研究立项")}</Link> {t(`填写假设并点击"AI 起草研究规格"，草稿会带到这里审核。`)}
         </Notice>
       </div>
     );

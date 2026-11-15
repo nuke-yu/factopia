@@ -94,6 +94,9 @@ def approve(agent_id: str, file: str | Path | None = None, run: bool = True,
     agent = store.load(agent_id)
     if agent.get("state") != "awaiting_human":
         raise ApprovalError(f"只有 awaiting_human 的 Agent 可以批准（当前 {agent.get('state')}）")
+    term = research_store.termination((agent.get("root") or {}).get("research_id"))
+    if term:
+        raise ApprovalError(f"研究已人工终止（{term.get('by')}，{term.get('at')}），不能再生成新版本")
     payload = _payload(agent, file, draft)
     draft = _validate(_draft(payload))
     parent = research_store.load_version(agent["root"]["research_id"], int(agent["current_version"]))
@@ -190,3 +193,23 @@ def stop(agent_id: str, reason: str = "人工停止", by: str = "研究员（演
             research_store.write_job(job)
     report.write(agent)
     return {"agent": agent, "jobs": jobs}
+
+
+def terminate_research(research_id: str, version: int | None = None, reason: str = "人工终止当前研究",
+                       by: str = "研究员（演示，未登录）") -> dict:
+    """人工终止整个研究：写终止标记，并停止该研究下所有仍在活动的 Agent（含其他版本）。
+
+    终止后 POST /api/agents 会拒绝任何新 Agent；人工仍可生成新版本、继续研究或提交审批。
+    """
+    rec = research_store.terminate(research_id, version, reason, by)   # 先落终止标记，阻止新 Agent
+    stopped = []
+    for agent in store.list_agents():
+        if ((agent.get("root") or {}).get("research_id")) != research_id:
+            continue
+        if agent.get("state") in ("done", "stopped", "failed", "cancelled"):
+            continue
+        try:
+            stopped.append(stop(agent["agent_id"], reason, by))
+        except ApprovalError:               # Agent 在扫描与停止之间结束了：忽略
+            continue
+    return {"terminated": rec, "agents": stopped}

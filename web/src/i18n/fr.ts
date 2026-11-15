@@ -861,7 +861,7 @@ export default {
   "{n} 轮假设（只含方向与是否采纳）": "{n} boucles d'hypothèses (directions et adoption uniquement)",
   "{n} 项各市场不同 · {v} · 规则包 {p}": "{n} éléments diffèrent selon les marchés · {v} · packs de règles {p}",
   "{n} 字符 · 测试期 {a} 至 {b}": "{n} caractères · période de test {a} à {b}",
-  "01 研究立项": "01 Proposition",
+  "02 研究立项": "02 Proposition",
   "03 · 审核": "03 · Revue",
   "AI 起草": "Rédigé par l'IA",
   "AI 起草：{m} · 提示词模板 {v} · {n} tokens · {s} 秒": "Rédigé par l'IA : {m} · gabarit d'invite {v} · {n} tokens · {s} s",
@@ -2099,4 +2099,55 @@ export default {
   "没有其他历史项目。": "Aucun autre projet historique.",
   "历史项目已收起；展开后可按标题或 AI 语义搜索。": "Les projets historiques sont repliés ; dépliez-les pour rechercher par titre ou par IA.",
   "匹配度 {s}": "Similarité {s}",
+
+  // ── Fin manuelle de la recherche (résultats / page Agent) ──
+  "研究已终止": "Recherche terminée",
+  "当前研究已终止": "La recherche actuelle est terminée",
+  "终止当前研究": "Terminer la recherche",
+  "确认终止": "Confirmer la fin",
+  "终止中…": "Fin en cours…",
+  "启动中…": "Démarrage…",
+  "该研究已人工终止，不能再让 Agent 迭代": "Cette recherche a été terminée manuellement ; impossible de relancer l'agent",
+  "该研究已终止，不能生成新版本": "Cette recherche est terminée ; aucune nouvelle version ne peut être créée",
+  "该研究已人工终止（{by}，{at}），不能再生成新版本；如需继续，请取消关联并作为新研究立项。": "Cette recherche a été terminée manuellement ({by}, {at}) ; aucune nouvelle version ne peut être créée. Pour continuer, dissociez-la et créez une nouvelle recherche.",
+  "确认终止当前研究？终止后该研究不能再启动 Agent。": "Terminer cette recherche ? Aucun agent ne pourra plus être lancé pour elle.",
+  "人工结束当前研究；终止后不能再启动 Agent": "Mettre fin manuellement à cette recherche ; aucun agent ne pourra être lancé ensuite",
+  "已终止当前研究；该研究不能再启动 Agent。": "Recherche terminée ; aucun agent ne peut plus être lancé pour elle.",
+  "人工终止当前研究；终止后该研究不能再启动 Agent": "Terminer manuellement cette recherche ; aucun agent ne pourra être lancé ensuite",
+  "由 {by} 于 {at} 人工终止": "Terminée manuellement par {by} le {at}",
+  "由 {by} 于 {at} 人工终止；该研究不能再启动 Agent。": "Terminée manuellement par {by} le {at} ; aucun agent ne peut plus être lancé pour cette recherche.",
+  "原因：{r}": "Motif : {r}",
+
+  // ── Libellés du menu « Continuer la recherche » (page Résultats) ──
+  "生成下一版（{n}）": "Générer la prochaine version ({n})",
+  "AI 生成下一版假设（v{n}）并自动运行": "L'IA génère l'hypothèse de la prochaine version (v{n}) et l'exécute automatiquement",
+  "AI 诊断并生成下一版草稿；人工批准后自动运行与评估": "L'IA diagnostique et prépare la prochaine version ; elle s'exécute et s'évalue automatiquement après approbation humaine.",
+  "在结果页点“继续研究 → AI 生成下一版假设并自动运行”即可启动；Agent 会先停在人工闸门。": "Lancez-le depuis la page Résultats via « Continuer → L'IA génère l'hypothèse suivante et l'exécute automatiquement » ; l'agent s'arrête d'abord au contrôle humain.",
+
+  // ── Vivier d'idées : toast / flash de la nouvelle idée ──
+  "保存中…": "Enregistrement…",
+  "知道了": "Compris",
+  "新线索已存入": "Nouvelle idée enregistrée",
+  "线索 {id} 已加入线索池，可查看相似研究与合并。": "L'idée {id} a été ajoutée au vivier ; consultez les recherches similaires et fusionnez-la si besoin.",
+  "新线索已加入线索池，可查看相似研究与合并。": "La nouvelle idée a été ajoutée au vivier ; consultez les recherches similaires et fusionnez-la si besoin.",
+  "当前发现已经被加入线索池": "Cette observation a déjà été ajoutée au vivier d'idées",
+  "该发现已在线索池中": "Cette observation figure déjà dans le vivier d'idées",
+  "该发现之前已加入线索池，已定位到线索 {id}。": "Cette observation avait déjà été ajoutée au vivier ; idée {id} localisée.",
+
+  // ── Vivier d'idées : recherche dans la liste ──
+  "按标题或概述查找线索": "Rechercher des idées par titre ou résumé",
+  "按标题或概述查找线索，回车搜索": "Rechercher des idées par titre ou résumé ; appuyez sur Entrée",
+  "AI 查询": "Recherche IA",
+  "AI 查询中…": "Recherche IA en cours…",
+  "线索（{m}/{n}）": "Idées ({m}/{n})",
+  "没有匹配的线索。": "Aucune idée correspondante.",
+  "向量检索暂不可用，已用关键词查询": "La recherche vectorielle est temporairement indisponible ; une recherche par mots-clés a été utilisée",
+  "可以稍后重试 AI 查询。": "Vous pouvez relancer la recherche IA plus tard.",
+  "技术原因": "Détails techniques",
+
+  // ── Vivier d'idées : modifier une idée ──
+  "修改线索": "Modifier l'idée",
+  "取消修改": "Annuler la modification",
+  "正在修改线索 {id}": "Modification de l'idée {id}",
+  "当前文件：{name}；修改时不重新上传，原文件保留。": "Fichier actuel : {name} ; la modification conserve le fichier d'origine.",
 } satisfies Record<string, string>;

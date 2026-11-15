@@ -45,19 +45,29 @@ class DraftError(RuntimeError):
     pass
 
 
-def llm_config() -> dict:
-    base, model, key = (os.environ.get(f"FACTOPIA_LLM_{k}") for k in ("BASE_URL", "MODEL", "API_KEY"))
-    if base and model and key:
-        return {"base_url": base.rstrip("/"), "model": model, "api_key": key}
+def llm_config(lite: bool = False) -> dict:
+    """大模型配置。lite=True 优先用 FACTOPIA_LLM_LITE_MODEL（简单任务）；未配置时回退到大模型。
+
+    返回的 lite_model 供 _chat 在“大模型无权限（403）”时自动降级：
+    百炼工作空间可能列出 deepseek-v4-pro 但未授权，复杂任务不应因此不可用。
+    """
+    base = os.environ.get("FACTOPIA_LLM_BASE_URL")
+    model = os.environ.get("FACTOPIA_LLM_MODEL")
+    key = os.environ.get("FACTOPIA_LLM_API_KEY")
+    lite_model = (os.environ.get("FACTOPIA_LLM_LITE_MODEL") or "").strip()
+    chosen = lite_model if lite and lite_model else model
+    if base and key and chosen:
+        return {"base_url": base.rstrip("/"), "model": chosen, "api_key": key, "lite_model": lite_model or None}
     chat = os.environ.get("CHAT_MODEL", "")
     if chat.startswith("litellm_proxy/") and os.environ.get("LITELLM_PROXY_API_KEY") and os.environ.get("LITELLM_PROXY_API_BASE"):
         return {"base_url": os.environ["LITELLM_PROXY_API_BASE"].rstrip("/"), "model": chat.split("/", 1)[1],
-                "api_key": os.environ["LITELLM_PROXY_API_KEY"]}
+                "api_key": os.environ["LITELLM_PROXY_API_KEY"], "lite_model": None}
     if chat.startswith("zhipu/") and os.environ.get("ZHIPUAI_API_KEY"):
         return {"base_url": "https://open.bigmodel.cn/api/paas/v4", "model": chat.split("/", 1)[1],
-                "api_key": os.environ["ZHIPUAI_API_KEY"]}
+                "api_key": os.environ["ZHIPUAI_API_KEY"], "lite_model": None}
     if chat.startswith("deepseek/") and os.environ.get("DEEPSEEK_API_KEY"):
-        return {"base_url": "https://api.deepseek.com", "model": chat.split("/", 1)[1], "api_key": os.environ["DEEPSEEK_API_KEY"]}
+        return {"base_url": "https://api.deepseek.com", "model": chat.split("/", 1)[1],
+                "api_key": os.environ["DEEPSEEK_API_KEY"], "lite_model": None}
     raise DraftError("未配置大模型：在 .env 中设置 CHAT_MODEL=litellm_proxy/... 与 LITELLM_PROXY_API_KEY"
                      "（外加 LITELLM_PROXY_API_BASE，如硅基流动），或 FACTOPIA_LLM_BASE_URL / MODEL / API_KEY")
 
@@ -74,22 +84,49 @@ def _extra_body() -> dict:
     return v if isinstance(v, dict) else {}
 
 
-def _chat(prompt: str, cfg: dict, task: str = "其他") -> tuple[str, dict]:
+def _model_access_denied(message: str) -> bool:
+    s = (message or "").lower()
+    return "403" in s or "access_denied" in s or "model access denied" in s
+
+
+def _chat_once(prompt: str, cfg: dict, task: str = "其他") -> tuple[str, dict]:
     body = json.dumps({"model": cfg["model"], "temperature": 0.3, "response_format": {"type": "json_object"},
                        "messages": [{"role": "user", "content": prompt}], **_extra_body()}).encode()
     req = urllib.request.Request(f"{cfg['base_url']}/chat/completions", data=body, method="POST",
                                  headers={"Authorization": f"Bearer {cfg['api_key']}", "Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=180) as r:
-            data = json.loads(r.read())
-    except urllib.error.HTTPError as e:
-        raise DraftError(f"大模型接口返回 {e.code}：{e.read()[:300].decode(errors='replace')}") from e
-    except (urllib.error.URLError, TimeoutError) as e:
-        raise DraftError(f"无法连接大模型接口：{e}") from e
+    for attempt in range(3):                 # 网络抖动 / 网关 5xx：短暂重试
+        try:
+            with urllib.request.urlopen(req, timeout=180) as r:
+                data = json.loads(r.read())
+            break
+        except urllib.error.HTTPError as e:
+            if e.code in (429, 500, 502, 503, 504) and attempt < 2:
+                time.sleep(1.5 * (attempt + 1))
+                continue
+            raise DraftError(f"大模型接口返回 {e.code}：{e.read()[:300].decode(errors='replace')}") from e
+        except (urllib.error.URLError, TimeoutError) as e:
+            if attempt < 2:
+                time.sleep(1.5 * (attempt + 1))
+                continue
+            raise DraftError(f"无法连接大模型接口：{e}") from e
     usage = data.get("usage") or {}
     from factopia import llm_cost
     usage["usd"] = llm_cost.record(task, cfg["model"], usage)         # 费用记录（runtime/llm_costs.jsonl）
+    usage["model"] = cfg["model"]
     return data["choices"][0]["message"]["content"], usage
+
+
+def _chat(prompt: str, cfg: dict, task: str = "其他") -> tuple[str, dict]:
+    """调用大模型；复杂任务用的模型无权限（403）时，自动退回 FACTOPIA_LLM_LITE_MODEL。"""
+    try:
+        return _chat_once(prompt, cfg, task)
+    except DraftError as e:
+        lite = cfg.get("lite_model")
+        if lite and lite != cfg.get("model") and _model_access_denied(str(e)):
+            text, usage = _chat_once(prompt, {**cfg, "model": lite}, f"{task}（轻量模型回退）")
+            usage["fallback_from"] = cfg.get("model")
+            return text, usage
+        raise
 
 
 def _evidence_text(items: list[dict]) -> str:
@@ -222,12 +259,14 @@ def make_draft(inputs: dict) -> dict:
         past_runs="\n".join(f"- {line}" for line in evidence.past_runs_lines(past)) or "- none (runs affected by data leakage are excluded)",
     )
     cfg = llm_config()
+    model_used = cfg["model"]
     t0 = time.time()
     tokens = {"prompt_tokens": 0, "completion_tokens": 0}
     inputs = {**inputs, "_free_text": mandate["free_text"]}
     retry_note = ""
     for attempt in range(2):  # JSON 格式、必填字段或语言不合格时，带上原因重试一次
         text, usage = _chat(prompt + retry_note, cfg, "研究规格起草")
+        model_used = usage.get("model") or model_used
         for k in tokens:
             tokens[k] += int(usage.get(k) or 0)
         try:
@@ -252,7 +291,7 @@ def make_draft(inputs: dict) -> dict:
         "draft": draft,
         "evidence": {"alpha158": alpha, "past_runs": past, "groups": inputs.get("groups") or [], "internal": internal},
         "mandate": mandate,
-        "meta": {"model": cfg["model"], "prompt_version": PROMPT_VERSION, **tokens, "idea_id": inputs.get("idea_id"),
+        "meta": {"model": model_used, "prompt_version": PROMPT_VERSION, **tokens, "idea_id": inputs.get("idea_id"),
                  "idea_ids": idea_ids, "combo_id": inputs.get("combo_id"), "based_on": inputs.get("based_on"),
                  "seconds": round(time.time() - t0, 1), "at": datetime.now(timezone.utc).isoformat(timespec="seconds")},
     }

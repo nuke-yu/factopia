@@ -242,13 +242,20 @@ export type StudyMarket = {
       placebo: { n: number; share_ge_ai: number | null; share_ge_baseline: number | null; median: number | null } | null }) | null;
   } | null;
 };
+/** 人工终止研究：按研究编号终止，所有版本都不能再启动 Agent；version 只记录终止发生在哪个版本。 */
+export type ResearchTermination = {
+  research_id: string; version: number | null; at: string; by: string; reason: string;
+};
+/** 结果页「把新发现存入线索池」后，该研究版本已存在的来源线索。 */
+export type SavedIdea = { id: string; title: string; run: string | null };
 export type Study = {
   research_id: string; version: number; hypothesis: string; title: string | null;
   rule: { primary: Market; markets: Market[]; ric_sign: 1 | -1; sign_from_text: boolean; text: string };
   overall: { state: "pending" | "rejected" | "passed" | "insufficient"; label: string; reason: string };
   markets: Partial<Record<Market, StudyMarket>>;
   findings: { tone: "bad" | "warn" | "good"; text: string }[];
-  transfer: Transfer; explanation: Explanation | null;
+  transfer: Transfer; explanation: Explanation | null; terminated: ResearchTermination | null;
+  saved_ideas: SavedIdea[];
   cross_market: { months: number; pairs: { a: Market; b: Market; corr: number | null }[]; note: string } | null;
 };
 export type RunnerStatus = { paused: { reason: string; at: string } | null; queued: number; running: number };
@@ -282,7 +289,8 @@ export type AgentRound = {
 export type AgentTrace = { at: string; kind: string; role?: string; model?: string; usage?: Record<string, unknown>;
   prompt_version?: string; prompt?: string; response?: string; from?: string; to?: string;
   tool?: string; args?: unknown; result?: unknown; count?: number; [key: string]: unknown };
-export type AgentDetail = { agent: Agent; rounds: AgentRound[]; children: AgentJob[]; job: AgentJob | null; report: string | null };
+export type AgentDetail = { agent: Agent; rounds: AgentRound[]; children: AgentJob[]; job: AgentJob | null; report: string | null;
+  terminated: ResearchTermination | null };
 export type AgentOverlapPair = { key: string; title?: string | null; kind?: string | null; approved: boolean;
   corr: number | null; ic_corr: number | null; redundant: boolean };
 export type AgentOverlapMarket = { ok: boolean; reason?: string;
@@ -643,6 +651,7 @@ export type Idea = {
   similar?: { research: { kind: string; kind_zh: string; title: string; ref: string; score: number }[];
     ideas: { id: string; title: string; channel_zh: string; overlap: number }[]; note: string };
   extract_error?: string;
+  deduped?: boolean;
   ai_suggested?: { id: string; title: string; body: string; model: string; prompt_version: string; angle: string; why_zh: string; grounds: (string | IdeaGround)[]; edited: boolean;
     selection?: string[]; seed?: string };
   ai_hypothesis?: IdeaAiHypothesis;
@@ -658,6 +667,10 @@ export type IdeaInput = { channel: IdeaChannel; title: string; body: string; mar
     sample_start?: string; sample_end?: string };
   ai_suggestion?: IdeaSuggestion | null;
   source_ref?: { research?: string; run?: string; note?: string } };
+export type IdeaUpdateInput = { title: string; body: string; markets: Market[]; submitted_by: string;
+  confirm_no_client_data: boolean; direction?: string; period?: string; feedback_role?: string;
+  document?: { name?: string; source?: string; licence?: string; licence_note?: string; published?: string;
+    sample_start?: string; sample_end?: string } };
 export type IdeaSuggestion = { id: string; channel: IdeaChannel; title: string; body: string; direction: string; period: string; feedback_role: string;
   markets: Market[]; why_zh: string; grounds: (string | IdeaGround)[]; angle: string; model: string; prompt_version: string; at: string;
   focus_market?: Market | null; selection?: string[]; candidates?: { angle: string; market: Market; score: number }[]; seed?: string; evidence_n?: number;
@@ -678,6 +691,10 @@ export type IdeaCombo = { id: string; by: string; at: string; idea_ids: string[]
   uses: { tag: string; how_zh: string }[]; unused: string[]; conflicts: string[]; not_testable: string[];
   markets: Market[]; questions: string[]; model: string; prompt_version: string };
 export type IdeaPrefill = { idea_id: string; hypothesis: string; direction: string; markets: Market[]; questions: string[]; channel_zh: string; title: string };
+/** 线索池 AI 查询：embedding 匹配标题 + 概述；向量不可用时后端退回关键词。 */
+export type IdeaSearchHit = { id: string; title: string; snippet: string; score: number };
+export type IdeaSearch = { query: string; method: "embedding" | "keyword" | "none"; model: string | null;
+  error: string | null; results: IdeaSearchHit[] };
 
 // ---------------------------------------------------------------- 因子库与语义检索（BR-25、35）
 export type LibraryItem = {
@@ -795,6 +812,8 @@ export const api = {
   validation: (runId: string) => get<{ items: Record<string, Validation>; jobs: Job[] }>(`/runs/${runId}/validation`),
   validate: (runId: string, loop?: number) => post<Job>(`/runs/${runId}/validate`, loop == null ? {} : { loop }),
   study: (id: string, version: number) => get<Study>(`/research/${id}/versions/${version}/study`),
+  terminateResearch: (id: string, body: { version?: number | null; reason?: string; by?: string } = {}) =>
+    post<{ terminated: ResearchTermination; agents: { agent_id: string; state: string }[] }>(`/research/${id}/terminate`, body),
   explain: (id: string, version: number) => post<Explanation>(`/research/${id}/versions/${version}/explain`, {}),
   backtest: (id: string) => get<Record<string, Columns>>(`/runs/${id}/backtest`),
   monthly: (id: string) => get<Record<string, Monthly>>(`/runs/${id}/monthly`),
@@ -810,6 +829,7 @@ export const api = {
   preview: (spec: Partial<Spec>, market: Market) => post<Preview>("/research/preview", { spec, market }),
   lock: (spec: Spec) => post<Spec>("/research/versions", spec),
   versions: (id: string) => get<Spec[]>(`/research/${id}/versions`),
+  researchTermination: (id: string) => get<{ terminated: ResearchTermination | null }>(`/research/${id}/termination`),
   startRuns: (id: string, version: number, body: { markets: Market[]; loops: number; budget_usd: number }) =>
     post<{ batch_id: string; jobs: Job[] }>(`/research/${id}/versions/${version}/runs`, body),
   agents: () => get<Agent[]>("/agents"),
@@ -838,7 +858,10 @@ export const api = {
   ideas: (q: { channel?: string; status?: string; market?: string } = {}) =>
     get<IdeaList>(`/ideas?${new URLSearchParams(Object.entries(q).filter(([, v]) => v) as [string, string][]).toString()}`),
   idea: (id: string) => get<IdeaDetail>(`/ideas/${id}`),
+  ideaSearch: (q: string) => get<IdeaSearch>(`/ideas/search?q=${encodeURIComponent(q)}`),
   createIdea: (body: IdeaInput) => post<Idea>("/ideas", body),
+  updateIdea: (id: string, body: IdeaUpdateInput) =>
+    request<IdeaDetail>(`/ideas/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
   extractIdea: (id: string, by: string) => post<Idea>(`/ideas/${id}/extract?by=${encodeURIComponent(by)}`, {}),
   ideaAct: (id: string, body: { action: string; by: string; note?: string; target?: string }) => post<Idea>(`/ideas/${id}/act`, body),
   ideaPrefill: (id: string, factors: string[]) => post<IdeaPrefill>(`/ideas/${id}/convert`, { factors }),

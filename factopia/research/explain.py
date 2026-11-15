@@ -110,6 +110,6 @@ def explain(study: dict, diags: dict) -> dict:
     kept, dropped = filter_sentences(raw, {f["id"] for f in fs})
     return {"sentences": kept, "dropped": dropped, "transfer_view": str(raw.get("transfer_view") or ""),
             "local_adjustments": [str(x) for x in raw.get("local_adjustments") or []][:6], "facts": fs,
-            "model": cfg["model"], "prompt_version": PROMPT_VERSION, "usage": usage,
+            "model": usage.get("model") or cfg["model"], "prompt_version": PROMPT_VERSION, "usage": usage,
             "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "note": "AI 解释，供研究员参考与确认；不改变平台的判定"}

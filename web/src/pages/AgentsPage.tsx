@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { api, MARKETS, type Agent, type AgentJob, type AgentRound, type AgentTrace, type Market } from "../api";
+import { api, MARKETS, type Agent, type AgentJob, type AgentRound, type AgentTrace, type Market, type ResearchTermination } from "../api";
 import { fix, pct, useAsync, MARKET_LABEL } from "../lib";
-import { Badge, ErrorBox, Loading, Notice, Panel, Stat } from "../components/ui";
+import { Badge, ErrorBox, Loading, Notice, Panel, Stat, Toast } from "../components/ui";
 import { t, tf } from "../i18n";
 
 const RUNNING = new Set(["queued", "observing", "diagnosing", "planning", "acting", "waiting_children", "evaluating"]);
@@ -104,7 +104,7 @@ function AgentList() {
       </div>
       {list.data.length === 0 ? (
         <Notice tone="accent" title={t("还没有 Agent")}>
-          {t("在结果页点“继续研究 → 让 Agent 迭代”即可启动；Agent 会先停在人工闸门。")}
+          {t("在结果页点“继续研究 → AI 生成下一版假设并自动运行”即可启动；Agent 会先停在人工闸门。")}
         </Notice>
       ) : (
         <Panel eyebrow={t("全部 Agent")} title={t("按创建时间倒序")}>
@@ -144,6 +144,8 @@ function AgentDetailView({ id }: { id: string }) {
   const [notice, setNotice] = useState<string | null>(null);
   const [noticeKind, setNoticeKind] = useState<NoticeKind | null>(null);
   const [dismissedStage, setDismissedStage] = useState<string | null>(null);
+  const [confirmTerminate, setConfirmTerminate] = useState(false);
+  const [terminatedLocal, setTerminatedLocal] = useState<ResearchTermination | null>(null);
   const lastStage = useRef<string | null>(null);
   const childJobsRef = useRef<HTMLDivElement>(null);
   const detail = useAsync(() => api.agent(id), [id, tick]);
@@ -170,6 +172,7 @@ function AgentDetailView({ id }: { id: string }) {
   if (detail.error) return <ErrorBox error={detail.error} />;
   if (!detail.data) return <Loading what={t("研究 Agent")} />;
   const { agent, rounds, job, report, children: childJobs } = detail.data;
+  const terminated = detail.data.terminated ?? terminatedLocal;
   const latest = rounds[rounds.length - 1];
   const evaluation = [...rounds].reverse().find((r) => r.evaluation)?.evaluation as Record<string, any> | undefined;
 
@@ -210,11 +213,31 @@ function AgentDetailView({ id }: { id: string }) {
     finally { setBusy(false); }
   }
 
+  async function terminateResearch() {
+    setBusy(true); setActionError(null);
+    try {
+      const r = await api.terminateResearch(agent.root.research_id, {
+        version: agent.root.version, reason: "人工终止当前研究（研究 Agent 页）",
+      });
+      setTerminatedLocal(r.terminated);
+      setConfirmTerminate(false);
+      setNotice(t("已终止当前研究；该研究不能再启动 Agent。"));
+      setNoticeKind("stopped");
+      setTick((x) => x + 1);
+    } catch (e) { setActionError((e as Error).message); }
+    finally { setBusy(false); }
+  }
+
   const canStop = RUNNING.has(agent.state) || agent.state === "awaiting_human";
   const noticePulse = ["starting", "children", "validating", "evaluating"].includes(noticeKind ?? "");
   const noticeTitle = noticeKind === "starting" ? t("已批准，正在启动")
     : ["children", "validating", "evaluating"].includes(noticeKind ?? "") ? t("进度")
       : noticeKind === "evaluated" ? t("评估完成") : t("提示");
+  const dismissNotice = () => {
+    setNotice(null);
+    setNoticeKind(null);
+    setDismissedStage(lastStage.current);
+  };
 
   return (
     <div className="flex flex-col gap-5">
@@ -229,27 +252,37 @@ function AgentDetailView({ id }: { id: string }) {
         </div>
         <div className="ml-auto flex items-center gap-2">
           <StateBadge state={agent.state} flash={POLLING.has(agent.state) && agent.state !== "awaiting_human"} />
+          <button className="btn h-8 px-3 text-xs" disabled={!!terminated || busy}
+            style={terminated ? { cursor: "not-allowed" } : undefined}
+            title={terminated ? t("当前研究已终止") : t("人工终止当前研究；终止后该研究不能再启动 Agent")}
+            onClick={() => { if (confirmTerminate) void terminateResearch(); else setConfirmTerminate(true); }}>
+            {terminated ? t("当前研究已终止") : confirmTerminate ? t("确认终止") : t("终止当前研究")}
+          </button>
+          {confirmTerminate && !terminated && (
+            <button className="btn h-8 px-2 text-xs" disabled={busy} onClick={() => setConfirmTerminate(false)}>{t("取消")}</button>
+          )}
           {canStop && <button className="btn h-8 px-3 text-xs" disabled={busy} title={t("仅用于中途停止，不是下一步")} onClick={stop}>{t("中止 Agent")}</button>}
           <Link className="btn h-8 px-3 text-xs" to={`/projects?focus=${encodeURIComponent(agent.root.research_id)}`}>{t("返回研究项目")}</Link>
         </div>
       </div>
 
-      {notice && (
-        <div className="fixed bottom-6 right-6 z-50 w-[min(92vw,30rem)] rounded border border-line bg-bg p-1 shadow-2xl">
-          <Notice tone={noticeKind === "rejected" || noticeKind === "stopped" || noticeKind === "failed" ? "warn" : "accent"}
-            title={noticeTitle}>
-            <div className="flex items-start gap-3">
-              {noticePulse && <span className="mt-1.5 size-2 shrink-0 rounded-full bg-accent animate-pulse" aria-hidden />}
-              <span className="flex-1">{notice}</span>
-              <button type="button" className="btn h-7 px-2 text-xs whitespace-nowrap"
-                onClick={() => { setNotice(null); setNoticeKind(null); setDismissedStage(lastStage.current); }}>{t("知道了")}</button>
-            </div>
-          </Notice>
+      <Toast open={!!notice} onClose={dismissNotice} duration={null}
+        tone={noticeKind === "rejected" || noticeKind === "stopped" || noticeKind === "failed" ? "warn" : "accent"}
+        title={noticeTitle}>
+        <div className="flex items-start gap-3">
+          {noticePulse && <span className="mt-1.5 size-2 shrink-0 rounded-full bg-accent animate-pulse" aria-hidden />}
+          <span className="flex-1">{notice}</span>
         </div>
-      )}
+      </Toast>
       {agent.last_error && <Notice tone="bad" title={t("Agent 失败")}>{agent.last_error}</Notice>}
       {actionError && <ErrorBox error={actionError} />}
       {agent.stop_reason && <Notice tone="accent" title={t("当前状态")}>{agent.stop_reason}</Notice>}
+      {terminated && (
+        <Notice tone="accent" title={t("研究已终止")}>
+          {tf("由 {by} 于 {at} 人工终止", { by: terminated.by, at: terminated.at.slice(0, 16).replace("T", " ") })}
+          {terminated.reason && <span>{tf("原因：{r}", { r: terminated.reason })}</span>}
+        </Notice>
+      )}
 
       <Panel eyebrow={t("运行概览")} title={t("根研究与预算")}>
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -275,7 +308,7 @@ function AgentDetailView({ id }: { id: string }) {
           onApprove={approve} onReject={reject} awaiting={agent.state === "awaiting_human" && r.n === latest?.n} />
       ))}
 
-      {evaluation && <NextStepsPanel agent={agent} evaluation={evaluation} childJobs={childJobs} />}
+      {evaluation && <NextStepsPanel agent={agent} evaluation={evaluation} childJobs={childJobs} terminated={!!terminated} />}
       {evaluation && <OverlapPanel id={id} version={agent.current_version} />}
 
       <TracePanel items={trace.data?.items || []} error={trace.error} />
@@ -328,8 +361,8 @@ function ChildJobsPanel({ items }: { items: AgentJob[] }) {
   );
 }
 
-function NextStepsPanel({ agent, evaluation, childJobs }: {
-  agent: Agent; evaluation: Record<string, any>; childJobs: AgentJob[];
+function NextStepsPanel({ agent, evaluation, childJobs, terminated }: {
+  agent: Agent; evaluation: Record<string, any>; childJobs: AgentJob[]; terminated: boolean;
 }) {
   const run = childJobs.find((j) => j.kind !== "validate" && j.state === "done" && j.run_id)
     || childJobs.find((j) => j.kind !== "validate" && j.run_id);
@@ -349,7 +382,9 @@ function NextStepsPanel({ agent, evaluation, childJobs }: {
         {run?.run_id
           ? <Link className="btn justify-center" to={`/results?run=${run.run_id}`}>{t("查看结果")}</Link>
           : <span className="btn justify-center opacity-40 cursor-not-allowed">{t("查看结果")}</span>}
-        <Link className="btn justify-center" to={`/research?based_on=${agent.root.research_id}.v${version}`}>{t("基于本版本继续研究")}</Link>
+        {terminated
+          ? <span className="btn justify-center opacity-40 cursor-not-allowed" title={t("该研究已终止，不能生成新版本")}>{t("基于本版本继续研究")}</span>
+          : <Link className="btn justify-center" to={`/research?based_on=${agent.root.research_id}.v${version}`}>{t("基于本版本继续研究")}</Link>}
         {evaluation.idea_id
           ? <Link className="btn justify-center" to={`/ideas?id=${evaluation.idea_id}`}>{t("查看已自动回流的线索")}</Link>
           : <Link className="btn justify-center" to={`/ideas?${params.toString()}`}>{t("把新发现存入线索池")}</Link>}

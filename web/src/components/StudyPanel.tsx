@@ -1,9 +1,9 @@
 import { Link, useNavigate } from "react-router-dom";
 import { useEffect, useRef, useState } from "react";
-import { api, type Check, type CredCheck, type Diagnostics, type Explanation, type Market, type PaperDemoResult, type Study, type StudyMarket } from "../api";
+import { api, visibleMarkets, type Check, type CredCheck, type Diagnostics, type Explanation, type Market, type PaperDemoResult, type ResearchTermination, type SavedIdea, type Study, type StudyMarket } from "../api";
 import { cssVar, fix, MARKET_LABEL, pct, signed, useAsync } from "../lib";
 import { t, tf, joinList, LANG, LOCALE } from "../i18n";
-import { Badge, ErrorBox, Loading, Panel } from "./ui";
+import { Badge, ErrorBox, Loading, Notice, Panel } from "./ui";
 import StudyScatter from "./charts/StudyScatter";
 
 const OVERALL_TONE = { rejected: "bad", passed: "good", pending: "accent", insufficient: "warn" } as const;
@@ -26,15 +26,26 @@ export default function StudyPanel({ researchId, version, current }: { researchI
   const anyRounds = markets.some((e) => e.rounds.length > 0);
   const primaryCred = s.markets[s.rule.primary]?.focus?.credibility;
   const textStudy = markets.some((e) => e.kind === "text");
+  const savedIdea = (s.saved_ideas ?? [])[0] ?? null;
 
   return (
     <Panel eyebrow={`${t("研究结论")} · ${s.research_id} v${s.version} · ${s.rule.markets.map((m) => MARKET_LABEL[m]).join(" / ")}`}
       title={t("按事先写好的标准判定")}
       actions={<>
-        <ContinueMenu researchId={researchId} version={version} current={current} study={s} />
+        <ContinueMenu researchId={researchId} version={version} current={current} study={s}
+          terminated={s.terminated ?? null} savedIdea={savedIdea} onTerminated={study.reload} />
+        {s.terminated && <Badge tone="muted">{t("研究已终止")}</Badge>}
         {primaryCred && primaryCred.state !== "unchecked" && <Badge tone={CRED_TONE[primaryCred.state]}>{t("可信度")}{t(primaryCred.label)}</Badge>}
         <Badge tone={OVERALL_TONE[s.overall.state]}>{s.overall.state === "passed" ? t(s.overall.label) : `${t("假设")}${t(s.overall.label)}`}</Badge></>}>
       <div className="flex flex-col gap-5">
+        {s.terminated && (
+          <Notice tone="accent" title={t("研究已终止")}>
+            {tf("由 {by} 于 {at} 人工终止；该研究不能再启动 Agent。", {
+              by: s.terminated.by, at: s.terminated.at.slice(0, 16).replace("T", " "),
+            })}
+            {s.terminated.reason && <span> {tf("原因：{r}", { r: s.terminated.reason })}</span>}
+          </Notice>
+        )}
         <div className="grid gap-4 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
           <div className="flex flex-col gap-2">
             <div className="flex items-baseline gap-3">
@@ -112,17 +123,24 @@ export default function StudyPanel({ researchId, version, current }: { researchI
   );
 }
 
-/** 结果页「继续研究」：同一研究下一版本 / 新方向存入线索池 / 交给研究迭代 Agent。 */
-function ContinueMenu({ researchId, version, current, study }: { researchId: string; version: number; current?: string; study: Study }) {
+/** 结果页「继续研究」：同一研究下一版本 / 新方向存入线索池 / 交给研究迭代 Agent / 人工终止研究。 */
+function ContinueMenu({ researchId, version, current, study, terminated, savedIdea, onTerminated }: {
+  researchId: string; version: number; current?: string; study: Study;
+  terminated: ResearchTermination | null; savedIdea: SavedIdea | null; onTerminated: () => void;
+}) {
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [savingIdea, setSavingIdea] = useState(false);
+  const [terminating, setTerminating] = useState(false);
+  const [confirmTerminate, setConfirmTerminate] = useState(false);
+  const [localTerm, setLocalTerm] = useState<ResearchTermination | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const term = terminated ?? localTerm;
   const markets = study.rule.markets;
+  const ideaMarkets = markets.filter((m) => visibleMarkets().includes(m));
   const title = study.title ? `${study.title}（新发现）` : tf("{id} v{n} 的新发现", { id: researchId, n: version });
   const body = [study.overall.reason, ...study.findings.slice(0, 3).map((f) => f.text)].filter(Boolean).join("\n");
-  const params = new URLSearchParams({ prefill_title: title, prefill_body: body, prefill_markets: markets.join(","),
-    prefill_research: `${researchId}.v${version}`, ...(current ? { prefill_run: current } : {}) });
   async function startAgent() {
     setBusy(true); setError(null);
     try {
@@ -132,26 +150,97 @@ function ContinueMenu({ researchId, version, current, study }: { researchId: str
       setError((e as Error).message);
     } finally { setBusy(false); }
   }
+  async function saveIdea() {
+    setSavingIdea(true); setError(null);
+    try {
+      let actor = "";
+      try { actor = localStorage.getItem("factopia-idea-actor") ?? ""; } catch { /* 浏览器禁用存储时用默认提交人 */ }
+      const idea = await api.createIdea({
+        channel: "hypothesis",
+        title: title.trim(),
+        body: (body || title).trim(),
+        markets: ideaMarkets,
+        submitted_by: actor.trim() || "研究员（演示，未登录）",
+        confirm_no_client_data: true,
+        source_ref: { research: `${researchId}.v${version}`, ...(current ? { run: current } : {}) },
+      });
+      navigate(`/ideas?id=${encodeURIComponent(idea.id)}&created=1${idea.deduped ? "&existing=1" : ""}`);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally { setSavingIdea(false); }
+  }
+  async function terminate() {
+    setTerminating(true); setError(null);
+    try {
+      const r = await api.terminateResearch(researchId, { version, reason: "人工终止当前研究（结果页）" });
+      setLocalTerm(r.terminated);
+      setConfirmTerminate(false);
+      setOpen(false);
+      onTerminated();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally { setTerminating(false); }
+  }
   return (
     <div className="relative">
-      <button type="button" className="btn btn-primary h-8 px-3 text-xs" disabled={busy} onClick={() => setOpen((x) => !x)}>
-        {busy ? t("启动中…") : t("继续研究 ▾")}
+      <button type="button" className="btn btn-primary h-8 px-3 text-xs" disabled={busy || terminating || savingIdea}
+        onClick={() => { setOpen((x) => !x); setConfirmTerminate(false); }}>
+        {busy ? t("启动中…") : terminating ? t("终止中…") : savingIdea ? t("保存中…") : t("继续研究 ▾")}
       </button>
       {open && (
         <div className="absolute right-0 z-30 mt-1 w-80" style={{ position: "absolute" }}>
           <div className="panel p-2 flex flex-col gap-1 text-sm shadow-xl">
-            <button type="button" className="text-left rounded p-2 hover:bg-line/40 cursor-pointer" onClick={() => { setOpen(false); navigate(`/research?based_on=${researchId}.v${version}`); }}>
-              <div className="font-medium">{tf("生成下一版本（v{n}）", { n: version + 1 })}</div>
-              <div className="text-xs text-muted">{t("同一研究，保留版本血缘；进入研究立项审改")}</div>
+            <button type="button"
+              className={`text-left rounded p-2 ${term ? "opacity-50 cursor-not-allowed" : "hover:bg-line/40 cursor-pointer"}`}
+              disabled={busy || !!term} onClick={startAgent}
+              title={term ? t("该研究已终止，不能生成新版本") : undefined}>
+              <div className="font-medium">{tf("AI 生成下一版假设（v{n}）并自动运行", { n: version + 1 })}</div>
+              <div className="text-xs text-muted">{term ? t("该研究已终止，不能生成新版本") : t("AI 诊断并生成下一版草稿；人工批准后自动运行与评估")}</div>
             </button>
-            <button type="button" className="text-left rounded p-2 hover:bg-line/40 cursor-pointer" onClick={() => { setOpen(false); navigate(`/ideas?${params.toString()}`); }}>
-              <div className="font-medium">{t("把新发现存入线索池")}</div>
-              <div className="text-xs text-muted">{t("新方向先查重、可合并，之后再转立项")}</div>
+            <button type="button"
+              className={`text-left rounded p-2 ${term ? "opacity-50 cursor-not-allowed" : "hover:bg-line/40 cursor-pointer"}`}
+              disabled={busy || !!term} onClick={() => { if (!term) { setOpen(false); navigate(`/research?based_on=${researchId}.v${version}`); } }}
+              title={term ? t("该研究已终止，不能生成新版本") : undefined}>
+              <div className="font-medium">{tf("生成下一版（v{n}）", { n: version + 1 })}</div>
+              <div className="text-xs text-muted">{term ? t("该研究已终止，不能生成新版本") : t("同一研究，保留版本血缘；进入研究立项审改")}</div>
             </button>
-            <button type="button" className="text-left rounded p-2 hover:bg-line/40 cursor-pointer disabled:cursor-not-allowed" disabled={busy} onClick={startAgent}>
-              <div className="font-medium">{t("让 Agent 自动迭代")}</div>
-              <div className="text-xs text-muted">{t("AI 诊断后生成下一版草稿，执行前停在人工闸门")}</div>
-            </button>
+            <div title={savedIdea ? t("当前发现已经被加入线索池") : undefined}>
+              <button type="button"
+                className={`w-full text-left rounded p-2 ${savedIdea ? "opacity-50 cursor-not-allowed" : "hover:bg-line/40 cursor-pointer disabled:cursor-not-allowed"}`}
+                disabled={savingIdea || !!savedIdea} onClick={saveIdea}>
+                <div className="font-medium">{t("把新发现存入线索池")}</div>
+                <div className="text-xs text-muted">
+                  {savedIdea
+                    ? <>{t("当前发现已经被加入线索池")}<span className="num"> · {savedIdea.id}</span></>
+                    : savingIdea ? t("保存中…") : t("新方向先查重、可合并，之后再转立项")}
+                </div>
+              </button>
+            </div>
+            {term ? (
+              <div className="rounded p-2 text-left opacity-70 cursor-not-allowed select-none" aria-disabled="true">
+                <div className="font-medium">{t("研究已终止")}</div>
+                <div className="text-xs text-muted">
+                  {tf("由 {by} 于 {at} 人工终止", { by: term.by, at: term.at.slice(0, 16).replace("T", " ") })}
+                  {term.reason && <div>{tf("原因：{r}", { r: term.reason })}</div>}
+                </div>
+              </div>
+            ) : confirmTerminate ? (
+              <div className="rounded p-2 border border-warn/40 bg-warn/5 flex flex-col gap-1.5">
+                <div className="text-xs text-warn">{t("确认终止当前研究？终止后该研究不能再启动 Agent。")}</div>
+                <div className="flex gap-2">
+                  <button type="button" className="btn btn-primary h-7 px-2 text-xs" disabled={terminating} onClick={terminate}>
+                    {terminating ? t("终止中…") : t("确认终止")}
+                  </button>
+                  <button type="button" className="btn h-7 px-2 text-xs" disabled={terminating}
+                    onClick={() => setConfirmTerminate(false)}>{t("取消")}</button>
+                </div>
+              </div>
+            ) : (
+              <button type="button" className="text-left rounded p-2 hover:bg-line/40 cursor-pointer" onClick={() => setConfirmTerminate(true)}>
+                <div className="font-medium">{t("终止当前研究")}</div>
+                <div className="text-xs text-muted">{t("人工结束当前研究；终止后不能再启动 Agent")}</div>
+              </button>
+            )}
             {error && <div className="text-xs text-bad px-2 pb-1">{error}</div>}
           </div>
         </div>
