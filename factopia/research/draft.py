@@ -18,6 +18,7 @@ from pathlib import Path
 
 from factopia.research import evidence, mandates, regions
 from factopia.lang import llm_language
+from factopia import lang
 
 PROMPT_VERSION = "rs-draft-v4"   # v4：可选外部资料（仅测试期前、带引用），并保持内部知识检索
 PROMPT_FILE = Path(__file__).parent / "prompts" / f"{PROMPT_VERSION}.md"
@@ -79,8 +80,8 @@ def llm_config(lite: bool = False, role: str = "main") -> dict:
     if chat.startswith("deepseek/") and os.environ.get("DEEPSEEK_API_KEY"):
         return {"base_url": "https://api.deepseek.com", "model": chat.split("/", 1)[1],
                 "api_key": os.environ["DEEPSEEK_API_KEY"], "lite_model": None}
-    raise DraftError("未配置大模型：在 .env 中设置 CHAT_MODEL=litellm_proxy/... 与 LITELLM_PROXY_API_KEY"
-                     "（外加 LITELLM_PROXY_API_BASE，如硅基流动），或 FACTOPIA_LLM_BASE_URL / MODEL / API_KEY")
+    raise DraftError(lang.t("未配置大模型：在 .env 中设置 CHAT_MODEL=litellm_proxy/... 与 LITELLM_PROXY_API_KEY"
+                            "（外加 LITELLM_PROXY_API_BASE，如硅基流动），或 FACTOPIA_LLM_BASE_URL / MODEL / API_KEY"))
 
 
 def _extra_body() -> dict:
@@ -91,7 +92,7 @@ def _extra_body() -> dict:
     try:
         v = json.loads(raw)
     except json.JSONDecodeError as e:
-        raise DraftError(f".env 中 FACTOPIA_LLM_EXTRA_BODY 不是合法 JSON：{e}") from e
+        raise DraftError(lang.t(".env 中 FACTOPIA_LLM_EXTRA_BODY 不是合法 JSON：{e}", e=e)) from e
     return v if isinstance(v, dict) else {}
 
 
@@ -114,12 +115,13 @@ def _chat_once(prompt: str, cfg: dict, task: str = "其他") -> tuple[str, dict]
             if e.code in (429, 500, 502, 503, 504) and attempt < 2:
                 time.sleep(1.5 * (attempt + 1))
                 continue
-            raise DraftError(f"大模型接口返回 {e.code}：{e.read()[:300].decode(errors='replace')}") from e
+            raise DraftError(lang.t("大模型接口返回 {code}：{body}", code=e.code,
+                                    body=e.read()[:300].decode(errors="replace"))) from e
         except (urllib.error.URLError, TimeoutError) as e:
             if attempt < 2:
                 time.sleep(1.5 * (attempt + 1))
                 continue
-            raise DraftError(f"无法连接大模型接口：{e}") from e
+            raise DraftError(lang.t("无法连接大模型接口：{e}", e=e)) from e
     usage = data.get("usage") or {}
     from factopia import llm_cost
     usage["usd"] = llm_cost.record(task, cfg["model"], usage)         # 费用记录（runtime/llm_costs.jsonl）
@@ -203,10 +205,11 @@ def _validate(raw: dict, inputs: dict) -> dict:
     }
     missing = [k for k in ("hypothesis", "falsification") if not out[k]] + ([] if out["rationale"]["note"] else ["rationale"])
     if missing or not out["directions"]:
-        raise DraftError(f"大模型返回的规格缺少必填内容：{', '.join(missing + ([] if out['directions'] else ['directions']))}")
+        raise DraftError(lang.t("大模型返回的规格缺少必填内容：{fields}",
+                                fields=', '.join(missing + ([] if out['directions'] else ['directions']))))
     english = [out[k] for k in ENGLISH_FIELDS] + [out["rationale"]["note"], *out["directions"], *out["exclusions"]]
     if any(CJK.search(t) for t in english):
-        raise DraftError("发给 RD-Agent 的字段须为英文，大模型返回了中文")
+        raise DraftError(lang.t("发给 RD-Agent 的字段须为英文，大模型返回了中文"))
     for d in raw.get("data_needs") or []:
         cat = d.get("category") if d.get("category") in DATA else "other"
         name, status, usable = DATA[cat]
@@ -302,7 +305,7 @@ def make_draft(inputs: dict, on_llm=None) -> dict:
             break
         except (json.JSONDecodeError, DraftError) as e:
             if attempt == 1:
-                raise DraftError(f"大模型两次输出都不合格：{e}") from e
+                raise DraftError(lang.t("大模型两次输出都不合格：{e}", e=e)) from e
             retry_note = f"\n\nYour previous answer was rejected: {e}. Fix it and answer again with the full JSON object."
     draft["region_diff"] = regions.differences(inputs["markets"], mandates.load(inputs["mandate"]), draft["data_needs"])
     draft["system_questions"] = _system_questions(draft, inputs)

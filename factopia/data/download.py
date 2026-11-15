@@ -13,7 +13,7 @@ import pandas as pd
 import yfinance as yf
 
 START = "2015-01-01"
-UNIVERSE_DIR = Path("configs/universe")
+UNIVERSE_DIR = Path(os.environ.get("FACTOPIA_CONFIGS_DIR", "/workspace/configs")) / "universe"
 RAW_DIR = Path(os.environ.get("FACTOPIA_DATA_DIR", "/workspace/runtime/data")) / "raw"
 
 MARKETS = {

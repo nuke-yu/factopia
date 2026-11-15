@@ -1,0 +1,687 @@
+import hmac
+import logging
+import os
+import random
+import traceback
+from collections import defaultdict
+from contextlib import redirect_stderr, redirect_stdout
+from datetime import datetime, timezone
+from multiprocessing import Process, Queue
+from pathlib import Path
+from queue import Empty
+
+import randomname
+import typer
+from flask import (
+    Flask,
+    Response,
+    jsonify,
+    make_response,
+    redirect,
+    request,
+    send_file,
+    send_from_directory,
+    url_for,
+)
+from werkzeug.utils import secure_filename
+
+from rdagent.log.server.security import (
+    SCENARIO_TARGETS,
+    normalize_origin,
+    parse_competition,
+    resolve_within,
+    validate_scenario,
+    validate_upload_filename,
+)
+from rdagent.log.storage import FileStorage
+from rdagent.log.ui.conf import UI_SETTING
+from rdagent.log.ui.storage import WebStorage
+
+app = Flask(__name__, static_folder=str(Path(UI_SETTING.static_path).resolve()))
+app.config["CORS_ALLOWED_ORIGINS"] = set()
+for origin in UI_SETTING.cors_allowed_origins:
+    normalized = normalize_origin(origin)
+    if normalized is None:
+        message = "UI_CORS_ALLOWED_ORIGINS must contain exact HTTP(S) origins without wildcards or paths"
+        raise ValueError(message)
+    app.config["CORS_ALLOWED_ORIGINS"].add(normalized)
+app.config["UI_SERVER_PORT"] = 19899
+app.config["MAX_CONTENT_LENGTH"] = UI_SETTING.max_upload_mb * 1024 * 1024
+app.config["AUTH_TOKEN"] = UI_SETTING.server_auth_token
+
+_YELLOW = "\033[33m"
+_RESET = "\033[0m"
+
+_PUBLIC_ENDPOINTS = {"favicon", "index", "server_static_files", "static"}
+
+
+@app.before_request
+def _require_authentication() -> Response | tuple[Response, int] | None:
+    # CORS response headers alone do not stop simple cross-origin POSTs.
+    origin = request.headers.get("Origin")
+    normalized_origin = normalize_origin(origin) if origin is not None else None
+    allowed_origins = app.config["CORS_ALLOWED_ORIGINS"] | {normalize_origin(request.host_url.rstrip("/"))}
+    if origin is not None and (normalized_origin is None or normalized_origin not in allowed_origins):
+        return jsonify({"error": "Untrusted request origin"}), 403
+    if request.endpoint in _PUBLIC_ENDPOINTS or request.method == "OPTIONS":
+        return None
+
+    token = app.config.get("AUTH_TOKEN", "")
+    if not token:
+        return jsonify({"error": "UI_SERVER_AUTH_TOKEN must be configured"}), 503
+
+    authorization = request.headers.get("Authorization", "")
+    header_token = authorization.removeprefix("Bearer ") if authorization.startswith("Bearer ") else ""
+    provided_token = header_token if authorization else request.cookies.get("rdagent_auth", "")
+    if not provided_token or not hmac.compare_digest(provided_token.encode(), token.encode()):
+        return jsonify({"error": "Authentication required"}), 401
+    if not header_token and request.method not in {"GET", "HEAD"}:
+        # Cookie credentials are ambient. Missing browser provenance fails closed;
+        # internal/non-browser clients use an explicit Bearer token instead.
+        source = (
+            normalized_origin
+            if origin is not None
+            else normalize_origin(request.headers.get("Referer", ""), allow_path=True)
+        )
+        if source is None or source not in allowed_origins:
+            return jsonify({"error": "Trusted Origin or Referer required for cookie authentication"}), 403
+    return None
+
+
+@app.after_request
+def _set_security_headers(response: Response) -> Response:
+    # Match literal origins; never interpret operator configuration as a regex.
+    origin = request.headers.get("Origin", "")
+    if normalize_origin(origin) in app.config["CORS_ALLOWED_ORIGINS"]:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type"
+        response.headers["Access-Control-Allow-Methods"] = "GET, HEAD, POST, OPTIONS"
+    response.vary.add("Origin")
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+class _YellowWarningFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        if record.levelno == logging.WARNING:
+            record.levelname = f"{_YELLOW}{record.levelname}{_RESET}"
+        return super().format(record)
+
+
+def _configure_app_logger() -> None:
+    formatter = _YellowWarningFormatter(
+        fmt="[%(asctime)s] %(levelname)s in %(module)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    for handler in app.logger.handlers:
+        handler.setFormatter(formatter)
+
+
+_configure_app_logger()
+
+
+_TARGETS_WITHOUT_USER_INTERACTION = {"general_model", "fin_factor_report"}
+
+
+class RDAgentTask:
+    def __init__(
+        self,
+        target_name: str,
+        kwargs: dict,
+        stdout_path: str,
+        log_trace_path: str,
+        scenario: str,
+        trace_name: str,
+        ui_server_port: int | None = None,
+        create_process: bool = True,
+    ) -> None:
+        self.target_name = target_name
+        self.kwargs = kwargs
+        self.stdout_path = stdout_path
+        self.log_trace_path = log_trace_path
+        self.scenario = scenario
+        self.trace_name = trace_name
+        self.ui_server_port = ui_server_port
+        self.process: Process | None = None
+
+        # Two IPC queues for user interaction.
+        # - `user_request_q`: rdagent subprocess -> server (dicts to render on frontend)
+        # - `user_response_q`: server -> rdagent subprocess (user input dicts)
+        # NOTE: Use multiprocessing.Queue because rdagent is started as a separate process.
+        self.user_request_q: Queue = Queue(maxsize=1024)
+        self.user_response_q: Queue = Queue(maxsize=1024)
+
+        if create_process:
+            self.process = Process(
+                target=self._run,
+                name=f"rdagent:{self.scenario}:{self.trace_name}",
+            )
+        self.messages: list[dict] = []
+        self.pointers: defaultdict[str, int] = defaultdict(int)
+
+    def start(self) -> None:
+        if self.process is not None:
+            self.process.start()
+
+    def is_alive(self) -> bool:
+        return self.process is not None and self.process.is_alive()
+
+    def get_end_code(self) -> int:
+        if self.process is None or self.process.exitcode is None:
+            return 0
+        return self.process.exitcode
+
+    def stop(self) -> None:
+        if self.process is not None and self.process.is_alive():
+            self.process.terminate()
+            self.process.join()
+
+        # Best-effort cleanup for IPC queues.
+        for q in (self.user_request_q, self.user_response_q):
+            try:
+                q.cancel_join_thread()
+            except Exception:
+                pass
+            try:
+                q.close()
+            except Exception:
+                pass
+
+    def _run(self) -> None:
+        from rdagent.log.conf import LOG_SETTINGS
+
+        LOG_SETTINGS.set_ui_server_port(self.ui_server_port)
+
+        from rdagent.log import rdagent_logger
+
+        rdagent_logger.refresh_storages_from_settings()
+        rdagent_logger.set_storages_path(self.log_trace_path)
+        Path(self.stdout_path).parent.mkdir(parents=True, exist_ok=True)
+        with open(self.stdout_path, "w") as log_file:
+            with redirect_stdout(log_file), redirect_stderr(log_file):
+                rdagent_logger.rebind_console_to_current_streams()
+                try:
+                    # Only interactive targets should receive IPC queues.
+                    if self.target_name not in _TARGETS_WITHOUT_USER_INTERACTION:
+                        self.kwargs.setdefault(
+                            "user_interaction_queues",
+                            (self.user_request_q, self.user_response_q),
+                        )
+
+                    if self.target_name == "data_science":
+                        from rdagent.app.data_science.loop import main as data_science
+
+                        data_science(**self.kwargs)
+                    elif self.target_name == "general_model":
+                        from rdagent.app.general_model.general_model import (
+                            extract_models_and_implement as general_model,
+                        )
+
+                        general_model(**self.kwargs)
+                    elif self.target_name == "fin_factor":
+                        from rdagent.app.qlib_rd_loop.factor import main as fin_factor
+
+                        fin_factor(**self.kwargs)
+                    elif self.target_name == "fin_factor_report":
+                        from rdagent.app.qlib_rd_loop.factor_from_report import (
+                            main as fin_factor_report,
+                        )
+
+                        fin_factor_report(**self.kwargs)
+                    elif self.target_name == "fin_model":
+                        from rdagent.app.qlib_rd_loop.model import main as fin_model
+
+                        fin_model(**self.kwargs)
+                    elif self.target_name == "fin_quant":
+                        from rdagent.app.qlib_rd_loop.quant import main as fin_quant
+
+                        fin_quant(**self.kwargs)
+                    else:
+                        raise ValueError(f"Unknown target: {self.target_name}")
+                except Exception:
+                    traceback.print_exc()
+
+
+rdagent_processes: dict[str, RDAgentTask] = {}
+log_folder_path = Path(UI_SETTING.trace_folder).resolve()
+upload_folder_path = Path(UI_SETTING.upload_folder).resolve()
+
+
+def _drain_user_requests_into_messages(task: RDAgentTask) -> None:
+    """Move a single pending user-interaction request into `task.messages`.
+
+    Assumption: each rdagent process only has one active request at a time.
+    """
+
+    try:
+        req = task.user_request_q.get_nowait()
+    except Empty:
+        return
+    except Exception:
+        return
+
+    # Standardize the message shape for the frontend.
+    # The agent can send either a full message dict, or a raw content dict.
+    if isinstance(req, dict) and {"tag", "timestamp", "content"}.issubset(req.keys()):
+        msg = req
+    else:
+        msg = {
+            "tag": "user_interaction.request",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "content": req,
+        }
+    task.messages.append(msg)
+
+
+@app.route("/favicon.ico")
+def favicon():
+    return send_from_directory(app.static_folder, "favicon.ico", mimetype="image/vnd.microsoft.icon")
+
+
+def _normalize_static_request_path(fn: str) -> str:
+    static_prefix = UI_SETTING.static_path.strip("./")
+    if static_prefix and fn.startswith(f"{static_prefix}/"):
+        return fn[len(static_prefix) + 1 :]
+    return fn
+
+
+def _get_or_create_task(trace_id: str) -> RDAgentTask:
+    task = rdagent_processes.get(trace_id)
+    if task is None:
+        task = RDAgentTask(
+            target_name="",
+            kwargs={},
+            stdout_path="",
+            log_trace_path=trace_id,
+            scenario="",
+            trace_name="",
+            ui_server_port=None,
+            create_process=False,
+        )
+        rdagent_processes[trace_id] = task
+    return task
+
+
+def _resolve_stdout_path(trace_id: str) -> Path | None:
+    normalized_trace_id = str(trace_id or "").strip()
+    if not normalized_trace_id:
+        return None
+
+    task = rdagent_processes.get(str(log_folder_path / normalized_trace_id))
+    if task is None or not task.stdout_path:
+        return None
+
+    stdout_path = Path(task.stdout_path).resolve()
+
+    try:
+        if os.path.commonpath([str(stdout_path), str(log_folder_path)]) != str(log_folder_path):
+            return None
+    except ValueError:
+        return None
+
+    return stdout_path
+
+
+def read_trace(log_path: Path, id: str = "") -> None:
+    fs = FileStorage(log_path)
+    ws = WebStorage(port=1, path=log_path)
+    task = _get_or_create_task(id)
+    task.messages = []
+    last_timestamp = None
+    for msg in fs.iter_msg():
+        data = ws._obj_to_json(obj=msg.content, tag=msg.tag, id=id, timestamp=msg.timestamp.isoformat())
+        if data:
+            if isinstance(data, list):
+                for d in data:
+                    task.messages.append(d["msg"])
+                    last_timestamp = msg.timestamp
+            else:
+                task.messages.append(data["msg"])
+                last_timestamp = msg.timestamp
+
+    now = datetime.now(timezone.utc)
+    if last_timestamp and (now - last_timestamp).total_seconds() > 1800:
+        task.messages.append(
+            {
+                "tag": "END",
+                "timestamp": now.isoformat(),
+                "content": {"error_msg": "Trace session has ended.", "end_code": 0},
+            }
+        )
+
+
+def _collect_existing_trace_ids(trace_root: Path) -> list[str]:
+    """Return trace ids that should be visible in the UI history panel."""
+
+    if not trace_root.exists():
+        return []
+
+    trace_ids: list[str] = []
+    for trace_dir in sorted(trace_root.glob("*/*"), key=lambda p: str(p)):
+        if not trace_dir.is_dir():
+            continue
+        if "uploads" in trace_dir.relative_to(trace_root).parts:
+            continue
+        if not any(trace_dir.rglob("*.pkl")):
+            continue
+
+        trace_ids.append(trace_dir.relative_to(trace_root).as_posix())
+
+    return trace_ids
+
+
+def _load_existing_traces(trace_root: Path) -> None:
+    """Load persisted traces into memory so the UI survives a server restart."""
+
+    for trace_id in _collect_existing_trace_ids(trace_root):
+        trace_dir = trace_root / trace_id
+
+        try:
+            read_trace(trace_dir, id=str(trace_dir))
+        except Exception:
+            app.logger.exception("Failed to load trace from %s", trace_dir)
+
+
+@app.route("/trace", methods=["POST"])
+def update_trace():
+    data = request.get_json()
+    trace_id = data.get("id")
+    return_all = data.get("all")
+    reset = data.get("reset")
+    msg_num = random.randint(1, 10)
+    app.logger.info(data)
+    log_folder_path = Path(UI_SETTING.trace_folder).absolute()
+    if not trace_id:
+        return jsonify({"error": "Trace ID is required"}), 400
+    trace_id = str(log_folder_path / trace_id)
+
+    task = _get_or_create_task(trace_id)
+
+    # Make sure any pending user-interaction requests are visible to the frontend.
+    _drain_user_requests_into_messages(task)
+
+    if task.process is not None and not task.is_alive():
+        if not task.messages or task.messages[-1].get("tag") != "END":
+            task.messages.append(
+                {
+                    "tag": "END",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "content": {
+                        "error_msg": "RD-Agent process has completed.",
+                        "end_code": task.get_end_code(),
+                    },
+                }
+            )
+            app.logger.warning(f"Process for {trace_id} has ended.")
+
+    user_ip = request.remote_addr
+
+    if reset:
+        task.pointers[user_ip] = 0
+
+    start_pointer = task.pointers[user_ip]
+    end_pointer = start_pointer + msg_num
+    if end_pointer > len(task.messages) or return_all:
+        end_pointer = len(task.messages)
+
+    returned_msgs = task.messages[start_pointer:end_pointer]
+    task.pointers[user_ip] = end_pointer
+    if returned_msgs:
+        app.logger.info([msg["tag"] for msg in returned_msgs])
+    return jsonify(returned_msgs), 200
+
+
+@app.route("/stdout", methods=["GET"])
+def download_stdout_file():
+    trace_id = request.args.get("id", "")
+    stdout_path = _resolve_stdout_path(trace_id)
+
+    if stdout_path is None:
+        return jsonify({"error": "Trace ID is required or invalid"}), 400
+    if not stdout_path.exists() or not stdout_path.is_file():
+        return jsonify({"error": "Stdout file not found"}), 404
+
+    return send_file(
+        stdout_path,
+        as_attachment=True,
+        download_name=stdout_path.name,
+        mimetype="text/plain",
+    )
+
+
+@app.route("/traces", methods=["GET"])
+def list_traces():
+    """Return trace ids that are available for history browsing."""
+
+    trace_ids = _collect_existing_trace_ids(log_folder_path)
+    return jsonify(trace_ids), 200
+
+
+@app.route("/upload", methods=["POST"])
+def upload_file():
+    # 获取请求体中的字段
+    global rdagent_processes
+    try:
+        scenario = validate_scenario(request.form.get("scenario"))
+    except ValueError:
+        return jsonify({"error": "Invalid scenario"}), 400
+    files = request.files.getlist("files")
+    if request.form.getlist("files"):
+        return jsonify({"error": "Upload files directly; URLs and server paths are not accepted"}), 400
+    if scenario == "General Model Implementation" and (len(files) != 1 or not files[0].filename):
+        return jsonify({"error": "Exactly one report file must be uploaded"}), 400
+    competition = request.form.get("competition")
+    loop_n = request.form.get("loops")
+    all_duration = request.form.get("all_duration")
+
+    # scenario = "Data Science Loop"
+    if scenario == "Data Science":
+        try:
+            competition = parse_competition(competition)
+        except ValueError:
+            return jsonify({"error": "Invalid competition"}), 400
+        trace_name = f"{competition}-{randomname.get_name()}"
+    else:
+        trace_name = randomname.get_name()
+    try:
+        trace_files_path = resolve_within(upload_folder_path, scenario, trace_name)
+        log_trace_path = resolve_within(log_folder_path, scenario, trace_name)
+        stdout_path = resolve_within(log_folder_path, scenario, f"{trace_name}.log")
+    except ValueError:
+        return jsonify({"error": "Invalid destination path"}), 400
+    if not stdout_path.exists():
+        stdout_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # save files
+    for file in files:
+        if file:
+            try:
+                sanitized_filename = validate_upload_filename(secure_filename(file.filename or ""))
+                target_path = resolve_within(trace_files_path, sanitized_filename)
+            except ValueError:
+                return jsonify({"error": "Invalid upload file"}), 400
+            if target_path.exists():
+                return jsonify({"error": "Upload file already exists"}), 409
+            trace_files_path.mkdir(parents=True, exist_ok=True)
+            file.save(target_path)
+
+    target_name = SCENARIO_TARGETS[scenario]
+    kwargs = {}
+    loop_n_val = int(loop_n) if loop_n else None
+    all_duration_val = f"{all_duration}h" if all_duration else None
+
+    if scenario == "Finance Data Building":
+        kwargs = {
+            "loop_n": loop_n_val,
+            "all_duration": all_duration_val,
+            "base_features_path": str(trace_files_path),
+        }
+    if scenario == "Finance Model Implementation":
+        kwargs = {
+            "loop_n": loop_n_val,
+            "all_duration": all_duration_val,
+            "base_features_path": str(trace_files_path),
+        }
+    if scenario == "Finance Whole Pipeline":
+        kwargs = {
+            "loop_n": loop_n_val,
+            "all_duration": all_duration_val,
+            "base_features_path": str(trace_files_path),
+        }
+    if scenario == "Finance Data Building (Reports)":
+        kwargs = {"report_folder": str(trace_files_path), "all_duration": all_duration_val}
+    if scenario == "General Model Implementation":
+        rfp = str(resolve_within(trace_files_path, validate_upload_filename(secure_filename(files[0].filename))))
+        kwargs = {"report_file_path": rfp}
+    if scenario == "Data Science":
+        kwargs = {"competition": competition, "loop_n": loop_n_val, "timeout": all_duration_val}
+
+    app.logger.info(f"Started process for {log_trace_path} with target: {target_name}, kwargs: {kwargs}")
+    task = RDAgentTask(
+        target_name=target_name,
+        kwargs=kwargs,
+        stdout_path=str(stdout_path),
+        log_trace_path=str(log_trace_path),
+        scenario=scenario,
+        trace_name=trace_name,
+        ui_server_port=app.config["UI_SERVER_PORT"],
+    )
+    task.start()
+    app.logger.warning(f"Task {log_trace_path} started.")
+    rdagent_processes[str(log_trace_path)] = task
+    return (
+        jsonify(
+            {
+                "id": f"{scenario}/{trace_name}",
+            }
+        ),
+        200,
+    )
+
+
+@app.route("/receive", methods=["POST"])
+def receive_msgs():
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No JSON data received"}), 400
+    except Exception as e:
+        return jsonify({"error": "Internal Server Error"}), 500
+
+    if isinstance(data, list):
+        for d in data:
+            task = _get_or_create_task(d["id"])
+            task.messages.append(d["msg"])
+    else:
+        task = _get_or_create_task(data["id"])
+        task.messages.append(data["msg"])
+
+    return jsonify({"status": "success"}), 200
+
+
+@app.route("/user_interaction/submit", methods=["POST"])
+def submit_user_interaction_response():
+    """Frontend submits a user response; server forwards it to the rdagent subprocess via IPC queue."""
+    data = request.get_json(silent=True) or {}
+    trace_id = data.get("id")
+    payload = data.get("payload")
+
+    if not trace_id:
+        return jsonify({"error": "Trace ID is required"}), 400
+    if payload is None:
+        return jsonify({"error": "Missing 'payload'"}), 400
+
+    trace_id = str(log_folder_path / trace_id)
+    task = _get_or_create_task(trace_id)
+
+    try:
+        task.user_response_q.put(payload, block=False)
+    except Exception:
+        app.logger.exception("Failed to enqueue a user response")
+        return jsonify({"error": "Failed to enqueue user response"}), 500
+
+    return jsonify({"status": "success"}), 200
+
+
+@app.route("/control", methods=["POST"])
+def control_process():
+    global rdagent_processes
+    data = request.get_json()
+    app.logger.info(data)
+    if not data or "id" not in data or "action" not in data:
+        return jsonify({"error": "Missing 'id' or 'action' in request"}), 400
+
+    id = str(log_folder_path / data["id"])
+    action = data["action"]
+
+    if action != "stop":
+        return jsonify({"error": "Only 'stop' action is supported"}), 400
+
+    if id not in rdagent_processes or rdagent_processes[id] is None:
+        return jsonify({"error": "No running process for given id"}), 400
+
+    task = rdagent_processes[id]
+
+    if task.process is None:
+        return jsonify({"error": "No running process for given id"}), 400
+
+    try:
+        if task.is_alive():
+            task.stop()
+
+        if not task.messages or task.messages[-1].get("tag") != "END":
+            task.messages.append(
+                {
+                    "tag": "END",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "content": {"error_msg": "RD-Agent process was stopped by user.", "end_code": -1},
+                }
+            )
+            app.logger.warning(f"Process for {id} has been stopped.")
+        return jsonify({"status": "stopped"}), 200
+    except Exception:
+        app.logger.exception("Failed to stop process %s", id)
+        return jsonify({"error": "Failed to stop process"}), 500
+
+
+@app.route("/test", methods=["GET"])
+def test():
+    # return 'Hello, World!'
+    msgs = {k: [i["tag"] for i in task.messages] for k, task in rdagent_processes.items()}
+    pointers = {k: dict(task.pointers) for k, task in rdagent_processes.items()}
+    return jsonify({"msgs": msgs, "pointers": pointers}), 200
+
+
+@app.route("/", methods=["GET"])
+def index():
+    token = app.config.get("AUTH_TOKEN", "")
+    supplied_token = request.args.get("token", "")
+    if token and supplied_token and hmac.compare_digest(supplied_token.encode(), token.encode()):
+        response = make_response(redirect(url_for("index")))
+        response.set_cookie("rdagent_auth", token, httponly=True, samesite="Strict", secure=request.is_secure)
+        return response
+    return send_from_directory(app.static_folder, "index.html")
+
+
+@app.route("/<path:fn>", methods=["GET"])
+def server_static_files(fn):
+    return send_from_directory(app.static_folder, _normalize_static_request_path(fn))
+
+
+def main(port: int = 19899, host: str = UI_SETTING.server_host) -> None:
+    if not app.config.get("AUTH_TOKEN"):
+        message = "UI_SERVER_AUTH_TOKEN is required for all log server bindings, including localhost"
+        raise ValueError(message)
+    app.config["UI_SERVER_PORT"] = port
+    if app.config.get("AUTH_TOKEN"):
+        app.logger.info("Authentication enabled. Open /?token=<UI_SERVER_AUTH_TOKEN> to establish a secure session.")
+    if UI_SETTING.load_legacy_pickle_traces:
+        app.logger.warning("Loading legacy pickle traces. Only enable this for fully trusted trace directories.")
+        _load_existing_traces(log_folder_path)
+    app.run(debug=False, host=host, port=port)
+
+
+if __name__ == "__main__":
+    typer.run(main)

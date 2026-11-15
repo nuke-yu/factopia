@@ -281,7 +281,7 @@ export default function ResearchPage() {
                 return (
                   <button key={g} type="button" aria-pressed={on} onClick={() => update({ groups: toggle(draft.groups, g) })}
                     className={`h-8 px-3 rounded-full border text-sm transition-colors ${on ? "border-accent text-text bg-accent/10" : "border-line-2 text-muted"}`}>
-                    {g}
+                    {t(g)}
                   </button>
                 );
               })}

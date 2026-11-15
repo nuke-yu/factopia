@@ -564,6 +564,15 @@ export type PaperResult = {
     monthly: Record<string, number> };
   trades: { fills: number; buy_value: number; sell_value: number; costs: number };
   positions: { count: number; cash: number; value: number; pending: number };
+  portfolio?: {
+    created: { date: string; symbols: number; buy_value: number } | null;
+    rebalances: number;
+    holdings: { symbol: string; name?: string; qty: number; avg_cost: number | null; price: number | null; value: number;
+      weight: number | null; pnl: number | null; pnl_pct: number | null }[];
+    contributions: { symbol: string; name?: string; realized: number | null; unrealized: number | null; cost: number | null;
+      contribution: number | null; contribution_pct: number | null }[];
+    note: string;
+  };
   alerts: { kind: string; level: string; title: string; detail: string }[];
   suggestion: string; suggestion_zh: string; thresholds: Record<string, number>; note: string;
 };

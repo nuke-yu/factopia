@@ -166,6 +166,20 @@ _EN = {
  "英文主报告，法文附件": "English main report, French annexes",
  "印花税等交易成本较高，避免需要每日调仓的策略": "Stamp duty and other transaction costs are high; avoid strategies that need daily rebalancing",
  "避免烟草与争议性武器行业": "Avoid tobacco and controversial weapons sectors",
+ # 研究规格起草（research/draft.py）：大模型配置与输出的报错
+ "未配置大模型：在 .env 中设置 CHAT_MODEL=litellm_proxy/... 与 LITELLM_PROXY_API_KEY（外加 LITELLM_PROXY_API_BASE，如硅基流动），或 FACTOPIA_LLM_BASE_URL / MODEL / API_KEY": "LLM not configured: set CHAT_MODEL=litellm_proxy/... and LITELLM_PROXY_API_KEY in .env (plus LITELLM_PROXY_API_BASE, e.g. SiliconFlow), or FACTOPIA_LLM_BASE_URL / MODEL / API_KEY",
+ ".env 中 FACTOPIA_LLM_EXTRA_BODY 不是合法 JSON：{e}": ".env: FACTOPIA_LLM_EXTRA_BODY is not valid JSON: {e}",
+ "大模型接口返回 {code}：{body}": "LLM API returned {code}: {body}",
+ "无法连接大模型接口：{e}": "Cannot reach the LLM API: {e}",
+ "大模型返回的规格缺少必填内容：{fields}": "The LLM-returned spec is missing required content: {fields}",
+ "发给 RD-Agent 的字段须为英文，大模型返回了中文": "Fields sent to RD-Agent must be in English; the LLM returned Chinese",
+ "大模型两次输出都不合格：{e}": "Both LLM outputs were invalid: {e}",
+ # 获批信号的地区适用性 reasons（approval/labels，含占位符与规则包状态）
+ "t 值 {t} 介于迁移门槛的一半与门槛（{thr}）之间": "t-stat {t} lies between half the transfer threshold and the threshold ({thr})",
+ "规则包 {version} 状态：{status}": "Rule pack {version} status: {status}",
+ "合规例外：{rules}": "Compliance exceptions: {rules}",
+ "合规附加条件：{conditions}": "Compliance conditions attached: {conditions}",
+ "待本地合规确认": "pending local compliance confirmation",
 }
 
 _FR = {
@@ -326,6 +340,20 @@ _FR = {
  "英文主报告，法文附件": "Rapport principal en anglais, annexe en français",
  "印花税等交易成本较高，避免需要每日调仓的策略": "Le droit de stamp et autres coûts de transaction sont élevés ; éviter les stratégies nécessitant un rééquilibrage quotidien",
  "避免烟草与争议性武器行业": "Éviter le tabac et les armes controversées",
+ # 研究规格起草（research/draft.py）：大模型配置与输出的报错
+ "未配置大模型：在 .env 中设置 CHAT_MODEL=litellm_proxy/... 与 LITELLM_PROXY_API_KEY（外加 LITELLM_PROXY_API_BASE，如硅基流动），或 FACTOPIA_LLM_BASE_URL / MODEL / API_KEY": "Grand modèle non configuré : définissez CHAT_MODEL=litellm_proxy/... et LITELLM_PROXY_API_KEY dans .env (plus LITELLM_PROXY_API_BASE, p. ex. SiliconFlow), ou FACTOPIA_LLM_BASE_URL / MODEL / API_KEY",
+ ".env 中 FACTOPIA_LLM_EXTRA_BODY 不是合法 JSON：{e}": ".env : FACTOPIA_LLM_EXTRA_BODY n'est pas un JSON valide : {e}",
+ "大模型接口返回 {code}：{body}": "L'API du grand modèle a renvoyé {code} : {body}",
+ "无法连接大模型接口：{e}": "Impossible de se connecter à l'API du grand modèle : {e}",
+ "大模型返回的规格缺少必填内容：{fields}": "La spécification renvoyée par le grand modèle manque de contenu obligatoire : {fields}",
+ "发给 RD-Agent 的字段须为英文，大模型返回了中文": "Les champs envoyés à RD-Agent doivent être en anglais ; le grand modèle a renvoyé du chinois",
+ "大模型两次输出都不合格：{e}": "Les deux sorties du grand modèle sont non conformes : {e}",
+ # 获批信号的地区适用性 reasons（approval/labels，含占位符与规则包状态）
+ "t 值 {t} 介于迁移门槛的一半与门槛（{thr}）之间": "La t-stat {t} se situe entre la moitié du seuil de transfert et le seuil ({thr})",
+ "规则包 {version} 状态：{status}": "Statut du pack de règles {version} : {status}",
+ "合规例外：{rules}": "Exceptions de conformité : {rules}",
+ "合规附加条件：{conditions}": "Conditions de conformité jointes : {conditions}",
+ "待本地合规确认": "confirmation de conformité locale en attente",
 }
 
 _HK = {
@@ -486,6 +514,20 @@ _HK = {
  "英文主报告，法文附件": "英文主報告，法文附件",
  "印花税等交易成本较高，避免需要每日调仓的策略": "印花稅等交易成本較高，避免需要每日調倉的策略",
  "避免烟草与争议性武器行业": "避免煙草與爭議性武器行業",
+ # 研究规格起草（research/draft.py）：大模型配置与输出的报错
+ "未配置大模型：在 .env 中设置 CHAT_MODEL=litellm_proxy/... 与 LITELLM_PROXY_API_KEY（外加 LITELLM_PROXY_API_BASE，如硅基流动），或 FACTOPIA_LLM_BASE_URL / MODEL / API_KEY": "未配置大模型：在 .env 中設置 CHAT_MODEL=litellm_proxy/... 與 LITELLM_PROXY_API_KEY（外加 LITELLM_PROXY_API_BASE，如矽基流動），或 FACTOPIA_LLM_BASE_URL / MODEL / API_KEY",
+ ".env 中 FACTOPIA_LLM_EXTRA_BODY 不是合法 JSON：{e}": ".env 中 FACTOPIA_LLM_EXTRA_BODY 不是合法 JSON：{e}",
+ "大模型接口返回 {code}：{body}": "大模型接口返回 {code}：{body}",
+ "无法连接大模型接口：{e}": "無法連接大模型接口：{e}",
+ "大模型返回的规格缺少必填内容：{fields}": "大模型返回的規格缺少必填內容：{fields}",
+ "发给 RD-Agent 的字段须为英文，大模型返回了中文": "發給 RD-Agent 的字段須為英文，大模型返回了中文",
+ "大模型两次输出都不合格：{e}": "大模型兩次輸出都不合格：{e}",
+ # 获批信号的地区适用性 reasons（approval/labels，含占位符与规则包状态）
+ "t 值 {t} 介于迁移门槛的一半与门槛（{thr}）之间": "t 值 {t} 介於遷移門檻的一半與門檻（{thr}）之間",
+ "规则包 {version} 状态：{status}": "規則包 {version} 狀態：{status}",
+ "合规例外：{rules}": "合規例外：{rules}",
+ "合规附加条件：{conditions}": "合規附加條件：{conditions}",
+ "待本地合规确认": "待本地合規確認",
 }
 
 # hq：键即原文（空表直接回退）；hk/uk/fr 查对应字典

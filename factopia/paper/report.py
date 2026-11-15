@@ -210,6 +210,116 @@ def _alerts(m: dict, rank_ic: dict, thresholds: dict, s: pd.Series, bm):
     return alerts, stat_alert, econ_alert
 
 
+_SEC_NAMES: dict[str, str] | None = None
+
+
+def _stock_names() -> dict[str, str]:
+    """代码 → 证券简称（refdata 证券主数据 securities.parquet；缺文件或未覆盖的代码不显示名称）。"""
+    global _SEC_NAMES
+    if _SEC_NAMES is None:
+        try:
+            df = pd.read_parquet(engine.RUNTIME / "refdata" / "securities.parquet", columns=["symbol", "name"])
+            _SEC_NAMES = {str(s): str(n) for s, n in zip(df["symbol"], df["name"]) if pd.notna(n) and str(n).strip()}
+        except Exception:
+            _SEC_NAMES = {}
+    return _SEC_NAMES
+
+
+def _portfolio(signal_id: str, rec: dict, state: dict, close) -> dict:
+    """组合视图（create / manage）：建仓信息、当前持仓（数量 / 成本 / 权重）、个股贡献。
+
+    成本口径为累计平均成本（累计买入金额 / 累计买入股数），卖出按该均价结转；
+    个股贡献 = 已实现盈亏 + 浮动盈亏 − 该股累计交易成本，贡献率以初始资金为分母；
+    已清仓的历史持仓只保留已实现部分。价格缺失（停牌 / 退市防御）按 0 估值，与 engine._snapshot 一致；
+    现价与权重分母同日（state.last_cycle 的估值日），避免 report-only 时"新价格 ÷ 旧净值"的口径混合。
+    """
+    out: dict = {"created": None, "rebalances": 0, "holdings": [], "contributions": [], "note": ""}
+    agg: dict[str, dict] = {}
+    first_fill: tuple[str, int, float] | None = None          # (建仓日, 当日买入笔数, 当日买入金额)
+    placed_days: set[str] = set()                             # 每轮调仓下单的 distinct 日期
+    p = PAPER / signal_id / "orders.jsonl"
+    try:
+        lines = p.read_text(encoding="utf-8").splitlines() if p.exists() else []
+    except OSError:
+        lines = []
+    for line in lines:
+        try:
+            ev = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if ev.get("event") == "placed":
+            d = str(ev.get("placed_on") or "")[:10]
+            if d:
+                placed_days.add(d)
+            continue
+        if ev.get("event") != "filled":
+            continue
+        sym = ev.get("symbol")
+        if not sym:
+            continue
+        a = agg.setdefault(sym, {"buy_qty": 0.0, "buy_value": 0.0, "sell_qty": 0.0, "sell_value": 0.0, "cost": 0.0})
+        val, qty = float(ev.get("value") or 0.0), float(ev.get("qty") or 0.0)
+        if ev.get("side") == "buy":
+            a["buy_qty"] += qty
+            a["buy_value"] += val
+        elif ev.get("side") == "sell":
+            a["sell_qty"] += qty
+            a["sell_value"] += val
+        a["cost"] += float(ev.get("cost") or 0.0)
+        d = str(ev.get("fill_date") or "")[:10]
+        if d and ev.get("side") == "buy":
+            if first_fill is None:
+                first_fill = (d, 0, 0.0)
+            if d == first_fill[0]:
+                first_fill = (d, first_fill[1] + 1, first_fill[2] + val)
+    out["rebalances"] = len(placed_days)
+    if first_fill:
+        out["created"] = {"date": first_fill[0], "symbols": first_fill[1], "buy_value": round(first_fill[2], 2)}
+    capital = float(rec.get("capital") or 0.0)
+    positions = {k: float(v) for k, v in (state.get("positions") or {}).items() if float(v) > 1e-9}
+    px = None
+    if close is not None and not close.empty:
+        close = close.sort_index().ffill()
+        _lc = state.get("last_cycle")            # 与 nav / positions_value 同一估值日
+        px = close.asof(pd.Timestamp(_lc)) if _lc else close.iloc[-1]
+    total = float(state.get("nav") or 0.0)
+    if total <= 0:
+        total = float(state.get("cash") or 0.0) + float(state.get("positions_value") or 0.0)
+    names = _stock_names()
+    for sym, qty in positions.items():
+        a = agg.get(sym) or {"buy_qty": 0.0, "buy_value": 0.0, "sell_qty": 0.0, "sell_value": 0.0, "cost": 0.0}
+        price = float(px.get(sym)) if px is not None and sym in px.index and pd.notna(px.get(sym)) else None
+        value = qty * price if price is not None else 0.0
+        avg_cost = (a["buy_value"] / a["buy_qty"]) if a["buy_qty"] > 1e-9 else None
+        basis = qty * avg_cost if avg_cost is not None else None
+        pnl = value - basis if basis is not None else 0.0
+        realized = (a["sell_value"] - a["sell_qty"] * avg_cost) if avg_cost is not None else 0.0
+        contribution = realized + pnl - a["cost"]
+        out["holdings"].append({"symbol": sym, "name": names.get(sym, ""), "qty": engine._r(qty, 4),
+                                "avg_cost": engine._r(avg_cost, 4),
+                                "price": engine._r(price, 4), "value": engine._r(value, 2),
+                                "weight": engine._r(value / total, 4) if total > 0 else None,
+                                "pnl": engine._r(pnl, 2), "pnl_pct": engine._r(pnl / basis, 4) if basis else None})
+        out["contributions"].append({"symbol": sym, "name": names.get(sym, ""), "realized": engine._r(realized, 2),
+                                     "unrealized": engine._r(pnl, 2),
+                                     "cost": engine._r(a["cost"], 2), "contribution": engine._r(contribution, 2),
+                                     "contribution_pct": engine._r(contribution / capital, 4) if capital > 0 else None})
+    for sym, a in agg.items():                               # 已清仓的历史持仓：只保留已实现贡献
+        if sym in positions or a["sell_qty"] <= 1e-9:
+            continue
+        avg_cost = (a["buy_value"] / a["buy_qty"]) if a["buy_qty"] > 1e-9 else 0.0
+        realized = a["sell_value"] - a["sell_qty"] * avg_cost
+        contribution = realized - a["cost"]
+        out["contributions"].append({"symbol": sym, "name": names.get(sym, ""), "realized": engine._r(realized, 2),
+                                     "unrealized": 0.0,
+                                     "cost": engine._r(a["cost"], 2), "contribution": engine._r(contribution, 2),
+                                     "contribution_pct": engine._r(contribution / capital, 4) if capital > 0 else None})
+    out["holdings"].sort(key=lambda r: -(r["value"] or 0.0))
+    out["contributions"].sort(key=lambda r: -abs(r["contribution"] or 0.0))
+    out["note"] = t("成本为累计平均成本；贡献 = 已实现 + 浮动盈亏 − 该股交易成本，贡献率以初始资金为分母；停牌 / 价格缺失的持仓按 0 估值。")
+    return out
+
+
 def report(signal_id: str, log=print) -> dict:
     """汇总模拟盘运行报告，原子写入 SIGNALS/<signal_id>/paper.json 并返回。"""
     rec = engine._read(PAPER / signal_id / "enrolled.json")
@@ -297,6 +407,7 @@ def report(signal_id: str, log=print) -> dict:
             "value": round(float(state.get("positions_value") or 0.0), 2),
             "pending": len(state.get("pending") or []),
         },
+        "portfolio": _portfolio(signal_id, rec, state, close),
         "alerts": alerts,
         "suggestion": suggestion,
         "suggestion_zh": t(SUGGESTION_ZH[suggestion]),

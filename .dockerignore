@@ -1,13 +1,20 @@
-# 构建上下文为仓库根目录的镜像（api、web）只需要源码与配置
+# 构建上下文为仓库根目录的镜像（api、web、rdagent、qlib-runner）只需要源码与配置
 .git
 .env
 .venv
+.codebuddy
 **/__pycache__
 **/*.pyc
 runtime
 vendor
 spikes
-docs
+/docs
+/rdagents/test
+/rdagents/docs
+/rdagents/web/node_modules
+/qlibs/docs
+/qlibs/examples
+/qlibs/tests
 web/node_modules
 web/dist
 .DS_Store
