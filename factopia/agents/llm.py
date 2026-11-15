@@ -15,13 +15,15 @@ class LLMError(RuntimeError):
     pass
 
 
-def chat(prompt: str, task: str, lite: bool = False) -> tuple[str, dict, str]:
+def chat(prompt: str, task: str, lite: bool = False, role: str = "main") -> tuple[str, dict, str]:
     """返回 (原文, usage, 实际使用的模型名)；usage 含 token 与本次费用（draft._chat 已记账）。
 
-    诊断 / 规划 / 下一版草稿等复杂任务用大模型；将来若有简单的结构化判断可传 lite=True。
+    - role="main"：诊断 / 规划 / 下一版草稿等复杂任务；
+    - role="critic"：深度思考的独立 Critic，用 FACTOPIA_LLM_CRITIC_MODEL；
+    - lite=True：简单的结构化判断，用 Lite 模型。
     """
     from factopia.research import draft
-    cfg = draft.llm_config(lite=lite)
+    cfg = draft.llm_config(lite=lite, role=role)
     text, usage = draft._chat(prompt, cfg, task)
     return text, usage, usage.get("model") or cfg["model"]
 

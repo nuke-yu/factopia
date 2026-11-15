@@ -110,6 +110,9 @@ def advance(agent: dict, chat=None) -> dict:
             diagnosis = _diagnose(facts, store.memory(agent["agent_id"]), agent["policy"], chat, agent)
             store.write_round(agent["agent_id"], agent["current_round"], "diagnosis", diagnosis)
             store.add_usage(agent, diagnosis.get("usage"))
+            if agent.get("web_search"):
+                external = _web_search(agent, diagnosis)
+                store.write_round(agent["agent_id"], agent["current_round"], "external", external)
             _advance(agent, "planning")
             continue
         if state == "planning":
@@ -117,7 +120,9 @@ def advance(agent: dict, chat=None) -> dict:
             rule = verdict.rules(spec)
             facts = _round(agent, "facts")
             diagnosis = _round(agent, "diagnosis")
-            plan = _plan(facts, diagnosis, store.memory(agent["agent_id"]), agent["policy"], chat, agent, rule)
+            external = _round(agent, "external") if agent.get("web_search") else None
+            plan = _plan(facts, diagnosis, store.memory(agent["agent_id"]), agent["policy"], chat, agent, rule,
+                         external=external, deep_think=bool(agent.get("deep_think")))
             store.write_round(agent["agent_id"], agent["current_round"], "plan", plan)
             store.add_usage(agent, plan.get("usage"))
             if plan["action"] == "stop":
@@ -329,7 +334,8 @@ def _diagnose(facts: dict, memory: dict, policy: dict, chat, agent: dict) -> dic
     note = ""
     for attempt in range(2):
         raw, usage, model = chat(prompt + note, "研究迭代诊断")
-        store.append_trace(agent["agent_id"], {"kind": "llm", "role": "critic", "model": model, "usage": usage,
+        store.append_trace(agent["agent_id"], {"kind": "llm", "role": "critic", "round": agent.get("current_round"),
+                                               "model": model, "usage": usage,
                                                "prompt_version": version, "prompt": prompt + note, "response": raw})
         try:
             data = llm.parse_json(raw)
@@ -382,7 +388,42 @@ def _keep(item, fact_ids: set[str]) -> dict | None:
     return {"text": text[:2000], "cites": cites}
 
 
-def _plan(facts: dict, diagnosis: dict, memory: dict, policy: dict, chat, agent: dict, rule: dict) -> dict:
+def _external_text(external: dict | None) -> str:
+    if not external:
+        return "- none"
+    lines = []
+    for i, r in enumerate(external.get("results") or [], 1):
+        lines.append(f"- [W{i}] {r.get('title')} ({r.get('published') or 'date unknown'}; {r.get('url')}) "
+                     f"{str(r.get('snippet') or '')[:500]}")
+    if external.get("error"):
+        lines.append(f"- web search unavailable: {external['error']}")
+    return "\n".join(lines) or "- none"
+
+
+def _web_search(agent: dict, diagnosis: dict) -> dict:
+    """联网检索（仅当启动时勾选）：查询由研究标题、假设与诊断构成；失败不阻断迭代。"""
+    from factopia.research import websearch
+    root = agent["root"]
+    try:
+        spec = research_store.load_version(root["research_id"], int(agent["current_version"]))
+    except Exception:
+        spec = {}
+    parts = [spec.get("title_zh"), spec.get("hypothesis"), (diagnosis.get("primary_cause") or {}).get("text")]
+    query = " ".join(str(x).strip() for x in parts if x)[:300]
+    try:
+        out = websearch.search(query)
+    except Exception as e:
+        out = {"configured": False, "provider": None, "query": query, "before": None,
+               "results": [], "error": str(e)[:500], "raw_count": 0, "excluded": 0}
+    out = {**out, "at": store.now()}
+    store.append_trace(agent["agent_id"], {"kind": "web_search", "query": query, "provider": out.get("provider"),
+                                           "configured": out.get("configured"), "error": out.get("error"),
+                                           "count": len(out.get("results") or [])})
+    return out
+
+
+def _plan(facts: dict, diagnosis: dict, memory: dict, policy: dict, chat, agent: dict, rule: dict,
+          external: dict | None = None, deep_think: bool = False) -> dict:
     version = policy["prompts"]["planner"]
     available = policy_mod.available_tools(policy, tools.REGISTRY)
     prompt = llm.prompt(
@@ -390,20 +431,86 @@ def _plan(facts: dict, diagnosis: dict, memory: dict, policy: dict, chat, agent:
         diagnosis=_diagnosis_text(diagnosis),
         memory=_memory_text(memory), tools=tools.describe(policy, tools.REGISTRY),
         policy=json.dumps({k: policy.get(k) for k in ("max_rounds", "budget_usd", "no_improve_patience", "human_gate")}),
+        external=_external_text(external),
     )
+    fact_ids = {f["id"] for f in facts["facts"]}
+    plan = _plan_call(prompt, fact_ids, available, rule, chat, agent, "planner", "研究迭代规划", version)
+    if not deep_think:
+        return plan
+    # 深度思考：Planner 草案 → 独立 Critic 评审 → Planner 按评审修订（最多一轮，避免无限对话）
+    critique = _critique_plan(prompt, plan, facts, diagnosis, external, policy, chat, agent)
+    if critique:
+        store.write_round(agent["agent_id"], int(agent.get("current_round") or 0), "plan_critique", critique)
+    revised = False
+    if critique and critique.get("verdict") == "revise":
+        revision_prompt = (
+            prompt
+            + "\n\n## Your draft plan (JSON)\n" + json.dumps(plan, ensure_ascii=False)
+            + "\n\n## Independent critique (untrusted suggestion)\n" + json.dumps(critique, ensure_ascii=False)
+            + "\n\nRevise the plan using the critique. Keep the same JSON schema and tool allowlist. "
+              "Output the full plan JSON only; do not include the critique."
+        )
+        try:
+            plan = _plan_call(revision_prompt, fact_ids, available, rule, chat, agent,
+                              "planner_revise", "研究迭代计划修订", version)
+            revised = True
+        except store.AgentError:
+            revised = False
+    plan["deep_think"] = {"critique": critique, "revised": revised}
+    return plan
+
+
+def _plan_call(prompt: str, fact_ids: set[str], available: list[str], rule: dict | None,
+               chat, agent: dict, role: str, task: str, version: str) -> dict:
     note = ""
     for attempt in range(2):
-        raw, usage, model = chat(prompt + note, "研究迭代规划")
-        store.append_trace(agent["agent_id"], {"kind": "llm", "role": "planner", "model": model, "usage": usage,
+        raw, usage, model = chat(prompt + note, task)
+        store.append_trace(agent["agent_id"], {"kind": "llm", "role": role, "round": agent.get("current_round"),
+                                               "model": model, "usage": usage,
                                                "prompt_version": version, "prompt": prompt + note, "response": raw})
         try:
             data = llm.parse_json(raw)
-            out = _validate_plan(data, {f["id"] for f in facts["facts"]}, available, rule)
+            out = _validate_plan(data, fact_ids, available, rule)
             out.update({"model": model, "prompt_version": version, "usage": usage, "at": store.now()})
             return out
         except (llm.LLMError, AgentStateError) as e:
             note = f"\n\nYour previous answer was rejected: {e}. Answer again with the required JSON object."
-    raise store.AgentError("规划两次都没有给出合法动作")
+    raise store.AgentError(f"{task}两次都没有给出合法动作")
+
+
+def _critique_plan(prompt: str, plan: dict, facts: dict, diagnosis: dict, external: dict | None,
+                   policy: dict, chat, agent: dict) -> dict | None:
+    """独立计划评审；失败时返回 None，不影响本轮（保留原计划）。"""
+    version = policy["prompts"].get("plan_critic", "iteration-plan-critic-v1")
+    critic_prompt = llm.prompt(
+        version, language=llm_language(), facts=_facts_text(facts["facts"]),
+        diagnosis=_diagnosis_text(diagnosis), plan=json.dumps(plan, ensure_ascii=False),
+        external=_external_text(external),
+    )
+    for attempt in range(2):
+        raw, usage, model = chat(critic_prompt, "研究迭代计划评审", role="critic")
+        store.append_trace(agent["agent_id"], {"kind": "llm", "role": "plan_critic", "round": agent.get("current_round"),
+                                               "model": model, "usage": usage, "prompt_version": version,
+                                               "prompt": critic_prompt, "response": raw})
+        try:
+            data = llm.parse_json(raw)
+            verdict = str(data.get("verdict") or "").lower()
+            if verdict not in ("accept", "revise"):
+                raise llm.LLMError("critique.verdict 必须是 accept 或 revise")
+            issues = []
+            for x in (data.get("issues") or [])[:5]:
+                if not isinstance(x, dict) or not str(x.get("text") or "").strip():
+                    continue
+                issues.append({"severity": "block" if x.get("severity") == "block" else "warn",
+                               "text": str(x["text"])[:1000],
+                               "cites": [str(c) for c in (x.get("cites") or [])][:6]})
+            return {"verdict": verdict, "issues": issues,
+                    "required_changes": [str(x)[:500] for x in (data.get("required_changes") or [])][:6],
+                    "alternative_action": data.get("alternative_action"),
+                    "model": model, "prompt_version": version, "usage": usage, "at": store.now()}
+        except (llm.LLMError, AgentStateError):
+            break
+    return None
 
 
 def _validate_plan(data: dict, fact_ids: set[str], available: list[str], rule: dict | None = None) -> dict:

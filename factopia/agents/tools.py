@@ -66,8 +66,15 @@ def _new_version(ctx: dict, args: dict) -> dict:
     }
 
     from factopia.research import draft
+
+    def on_llm(prompt, response, usage, model):
+        store.append_trace(ctx["agent_id"], {"kind": "llm", "role": "draft", "round": ctx["round"],
+                                             "model": model, "usage": usage,
+                                             "prompt_version": draft.PROMPT_VERSION,
+                                             "prompt": prompt, "response": response})
+
     try:
-        result = draft.make_draft(inputs)
+        result = draft.make_draft(inputs, on_llm=on_llm)
     except Exception as e:
         raise ToolError(f"生成下一版本草稿失败：{e}") from e
 

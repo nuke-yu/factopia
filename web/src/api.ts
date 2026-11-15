@@ -122,6 +122,10 @@ export type EvidenceAlpha = {
   id: string; market: Market; source: string; period: { start: string; end: string }; test_start: string; significant: number;
   factors: { name: string; group: string; desc: string; t: number; ric: number; label: string }[];
 };
+/** 研究立项页可选联网检索结果：只采用测试期之前、日期可靠的公开资料。 */
+export type ExternalEvidence = { title: string; url: string; published: string | null; snippet: string; source?: string | null };
+export type WebSearch = { configured: boolean; provider: string; model?: string | null; query: string; before: string;
+  results: ExternalEvidence[]; error: string | null; warning?: string | null; raw_count: number; excluded: number };
 export type DraftResult = {
   draft: {
     id: string | null; title_zh: string; hypothesis: string; hypothesis_zh: string; rationale: Rationale;
@@ -133,12 +137,13 @@ export type DraftResult = {
   evidence: { groups: string[]; alpha158: EvidenceAlpha[]; internal?: InternalEvidence[]; past_runs: { run_id: string; market: Market; loop: number; hypothesis: string; adopted: boolean }[] };
   mandate: Mandate;
   meta: { model: string; prompt_version: string; prompt_tokens: number; completion_tokens: number; seconds: number; at: string; idea_id?: string | null;
-    idea_ids?: string[]; combo_id?: string | null; based_on?: string | null };
+    idea_ids?: string[]; combo_id?: string | null; based_on?: string | null; external_evidence?: ExternalEvidence[] };
 };
 export type DraftInput = {
   hypothesis: string; direction: string; markets: Market[]; horizon: number; mandate: string; groups: string[]; include_past_runs: boolean;
   exclusions?: string[];
   idea_id?: string | null; idea_ids?: string[]; combo_id?: string | null; based_on?: string | null;
+  external_evidence?: ExternalEvidence[];
 };
 export type RegionDiff = {
   markets: Market[]; markets_version: string; rule_packs: Partial<Record<Market, string>>; differs: number; note: string;
@@ -269,12 +274,14 @@ export type AgentJob = Omit<Job, "kind" | "market" | "state"> & {
   kind?: "agent" | "validate" | "monitor" | "paper" | "text";
   market: string; state: JobState | "waiting_children" | "awaiting_human";
   agent_id?: string; child_jobs?: string[]; agent_state?: string;
+  target_run?: string | null; loop?: number | null;
 };
 export type Agent = {
   agent_id: string; kind: string; state: AgentState; created_at: string; updated_at: string;
   root: { research_id: string; version: number; markets: Market[]; horizon: number };
   policy: Record<string, unknown>; current_round: number; current_version: number; parent_version: number;
   child_version: number | null; round_limit: number; dry_run: boolean; auto_approve: boolean;
+  web_search?: boolean; deep_think?: boolean;
   approved: AgentApproval | null; cost_usd: number; costed_jobs: string[];
   usage: { prompt_tokens: number; completion_tokens: number }; child_jobs: string[];
   last_action: unknown; stop_reason: string | null; last_error: string | null; job_state?: string | null;
@@ -282,11 +289,13 @@ export type Agent = {
 export type AgentFact = { id: string; key: string; market: Market | null; period: string; text: string; redacted: boolean };
 export type AgentRound = {
   n: number; facts: { facts: AgentFact[]; summary: Record<string, unknown> } | null;
+  external?: { query: string; provider?: string | null; model?: string | null; configured?: boolean; before?: string | null;
+    results: ExternalEvidence[]; error: string | null; warning?: string | null } | null;
   diagnosis: any | null; plan: any | null; draft_action: any | null;
   next_version_draft: { draft: Record<string, any>; meta: Record<string, any> } | null;
   approval: AgentApproval | null; action: Record<string, any> | null; evaluation: Record<string, any> | null;
 };
-export type AgentTrace = { at: string; kind: string; role?: string; model?: string; usage?: Record<string, unknown>;
+export type AgentTrace = { at: string; kind: string; role?: string; round?: number; model?: string; usage?: Record<string, unknown>;
   prompt_version?: string; prompt?: string; response?: string; from?: string; to?: string;
   tool?: string; args?: unknown; result?: unknown; count?: number; [key: string]: unknown };
 export type AgentDetail = { agent: Agent; rounds: AgentRound[]; children: AgentJob[]; job: AgentJob | null; report: string | null;
@@ -734,6 +743,7 @@ export const api = {
   library: () => get<Library>("/library"),
   complement: (m: Market, keys?: string[]) => get<Complement>(`/complement/${m}${keys && keys.length ? `?keys=${keys.join(",")}` : ""}`),
   knowledge: (q: string, llm = true) => get<KnowledgeSearch>(`/knowledge/search?q=${encodeURIComponent(q)}&llm=${llm}`),
+  webSearch: (q: string) => get<WebSearch>(`/web/search?q=${encodeURIComponent(q)}`),
   regions: (markets: Market[], mandate?: string) => get<RegionDiff>(`/research/regions?markets=${markets.join(",")}${mandate ? `&mandate=${mandate}` : ""}`),
   pit: () => get<PitStatus>("/pit"),
   rulePacks: () => get<RulePacks>("/rules/packs"),
@@ -837,7 +847,8 @@ export const api = {
   agentTrace: (id: string) => get<{ items: AgentTrace[] }>(`/agents/${id}/trace`),
   agentReport: (id: string) => get<{ markdown: string }>(`/agents/${id}/report`),
   agentOverlap: (id: string) => get<AgentOverlap>(`/agents/${id}/overlap`),
-  createAgent: (body: { research_id: string; version: number; rounds?: number; markets?: Market[]; budget_usd?: number }) =>
+  createAgent: (body: { research_id: string; version: number; rounds?: number; markets?: Market[]; budget_usd?: number;
+    web_search?: boolean; deep_think?: boolean }) =>
     post<{ agent: Agent; job: AgentJob }>("/agents", body),
   approveAgent: (id: string, body: { draft?: Record<string, unknown>; run?: boolean; by?: string }) =>
     post<{ agent: Agent; saved: Spec; job: AgentJob | null }>(`/agents/${id}/approve`, body),

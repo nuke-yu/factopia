@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, MARKETS, type Agent, type AgentJob, type AgentRound, type AgentTrace, type Market, type ResearchTermination } from "../api";
 import { fix, pct, useAsync, MARKET_LABEL } from "../lib";
@@ -26,7 +26,7 @@ const VERDICT_LABEL: Record<string, string> = {
 };
 
 type NoticeKind = "starting" | "children" | "validating" | "evaluating" | "evaluated"
-  | "saved" | "rejected" | "stopped" | "failed";
+  | "awaiting_human" | "saved" | "rejected" | "stopped" | "failed";
 type Stage = { key: string; kind: NoticeKind; text: string };
 
 function StateBadge({ state, flash = false }: { state: string; flash?: boolean }) {
@@ -39,6 +39,10 @@ function approvalLabel(decision?: string) {
 
 /** 从服务端状态推导当前阶段提示：启动 → 子任务 → 可信度检查 → 评估 → 完成。 */
 function computeStage(agent: Agent, rounds: AgentRound[], children: AgentJob[]): Stage | null {
+  if (agent.state === "awaiting_human" && !agent.approved) {
+    return { key: `awaiting:${agent.current_round}:${agent.current_version}`, kind: "awaiting_human",
+      text: t("下一版草稿已生成，等待人工批准。请审改后点击「批准并运行」或「只保存版本」。") };
+  }
   if (!agent.approved || agent.approved.decision !== "approved") return null;
   if (agent.approved.run === false) {
     return { key: `saved:${agent.approved.saved_version}`, kind: "saved",
@@ -146,10 +150,17 @@ function AgentDetailView({ id }: { id: string }) {
   const [dismissedStage, setDismissedStage] = useState<string | null>(null);
   const [confirmTerminate, setConfirmTerminate] = useState(false);
   const [terminatedLocal, setTerminatedLocal] = useState<ResearchTermination | null>(null);
+  const [showWorkflow, setShowWorkflow] = useState(true);
+  const [showTrace, setShowTrace] = useState(false);
   const lastStage = useRef<string | null>(null);
   const childJobsRef = useRef<HTMLDivElement>(null);
   const detail = useAsync(() => api.agent(id), [id, tick]);
   const trace = useAsync(() => api.agentTrace(id), [id, tick]);
+  useEffect(() => {
+    // 每个 Agent 默认展开 AI 生成过程；切换 Agent 时重置。
+    setShowWorkflow(true);
+    setShowTrace(false);
+  }, [id]);
   useEffect(() => {
     const state = detail.data?.agent.state;
     if (!state || !POLLING.has(state)) return;
@@ -231,8 +242,9 @@ function AgentDetailView({ id }: { id: string }) {
   const canStop = RUNNING.has(agent.state) || agent.state === "awaiting_human";
   const noticePulse = ["starting", "children", "validating", "evaluating"].includes(noticeKind ?? "");
   const noticeTitle = noticeKind === "starting" ? t("已批准，正在启动")
-    : ["children", "validating", "evaluating"].includes(noticeKind ?? "") ? t("进度")
-      : noticeKind === "evaluated" ? t("评估完成") : t("提示");
+    : noticeKind === "awaiting_human" ? t("等待人工批准")
+      : ["children", "validating", "evaluating"].includes(noticeKind ?? "") ? t("进度")
+        : noticeKind === "evaluated" ? t("评估完成") : t("提示");
   const dismissNotice = () => {
     setNotice(null);
     setNoticeKind(null);
@@ -252,6 +264,8 @@ function AgentDetailView({ id }: { id: string }) {
         </div>
         <div className="ml-auto flex items-center gap-2">
           <StateBadge state={agent.state} flash={POLLING.has(agent.state) && agent.state !== "awaiting_human"} />
+          {agent.web_search && <Badge tone="accent">{t("联网")}</Badge>}
+          {agent.deep_think && <Badge tone="warn">{t("深度思考")}</Badge>}
           <button className="btn h-8 px-3 text-xs" disabled={!!terminated || busy}
             style={terminated ? { cursor: "not-allowed" } : undefined}
             title={terminated ? t("当前研究已终止") : t("人工终止当前研究；终止后该研究不能再启动 Agent")}
@@ -298,6 +312,18 @@ function AgentDetailView({ id }: { id: string }) {
         </p>
       </Panel>
 
+      <AgentTraceControls showTrace={showTrace} showWorkflow={showWorkflow}
+        onToggleTrace={() => setShowTrace((v) => !v)}
+        onToggleWorkflow={() => setShowWorkflow((v) => !v)} />
+
+      {showWorkflow && (
+        <div id="agent-workflow" className="scroll-mt-20">
+          <WorkflowProgress agent={agent} rounds={rounds} jobs={childJobs} />
+        </div>
+      )}
+
+      {showTrace && <TracePanel items={trace.data?.items || []} error={trace.error} />}
+
       <div ref={childJobsRef} className="scroll-mt-20">
         <ChildJobsPanel items={childJobs} />
       </div>
@@ -311,7 +337,6 @@ function AgentDetailView({ id }: { id: string }) {
       {evaluation && <NextStepsPanel agent={agent} evaluation={evaluation} childJobs={childJobs} terminated={!!terminated} />}
       {evaluation && <OverlapPanel id={id} version={agent.current_version} />}
 
-      <TracePanel items={trace.data?.items || []} error={trace.error} />
       {report && (
         <Panel eyebrow={t("报告")} title={t("迭代报告")}>
           <details><summary className="cursor-pointer text-sm text-text">{t("展开 report.md")}</summary>
@@ -319,6 +344,215 @@ function AgentDetailView({ id }: { id: string }) {
         </Panel>
       )}
     </div>
+  );
+}
+
+type StepStatus = "done" | "active" | "pending" | "failed" | "skipped";
+const STEP_TONE: Record<StepStatus, "good" | "accent" | "muted" | "bad"> = {
+  done: "good", active: "accent", pending: "muted", failed: "bad", skipped: "muted",
+};
+const STEP_LABEL: Record<StepStatus, string> = {
+  done: t("已完成"), active: t("进行中"), pending: t("等待"), failed: t("失败"), skipped: t("跳过"),
+};
+
+function WorkflowStep({ title, status, children }: { title: string; status: StepStatus; children: ReactNode }) {
+  const dot = { done: "bg-good", active: "bg-accent state-flash", pending: "bg-line-2", failed: "bg-bad", skipped: "bg-faint" }[status];
+  return (
+    <li className="flex gap-3" data-status={status}>
+      <span className={`mt-1.5 size-2.5 shrink-0 rounded-full ${dot}`} aria-hidden />
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className={`text-sm font-medium ${status === "pending" ? "text-muted" : status === "skipped" ? "text-faint" : status === "failed" ? "text-bad" : "text-text"}`}>{title}</span>
+          <Badge tone={STEP_TONE[status]}>{STEP_LABEL[status]}</Badge>
+        </div>
+        <div className="text-xs text-muted mt-0.5">{children}</div>
+      </div>
+    </li>
+  );
+}
+
+function runText(j: AgentJob) {
+  const m = MARKET_LABEL[j.market as Market] ?? j.market;
+  const phrase = j.state === "running" ? t("正在运行中")
+    : j.state === "done" ? t("已完成运行")
+      : j.state === "failed" ? t("失败")
+        : j.state === "queued" ? t("排队中")
+          : j.state === "cancelled" ? t("已取消")
+            : j.state === "budget_stopped" ? t("超出预算停止") : String(j.state);
+  return tf("{m}市场{p}", { m, p: phrase });
+}
+
+function validationText(j: AgentJob) {
+  const m = MARKET_LABEL[j.market as Market] ?? j.market;
+  const phrase = j.state === "running" ? t("进行中")
+    : j.state === "done" ? t("已完成")
+      : j.state === "failed" ? t("失败")
+        : j.state === "queued" ? t("排队中") : String(j.state);
+  return tf("{m}市场可信度检查：{p}", { m, p: phrase });
+}
+
+/** 当前轮次的业务流程：每一步在做什么、结果是什么；RD-Agent 日志留在「04 运行中」。 */
+function WorkflowProgress({ agent, rounds, jobs }: { agent: Agent; rounds: AgentRound[]; jobs: AgentJob[] }) {
+  const round = rounds.find((r) => r.n === agent.current_round) ?? rounds[rounds.length - 1] ?? null;
+  const facts = round?.facts;
+  const diagnosis = round?.diagnosis as Record<string, any> | null;
+  const external = round?.external;
+  const plan = round?.plan as Record<string, any> | null;
+  const draft = round?.next_version_draft as Record<string, any> | null;
+  const approval = round?.approval ?? null;
+  const action = round?.action as Record<string, any> | null;
+  const evaluation = round?.evaluation as Record<string, any> | null;
+  const summary = (facts?.summary || {}) as Record<string, any>;
+  const actionIds = new Set<string>((action?.child_jobs || []) as string[]);
+  const savedVersion = approval?.saved_version ?? null;
+  const runJobs = jobs.filter((j) => j.kind !== "validate" &&
+    (actionIds.size ? actionIds.has(j.job_id) : savedVersion != null && j.version === savedVersion));
+  const runIds = new Set(runJobs.map((j) => j.run_id).filter((x): x is string => !!x));
+  const valJobs = jobs.filter((j) => j.kind === "validate" &&
+    ((j.target_run && runIds.has(j.target_run)) || (savedVersion != null && j.version === savedVersion)));
+  const markets = [...new Set((plan?.args?.changes?.markets ?? plan?.args?.markets ?? agent.root.markets) as Market[])];
+  const actionLabel: Record<string, string> = {
+    new_version: t("生成下一版"), stop: t("停止"), run_rdagent: t("运行已保存版本"),
+    run_text: t("运行文本版本"), validate: t("可信度检查"), diagnose: t("重新诊断"),
+  };
+  const needed = !plan || plan.action === "new_version";
+  const runActive = runJobs.some((j) => ["queued", "running"].includes(j.state));
+  const runFailed = runJobs.some((j) => j.state === "failed");
+  const runDone = runJobs.length > 0 && runJobs.every((j) => j.state === "done");
+  const valActive = valJobs.some((j) => ["queued", "running"].includes(j.state));
+  const valFailed = valJobs.some((j) => j.state === "failed");
+  const valDone = valJobs.length > 0 && valJobs.every((j) => j.state === "done");
+
+  const observe: StepStatus = facts ? "done" : ["queued", "observing"].includes(agent.state) ? "active" : "pending";
+  const diagnose: StepStatus = diagnosis ? "done" : agent.state === "diagnosing" ? "active" : "pending";
+  const web: StepStatus = external ? "done" : agent.state === "diagnosing" && diagnosis ? "active" : "pending";
+  const planning: StepStatus = plan ? "done" : agent.state === "planning" ? "active" : "pending";
+  const deep: StepStatus = plan?.deep_think ? "done" : agent.state === "planning" && plan ? "active" : "pending";
+  const draftStatus: StepStatus = !needed ? "skipped" : draft ? "done" : agent.state === "planning" && plan ? "active" : "pending";
+  const approvalStatus: StepStatus = !needed ? "skipped" : approval
+    ? approval.decision === "rejected" ? "failed" : "done"
+    : agent.state === "awaiting_human" ? "active" : "pending";
+  const runStatus: StepStatus = !needed || approval?.run === false || approval?.decision === "rejected" ? "skipped"
+    : runJobs.length ? runFailed ? "failed" : runActive ? "active" : "done"
+      : approval?.decision === "approved" ? "active" : "pending";
+  const valStatus: StepStatus = !needed || approval?.run === false || approval?.decision === "rejected" ? "skipped"
+    : valJobs.length ? valFailed ? "failed" : valActive ? "active" : valDone ? "done" : "active"
+      : runDone ? "active" : "pending";
+  const evalStatus: StepStatus = !needed ? "skipped" : evaluation ? "done" : agent.state === "evaluating" ? "active" : "pending";
+  const finishStatus: StepStatus = agent.state === "failed" ? "failed"
+    : ["stopped", "done"].includes(agent.state) ? "done"
+      : agent.state === "queued" && evaluation ? "active" : "pending";
+
+  const workflowListRef = useRef<HTMLOListElement>(null);
+  const focusKey = [observe, diagnose, web, planning, deep, draftStatus, approvalStatus,
+    runStatus, valStatus, evalStatus, finishStatus, agent.state].join("|");
+  useEffect(() => {
+    const list = workflowListRef.current;
+    if (!list) return;
+    const lastDone = [...list.querySelectorAll<HTMLElement>('li[data-status="done"]')].at(-1);
+    const target = list.querySelector<HTMLElement>('li[data-status="active"]')
+      ?? list.querySelector<HTMLElement>('li[data-status="failed"]')
+      ?? lastDone
+      ?? (list.lastElementChild as HTMLElement | null);
+    if (!target) return;
+    const top = target.getBoundingClientRect().top - list.getBoundingClientRect().top + list.scrollTop;
+    const behavior = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ? "auto" : "smooth";
+    list.scrollTo({ top: Math.max(0, top - list.clientHeight / 2 + target.clientHeight / 2), behavior });
+  }, [focusKey]);
+
+  return (
+    <Panel eyebrow={tf("第 {n} 轮", { n: round?.n ?? (agent.current_round || 1) })}
+      title={<span className={RUNNING.has(agent.state) ? "state-flash" : ""}>{t("AI生成假设，思考中...")}</span>}>
+      <p className="text-xs text-faint mb-2">{t("RD-Agent 原始日志请在「04 运行中」查看；这里只显示流程状态与结果。")}</p>
+      <ol ref={workflowListRef} className="workflow-scroll flex flex-col gap-2 pr-1">
+        <WorkflowStep title={t("观察事实")} status={observe}>
+          {facts ? tf("事实 {n} 条 · 平台结论：{a} · 迁移：{b}", {
+            n: facts.facts.length, a: t(String(summary.overall?.label ?? "—")), b: t(String(summary.transfer?.label ?? "—")),
+          }) : observe === "active" ? t("正在生成事实包…") : t("等待开始")}
+        </WorkflowStep>
+
+        <WorkflowStep title={t("诊断问题")} status={diagnose}>
+          {diagnosis ? <>{diagnosis.primary_cause?.text || "—"}<span className="text-faint"> · {tf("置信度 {c}", { c: diagnosis.confidence || "—" })}</span></>
+            : diagnose === "active" ? t("正在诊断…") : t("等待事实包")}
+        </WorkflowStep>
+
+        {agent.web_search && (
+          <WorkflowStep title={t("联网检索")} status={web}>
+            {external ? external.configured
+              ? tf("外部资料 {n} 条（{d} 前）", { n: external.results?.length ?? 0, d: external.before ?? "—" })
+              : t("未配置或不可用")
+              : web === "active" ? t("正在检索外部资料…") : t("等待诊断完成")}
+          </WorkflowStep>
+        )}
+
+        <WorkflowStep title={t("规划下一步")} status={planning}>
+          {plan ? <>{tf("动作：{a}", { a: actionLabel[String(plan.action)] ?? String(plan.action) })}{plan.expected_outcome ? ` · ${plan.expected_outcome}` : ""}</>
+            : planning === "active" ? t("正在规划下一步…") : t("等待诊断完成")}
+        </WorkflowStep>
+
+        {agent.deep_think && (
+          <WorkflowStep title={t("深度思考评审")} status={deep}>
+            {plan?.deep_think
+              ? plan.deep_think.critique
+                ? <>{plan.deep_think.critique.verdict === "accept" ? t("通过评审") : t("需要修订")} · {plan.deep_think.revised ? t("已按评审修订") : t("保留原计划")}{plan.deep_think.critique.model ? ` · ${plan.deep_think.critique.model}` : ""}</>
+                : t("评审未返回，已保留原计划")
+              : deep === "active" ? t("Critic 正在评审计划…") : t("等待 Planner 草案")}
+          </WorkflowStep>
+        )}
+
+        <WorkflowStep title={t("生成下一版草稿")} status={draftStatus}>
+          {draftStatus === "skipped" ? t("本轮不需要下一版") : draft
+            ? tf("下一版草稿：{t}", { t: draft.draft?.title_zh || draft.draft?.title || "—" })
+            : draftStatus === "active" ? t("正在生成下一版草稿…") : t("等待计划")}
+        </WorkflowStep>
+
+        <WorkflowStep title={t("人工批准")} status={approvalStatus}>
+          {approvalStatus === "skipped" ? t("本轮不需要人工批准") : approval
+            ? <>{approvalLabel(approval.decision)} · {approval.by} · v{approval.saved_version ?? "—"} · {approval.run ? t("自动运行") : t("只保存版本")}</>
+            : approvalStatus === "active" ? t("等待人工批准") : t("等待草稿")}
+        </WorkflowStep>
+
+        <WorkflowStep title={t("运行新版本")} status={runStatus}>
+          {runStatus === "skipped" ? (approval?.run === false ? t("下一版已保存，未启动运行") : t("本轮不需要运行"))
+            : runJobs.length ? (
+              <div className="flex flex-col gap-0.5">
+                {markets.map((m) => {
+                  const j = runJobs.find((x) => x.market === m);
+                  return <div key={m}>{j ? runText(j) : tf("{m}市场{p}", { m: MARKET_LABEL[m], p: t("等待运行") })}</div>;
+                })}
+              </div>
+            ) : approval?.decision === "approved" ? t("正在创建子运行任务…") : t("等待人工批准")}
+        </WorkflowStep>
+
+        <WorkflowStep title={t("可信度检查")} status={valStatus}>
+          {valStatus === "skipped" ? t("本轮不需要可信度检查")
+            : valJobs.length ? (
+              <div className="flex flex-col gap-0.5">
+                {markets.map((m) => {
+                  const j = valJobs.find((x) => x.market === m);
+                  return <div key={m}>{j ? validationText(j) : tf("{m}市场可信度检查：{p}", { m: MARKET_LABEL[m], p: t("等待") })}</div>;
+                })}
+              </div>
+            ) : runDone ? t("子运行已完成，准备可信度检查") : t("等待子运行完成")}
+        </WorkflowStep>
+
+        <WorkflowStep title={t("评估与回流")} status={evalStatus}>
+          {evalStatus === "skipped" ? t("本轮不需要评估")
+            : evaluation ? <>{VERDICT_LABEL[evaluation.verdict] ?? evaluation.verdict} · {evaluation.reason || "—"}
+              {evaluation.precheck && <> · {tf("阻断 {b} / 警告 {w} / 提示 {i}", {
+                b: evaluation.precheck.counts?.block ?? 0, w: evaluation.precheck.counts?.warn ?? 0, i: evaluation.precheck.counts?.info ?? 0,
+              })}</>}
+              {evaluation.idea_id && <> · <Link className="text-accent hover:underline" to={`/ideas?id=${evaluation.idea_id}`}>{tf("自动回流线索 {id}", { id: evaluation.idea_id })}</Link></>}
+            </> : evalStatus === "active" ? t("正在评估…") : t("等待可信度检查")}
+        </WorkflowStep>
+
+        <WorkflowStep title={t("本轮结束 / 下一轮")} status={finishStatus}>
+          {finishStatus === "failed" ? agent.last_error || t("Agent 失败")
+            : finishStatus === "done" ? agent.stop_reason || t("本轮结束")
+              : finishStatus === "active" ? t("准备下一轮") : t("等待评估")}
+        </WorkflowStep>
+      </ol>
+    </Panel>
   );
 }
 
@@ -347,7 +581,8 @@ function ChildJobsPanel({ items }: { items: AgentJob[] }) {
                     <td className="pl-3" style={j.run_id && !failed
                       ? { background: "color-mix(in oklab, var(--accent) 8%, transparent)" }
                       : undefined}>{j.run_id
-                      ? <Link className="text-accent num text-xs" to={`${j.state === "done" ? "/results" : "/run"}?run=${j.run_id}`}>{j.run_id}</Link>
+                      ? <Link className="text-accent num text-xs"
+                        to={j.state === "done" ? `/results?run=${j.run_id}` : `/run?run=${j.run_id}&job=${j.job_id}`}>{j.run_id}</Link>
                       : "—"}</td>
                     <td className="pl-3 text-xs text-bad">{j.error || "—"}</td>
                   </tr>
@@ -450,6 +685,7 @@ function RoundCard({ agent, round, busy, awaiting, onApprove, onReject }: {
 }) {
   const facts = round.facts?.facts || [];
   const summary = (round.facts?.summary || {}) as Record<string, any>;
+  const external = round.external;
   const diagnosis = round.diagnosis as Record<string, any> | null;
   const plan = round.plan as Record<string, any> | null;
   const draft = round.next_version_draft?.draft || null;
@@ -468,6 +704,28 @@ function RoundCard({ agent, round, busy, awaiting, onApprove, onReject }: {
           </ul>
         </details>
 
+        {external && (
+          <details className="text-sm">
+            <summary className="cursor-pointer text-text">
+              {t("联网检索")} · {external.configured ? tf("{n} 条结果", { n: external.results?.length ?? 0 }) : t("未配置")}
+              {external.model && <span className="text-faint"> · {external.model}</span>}
+            </summary>
+            <p className="text-xs text-faint mt-1">{tf("查询：{q}", { q: external.query })}</p>
+            {external.warning && <p className="text-xs text-warn">{t(external.warning)}</p>}
+            {external.error && <p className="text-xs text-warn">{external.error}</p>}
+            <ul className="mt-1 flex flex-col gap-0.5 text-xs">
+              {(external.results || []).map((r) => (
+                <li key={r.url || r.title}>
+                  {r.url
+                    ? <a href={r.url} target="_blank" rel="noreferrer" className="text-accent hover:underline">{r.title}</a>
+                    : <span>{r.title}</span>}
+                  <span className="text-faint"> · {r.published || "—"}</span>
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
+
         {diagnosis && (
           <div className="text-sm">
             <div className="label mb-1">{t("诊断")} · {diagnosis.confidence}</div>
@@ -484,6 +742,29 @@ function RoundCard({ agent, round, busy, awaiting, onApprove, onReject }: {
             {plan.success_criteria && <p className="text-xs text-muted mt-1">{t("预注册标准：")}{JSON.stringify(plan.success_criteria)}</p>}
             {plan.rationale && <p className="text-xs text-muted mt-1">{plan.rationale.text} <span className="num text-faint">[{plan.rationale.cites?.join(", ")}]</span></p>}
             {plan.stop_condition && <p className="text-xs text-faint mt-1">{t("停止条件：")}{plan.stop_condition}</p>}
+            {plan.deep_think?.critique && (
+              <details className="mt-2 border-t border-line pt-2">
+                <summary className="cursor-pointer text-sm">
+                  {t("深度思考 · 多智能体评审")} · {plan.deep_think.critique.verdict} ·{" "}
+                  {plan.deep_think.revised ? t("已按评审修订") : t("保留原计划")}
+                  {plan.deep_think.critique.model && <span className="text-faint"> · {plan.deep_think.critique.model}</span>}
+                </summary>
+                <ul className="mt-1 flex flex-col gap-1 text-xs">
+                  {(plan.deep_think.critique.issues || []).map((x: any, i: number) => (
+                    <li key={i} className="flex flex-wrap items-baseline gap-1.5">
+                      <Badge tone={x.severity === "block" ? "bad" : "warn"}>{x.severity === "block" ? t("阻断") : t("提醒")}</Badge>
+                      <span className="text-muted">{x.text}</span>
+                      {!!x.cites?.length && <span className="num text-faint">[{x.cites.join(", ")}]</span>}
+                    </li>
+                  ))}
+                </ul>
+                {!!plan.deep_think.critique.required_changes?.length && (
+                  <ul className="mt-1 list-disc pl-4 text-xs text-muted">
+                    {plan.deep_think.critique.required_changes.map((x: string, i: number) => <li key={i}>{x}</li>)}
+                  </ul>
+                )}
+              </details>
+            )}
           </div>
         )}
 
@@ -624,32 +905,57 @@ function DraftEditor({ agent, draft, busy, onApprove, onReject }: {
   );
 }
 
-function TracePanel({ items, error }: { items: AgentTrace[]; error?: string }) {
+function TraceRows({ items, error }: { items: AgentTrace[]; error?: string }) {
   if (error) return <ErrorBox error={error} />;
   const rows = [...items].reverse().slice(0, 120);
   return (
+    <ul className="flex flex-col gap-1 text-xs">
+      {rows.map((x, i) => (
+        <li key={i} className="border-b border-line/60 py-1">
+          <span className="num text-faint">{String(x.at || "").slice(11, 19)}</span>{" "}
+          <Badge tone={x.kind === "llm" ? "accent" : x.kind === "state" ? "muted" : "warn"}>{x.kind}</Badge>{" "}
+          {x.role && <span className="text-muted">{x.role}</span>}{" "}
+          {x.model && <span className="text-faint">{x.model}</span>}{" "}
+          {x.from && x.to && <span className="num">{x.from} → {x.to}</span>}{" "}
+          {x.tool && <span className="num">{x.tool}</span>}{" "}
+          {x.usage?.usd != null && <span className="num text-faint">${Number(x.usage.usd).toFixed(4)}</span>}
+          {x.prompt && (
+            <details className="mt-1"><summary className="cursor-pointer text-faint">{t("提示词 / 回答")}</summary>
+              <pre className="num text-[11px] whitespace-pre-wrap mt-1 max-h-40 overflow-auto">{String(x.prompt)}</pre>
+              <pre className="num text-[11px] whitespace-pre-wrap mt-1 max-h-40 overflow-auto">{String(x.response || "")}</pre>
+            </details>
+          )}
+        </li>
+      ))}
+      {rows.length === 0 && <li className="text-faint">{t("还没有 trace。")}</li>}
+    </ul>
+  );
+}
+
+function AgentTraceControls({ showTrace, showWorkflow, onToggleTrace, onToggleWorkflow }: {
+  showTrace: boolean; showWorkflow: boolean; onToggleTrace: () => void; onToggleWorkflow: () => void;
+}) {
+  return (
+    <Panel eyebrow={t("可观测性")} title={t("AI 生成与决策轨迹")}>
+      <div className="flex flex-wrap gap-2">
+        <button type="button" className={`btn h-8 ${showTrace ? "border-accent text-accent" : ""}`}
+          aria-pressed={showTrace} onClick={onToggleTrace}>
+          {showTrace ? t("隐藏决策轨迹") : t("显示决策轨迹")}
+        </button>
+        <button type="button" className={`btn h-8 ${showWorkflow ? "border-accent text-accent" : ""}`}
+          aria-pressed={showWorkflow} onClick={onToggleWorkflow}>
+          {showWorkflow ? t("隐藏生成下一个AI的思考过程") : t("显示生成下一个AI的思考过程")}
+        </button>
+      </div>
+    </Panel>
+  );
+}
+
+function TracePanel({ items, error }: { items: AgentTrace[]; error?: string }) {
+  return (
     <Panel eyebrow={t("可观测性")} title={t("决策轨迹（trace）")}>
       <p className="text-xs text-muted mb-2">{t("每次 LLM 调用、工具调用和状态迁移；完整内容在 runtime/agents/<id>/trace.jsonl。")}</p>
-      <ul className="flex flex-col gap-1 text-xs">
-        {rows.map((x, i) => (
-          <li key={i} className="border-b border-line/60 py-1">
-            <span className="num text-faint">{String(x.at || "").slice(11, 19)}</span>{" "}
-            <Badge tone={x.kind === "llm" ? "accent" : x.kind === "state" ? "muted" : "warn"}>{x.kind}</Badge>{" "}
-            {x.role && <span className="text-muted">{x.role}</span>}{" "}
-            {x.model && <span className="text-faint">{x.model}</span>}{" "}
-            {x.from && x.to && <span className="num">{x.from} → {x.to}</span>}{" "}
-            {x.tool && <span className="num">{x.tool}</span>}{" "}
-            {x.usage?.usd != null && <span className="num text-faint">${Number(x.usage.usd).toFixed(4)}</span>}
-            {x.prompt && (
-              <details className="mt-1"><summary className="cursor-pointer text-faint">{t("提示词 / 回答")}</summary>
-                <pre className="num text-[11px] whitespace-pre-wrap mt-1 max-h-64 overflow-auto">{String(x.prompt)}</pre>
-                <pre className="num text-[11px] whitespace-pre-wrap mt-1 max-h-64 overflow-auto">{String(x.response || "")}</pre>
-              </details>
-            )}
-          </li>
-        ))}
-        {rows.length === 0 && <li className="text-faint">{t("还没有 trace。")}</li>}
-      </ul>
+      <div className="workflow-scroll pr-1"><TraceRows items={items} error={error} /></div>
     </Panel>
   );
 }

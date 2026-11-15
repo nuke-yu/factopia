@@ -132,6 +132,8 @@ function ContinueMenu({ researchId, version, current, study, terminated, savedId
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [savingIdea, setSavingIdea] = useState(false);
+  const [webSearch, setWebSearch] = useState(false);
+  const [deepThink, setDeepThink] = useState(false);
   const [terminating, setTerminating] = useState(false);
   const [confirmTerminate, setConfirmTerminate] = useState(false);
   const [localTerm, setLocalTerm] = useState<ResearchTermination | null>(null);
@@ -144,7 +146,8 @@ function ContinueMenu({ researchId, version, current, study, terminated, savedId
   async function startAgent() {
     setBusy(true); setError(null);
     try {
-      const r = await api.createAgent({ research_id: researchId, version, rounds: 1, markets });
+      const r = await api.createAgent({ research_id: researchId, version, rounds: 1, markets,
+        web_search: webSearch, deep_think: deepThink });
       navigate(`/agents/${r.agent.agent_id}`);
     } catch (e) {
       setError((e as Error).message);
@@ -190,13 +193,32 @@ function ContinueMenu({ researchId, version, current, study, terminated, savedId
       {open && (
         <div className="absolute right-0 z-30 mt-1 w-80" style={{ position: "absolute" }}>
           <div className="panel p-2 flex flex-col gap-1 text-sm shadow-xl">
-            <button type="button"
-              className={`text-left rounded p-2 ${term ? "opacity-50 cursor-not-allowed" : "hover:bg-line/40 cursor-pointer"}`}
-              disabled={busy || !!term} onClick={startAgent}
-              title={term ? t("该研究已终止，不能生成新版本") : undefined}>
-              <div className="font-medium">{tf("AI 生成下一版假设（v{n}）并自动运行", { n: version + 1 })}</div>
-              <div className="text-xs text-muted">{term ? t("该研究已终止，不能生成新版本") : t("AI 诊断并生成下一版草稿；人工批准后自动运行与评估")}</div>
-            </button>
+            <div className={`rounded p-2 ${term ? "opacity-50" : ""}`}>
+              <button type="button"
+                className={`w-full text-left ${term ? "cursor-not-allowed" : "hover:bg-line/40 cursor-pointer"} rounded`}
+                disabled={busy || !!term} onClick={startAgent}
+                title={term ? t("该研究已终止，不能生成新版本") : undefined}>
+                <div className="font-medium">{tf("AI 生成下一版假设（v{n}）并自动运行", { n: version + 1 })}</div>
+                <div className="text-xs text-muted">{term ? t("该研究已终止，不能生成新版本") : t("AI 诊断并生成下一版草稿；人工批准后自动运行与评估")}</div>
+              </button>
+              <div className="flex flex-wrap items-center gap-3 mt-1.5 text-xs">
+                <label className={`flex items-center gap-1.5 ${term ? "cursor-not-allowed" : "cursor-pointer"}`}>
+                  <input type="checkbox" checked={webSearch} disabled={busy || !!term} onChange={(e) => setWebSearch(e.target.checked)} />
+                  {t("联网")}
+                </label>
+                <label className={`flex items-center gap-1.5 ${term ? "cursor-not-allowed" : "cursor-pointer"}`}>
+                  <input type="checkbox" checked={deepThink} disabled={busy || !!term} onChange={(e) => setDeepThink(e.target.checked)} />
+                  {t("深度思考")}
+                </label>
+              </div>
+              {(webSearch || deepThink) && (
+                <p className="text-[11px] text-faint mt-1">
+                  {webSearch ? t("联网：诊断后检索测试期前的公开资料（需配置搜索 key）") : ""}
+                  {webSearch && deepThink ? " · " : ""}
+                  {deepThink ? t("深度思考：Planner → Critic → 修订，多一轮模型评审（更慢、更贵）") : ""}
+                </p>
+              )}
+            </div>
             <button type="button"
               className={`text-left rounded p-2 ${term ? "opacity-50 cursor-not-allowed" : "hover:bg-line/40 cursor-pointer"}`}
               disabled={busy || !!term} onClick={() => { if (!term) { setOpen(false); navigate(`/research?based_on=${researchId}.v${version}`); } }}

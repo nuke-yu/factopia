@@ -24,7 +24,8 @@ DEFAULTS = {
     "costly_tools": ["new_version", "run_rdagent", "run_text"],
     "prompts": {
         "critic": "iteration-critic-v1",
-        "planner": "iteration-planner-v1",
+        "planner": "iteration-planner-v2",
+        "plan_critic": "iteration-plan-critic-v1",
         "evaluator": "iteration-evaluator-v1",
     },
 }

@@ -88,7 +88,7 @@ def dir_path(agent_id: str) -> Path:
 
 
 def create(research_id: str, version: int, policy: dict, markets: list[str], horizon: int,
-           dry_run: bool = False) -> dict:
+           dry_run: bool = False, web_search: bool = False, deep_think: bool = False) -> dict:
     """新建一个 Agent 记录；根研究版本、策略与预算在启动时固定。"""
     agent = {
         "agent_id": new_id(), "kind": "iteration", "state": "queued",
@@ -103,6 +103,8 @@ def create(research_id: str, version: int, policy: dict, markets: list[str], hor
         "round_limit": int(policy.get("max_rounds") or 5),
         "rounds": [],
         "dry_run": bool(dry_run),
+        "web_search": bool(web_search),
+        "deep_think": bool(deep_think),
         "auto_approve": False,
         "approved": None,
         "approved_run": True,

@@ -19,7 +19,7 @@ from pathlib import Path
 from factopia.research import evidence, mandates, regions
 from factopia.lang import llm_language
 
-PROMPT_VERSION = "rs-draft-v3"   # v3：加入内部知识检索结果（因子库、以往研究、字段口径，只含名称与说明）
+PROMPT_VERSION = "rs-draft-v4"   # v4：可选外部资料（仅测试期前、带引用），并保持内部知识检索
 PROMPT_FILE = Path(__file__).parent / "prompts" / f"{PROMPT_VERSION}.md"
 ID_PATTERN = re.compile(r"^[a-z][a-z0-9_]{2,39}$")
 TEST_YEAR = re.compile(r"20(?:2[2-9]|[3-9]\d)")
@@ -45,19 +45,30 @@ class DraftError(RuntimeError):
     pass
 
 
-def llm_config(lite: bool = False) -> dict:
-    """大模型配置。lite=True 优先用 FACTOPIA_LLM_LITE_MODEL（简单任务）；未配置时回退到大模型。
+def llm_config(lite: bool = False, role: str = "main") -> dict:
+    """大模型配置。
 
-    返回的 lite_model 供 _chat 在“大模型无权限（403）”时自动降级：
-    百炼工作空间可能列出 deepseek-v4-pro 但未授权，复杂任务不应因此不可用。
+    - role="main"（默认）：Planner / 起草 / 标注等复杂任务，用 FACTOPIA_LLM_MODEL；
+    - role="critic"：深度思考的独立 Critic，优先 FACTOPIA_LLM_CRITIC_MODEL；
+      未配置或 403 时回退主模型（不会回退到 Lite）；
+    - lite=True：简单任务，用 FACTOPIA_LLM_LITE_MODEL。
+
+    返回的 lite_model 供 _chat 在“大模型无权限（403）”时自动降级：main 回退 Lite，
+    critic 回退主模型；Lite 不自动回退。
     """
     base = os.environ.get("FACTOPIA_LLM_BASE_URL")
     model = os.environ.get("FACTOPIA_LLM_MODEL")
     key = os.environ.get("FACTOPIA_LLM_API_KEY")
     lite_model = (os.environ.get("FACTOPIA_LLM_LITE_MODEL") or "").strip()
-    chosen = lite_model if lite and lite_model else model
+    critic_model = (os.environ.get("FACTOPIA_LLM_CRITIC_MODEL") or "").strip()
+    if lite:
+        chosen, fallback = (lite_model or model), (lite_model or None)
+    elif role == "critic":
+        chosen, fallback = (critic_model or model), (model if critic_model else None)
+    else:
+        chosen, fallback = model, (lite_model or None)
     if base and key and chosen:
-        return {"base_url": base.rstrip("/"), "model": chosen, "api_key": key, "lite_model": lite_model or None}
+        return {"base_url": base.rstrip("/"), "model": chosen, "api_key": key, "lite_model": fallback}
     chat = os.environ.get("CHAT_MODEL", "")
     if chat.startswith("litellm_proxy/") and os.environ.get("LITELLM_PROXY_API_KEY") and os.environ.get("LITELLM_PROXY_API_BASE"):
         return {"base_url": os.environ["LITELLM_PROXY_API_BASE"].rstrip("/"), "model": chat.split("/", 1)[1],
@@ -242,12 +253,20 @@ def _system_questions(d: dict, inputs: dict) -> list[str]:
     return qs
 
 
-def make_draft(inputs: dict) -> dict:
-    """inputs：hypothesis、direction、markets、horizon、mandate、groups、include_past_runs。"""
+def make_draft(inputs: dict, on_llm=None) -> dict:
+    """inputs：hypothesis、direction、markets、horizon、mandate、groups、include_past_runs。
+
+    on_llm 可选：每次起草 LLM 调用后回调 (prompt, response, usage, model)，用于 Agent trace。
+    """
     mandate = mandates.parse(mandates.load(inputs["mandate"]))
     alpha = evidence.alpha158_findings(inputs["markets"], inputs["horizon"], inputs.get("groups") or None)
     past = evidence.past_runs(inputs["markets"], inputs["horizon"]) if inputs.get("include_past_runs", True) else []
     internal = internal_knowledge(inputs["hypothesis"] + " " + (inputs.get("direction") or ""))
+    external = [x for x in (inputs.get("external_evidence") or []) if isinstance(x, dict)][:8]
+    external_text = "\n".join(
+        f"- [W{i}] {x.get('title')} ({x.get('published') or 'date unknown'}; {x.get('url')}) {str(x.get('snippet') or '')[:600]}"
+        for i, x in enumerate(external, 1)
+    ) or "- none"
     prompt = PROMPT_FILE.read_text(encoding="utf-8").format(
         internal="\n".join(f"- [{x['kind']}] {x['title']}: {x['prompt']}" for x in internal) or "- none", language=llm_language(),
         markets=", ".join(inputs["markets"]), horizon=inputs["horizon"],
@@ -257,6 +276,7 @@ def make_draft(inputs: dict) -> dict:
         mandate_free_text="\n".join(f"- {t}" for t in mandate["free_text"]) or "- none",
         evidence=_evidence_text(alpha),
         past_runs="\n".join(f"- {line}" for line in evidence.past_runs_lines(past)) or "- none (runs affected by data leakage are excluded)",
+        external=external_text,
     )
     cfg = llm_config()
     model_used = cfg["model"]
@@ -267,6 +287,11 @@ def make_draft(inputs: dict) -> dict:
     for attempt in range(2):  # JSON 格式、必填字段或语言不合格时，带上原因重试一次
         text, usage = _chat(prompt + retry_note, cfg, "研究规格起草")
         model_used = usage.get("model") or model_used
+        if on_llm:
+            try:
+                on_llm(prompt + retry_note, text, usage, model_used)
+            except Exception:                       # 审计回调失败不应影响起草
+                pass
         for k in tokens:
             tokens[k] += int(usage.get(k) or 0)
         try:
@@ -293,5 +318,6 @@ def make_draft(inputs: dict) -> dict:
         "mandate": mandate,
         "meta": {"model": model_used, "prompt_version": PROMPT_VERSION, **tokens, "idea_id": inputs.get("idea_id"),
                  "idea_ids": idea_ids, "combo_id": inputs.get("combo_id"), "based_on": inputs.get("based_on"),
+                 "external_evidence": [{k: x.get(k) for k in ("title", "url", "published", "snippet", "source")} for x in external],
                  "seconds": round(time.time() - t0, 1), "at": datetime.now(timezone.utc).isoformat(timespec="seconds")},
     }

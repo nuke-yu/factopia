@@ -118,6 +118,21 @@ function Review({ result, markets, horizon, inputs, locked, setLocked }: {
       <div className="text-xs text-faint num">
         {tf("AI 起草：{m} · 提示词模板 {v} · {n} tokens · {s} 秒", { m: result.meta.model, v: result.meta.prompt_version, n: result.meta.prompt_tokens + result.meta.completion_tokens, s: result.meta.seconds })}
       </div>
+      {!!result.meta.external_evidence?.length && (
+        <div className="text-xs text-muted">
+          {tf("外部资料：{n} 条（仅作灵感，不作为平台事实）", { n: result.meta.external_evidence.length })}
+          <ul className="mt-1 flex flex-col gap-0.5">
+            {result.meta.external_evidence.map((x) => (
+              <li key={x.url || x.title}>
+                {x.url
+                  ? <a href={x.url} target="_blank" rel="noreferrer" className="text-accent hover:underline">{x.title}</a>
+                  : <span>{x.title}</span>}
+                {x.published ? ` · ${x.published}` : ""}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_400px]">
         <Panel eyebrow={t("研究规格")} title={t("逐条审阅")}>

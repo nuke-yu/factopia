@@ -26,7 +26,8 @@ export default function RunPage() {
   const [params, setParams] = useSearchParams();
   const jobId = params.get("job");
   const runs = useAsync(() => api.runs(), [params.get("run")]);
-  const runId = params.get("run") ?? (jobId ? "" : runs.data?.find((r) => r.rounds >= 3)?.run_id ?? runs.data?.[0]?.run_id ?? "");
+  // 默认跟随最新一次运行（包括 Agent 刚创建的子运行），不要优先跳到旧的完整回放。
+  const runId = params.get("run") ?? (jobId ? "" : runs.data?.[0]?.run_id ?? "");
   return (
     <div className="flex flex-col gap-5">
       <div className="flex flex-wrap items-end gap-4">
@@ -45,7 +46,7 @@ export default function RunPage() {
       </div>
       {runs.error && <ErrorBox error={runs.error} />}
       {!runId && jobId && <JobWaiting jobId={jobId} onRun={(rid) => setParams({ run: rid, job: jobId })} />}
-      {runId && <Replay key={runId} runId={runId} />}
+      {runId && <Replay key={runId} runId={runId} jobId={jobId || undefined} />}
     </div>
   );
 }
@@ -135,13 +136,13 @@ function StopButton({ jobId }: { jobId: string }) {
   );
 }
 
-function Replay({ runId }: { runId: string }) {
+function Replay({ runId, jobId }: { runId: string; jobId?: string }) {
   const [running, setLive] = useState(false);
   const tick = useTick(running, LIVE_POLL_MS);
   const detail = useAsync(() => api.run(runId), [runId, tick]);
   const events = useAsync(() => api.events(runId), [runId, tick]);
-  const jobId = detail.data?.job?.job_id;
-  const liveState = useAsync(() => (jobId && running ? api.jobLive(jobId) : Promise.resolve({})), [jobId, tick]);
+  const detailJobId = detail.data?.job?.job_id;
+  const liveState = useAsync(() => (detailJobId && running ? api.jobLive(detailJobId) : Promise.resolve({})), [detailJobId, tick]);
   const backtest = useAsync(() => (running ? api.backtest(runId) : Promise.resolve({})), [runId, Math.floor(tick / 3)]);
   const total = events.data?.at(-1)?.t ?? 0;
   const [clock, setClock] = useState(0);
@@ -167,6 +168,11 @@ function Replay({ runId }: { runId: string }) {
   }, [playing, speed, total, events.data]);
   useEffect(() => { if (clock >= total && total > 0) setPlaying(false); }, [clock, total]);
 
+  // 点击「运行编号」时任务可能已经开始、但 run.json 还没导出：先显示任务准备/原始输出，
+  // 导出后自动重载过程视图，而不是直接报“运行不存在”。
+  if (detail.error && jobId) {
+    return <JobWaiting jobId={jobId} onRun={() => { detail.reload(); events.reload(); }} />;
+  }
   if (!detail.data || !events.data) {
     if (detail.error || events.error) return <ErrorBox error={(detail.error ?? events.error)!} />;
     return <Loading what={t("运行过程")} />;

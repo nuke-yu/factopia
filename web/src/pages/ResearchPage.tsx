@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { api, MARKETS, type Market, type ResearchTermination } from "../api";
+import { api, MARKETS, type ExternalEvidence, type Market, type ResearchTermination, type WebSearch } from "../api";
 import { testPeriodMentions, useDraft, type Draft } from "../draft";
 import { cssVar, MARKET_LABEL, useAsync } from "../lib";
 import { t, tf, joinList, IS_ZH } from "../i18n";
@@ -20,6 +20,11 @@ export default function ResearchPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [parentTerm, setParentTerm] = useState<ResearchTermination | null>(null);
+  const [webQuery, setWebQuery] = useState("");
+  const [web, setWeb] = useState<WebSearch | null>(null);
+  const [webSelected, setWebSelected] = useState<string[]>([]);
+  const [webBusy, setWebBusy] = useState(false);
+  const [webError, setWebError] = useState<string | null>(null);
 
   useEffect(() => {
     if (cube.data && draft.groups.length === 0) update({ groups: cube.data.groups });
@@ -66,6 +71,24 @@ export default function ResearchPage() {
   const toggle = <T,>(list: T[], v: T) => (list.includes(v) ? list.filter((x) => x !== v) : [...list, v]);
   const terminatedParent = draft.basedOn ? parentTerm : null;
   const ready = draft.markets.length > 0 && draft.hypothesis.trim().length > 10 && !!mandate && !busy && !terminatedParent;
+  const selectedEvidence: ExternalEvidence[] = (web?.results ?? []).filter((r) => webSelected.includes(r.url || r.title))
+    .map(({ title, url, published, snippet, source }) => ({ title, url, published: published ?? null, snippet, source: source ?? null }));
+
+  async function searchWeb() {
+    const q = (webQuery.trim() || `${draft.hypothesis} ${draft.direction}`).trim();
+    if (!q) { setWebError(t("请先填写假设或检索关键词")); return; }
+    setWebBusy(true); setWebError(null);
+    try {
+      const r = await api.webSearch(q);
+      setWeb(r); setWebSelected([]);
+    } catch (e) {
+      setWebError((e as Error).message);
+    } finally { setWebBusy(false); }
+  }
+
+  function toggleWeb(url: string) {
+    setWebSelected((xs) => xs.includes(url) ? xs.filter((x) => x !== url) : xs.length >= 8 ? xs : [...xs, url]);
+  }
 
   async function startDraft() {
     setBusy(true); setError(null);
@@ -74,7 +97,8 @@ export default function ResearchPage() {
         mandate: draft.mandate, groups: draft.groups.length === cube.data?.groups.length ? [] : draft.groups, include_past_runs: draft.includePastRuns,
         exclusions: draft.exclusions.split("\n").map((x) => x.trim()).filter(Boolean),
         idea_id: draft.ideaId ?? null, idea_ids: draft.ideaIds ?? [], combo_id: draft.comboId ?? null,
-        based_on: draft.basedOn ? `${draft.basedOn.id}.v${draft.basedOn.version}` : null });
+        based_on: draft.basedOn ? `${draft.basedOn.id}.v${draft.basedOn.version}` : null,
+        external_evidence: selectedEvidence });
       setResult(r); setLocked(null);
       navigate("/audit");
     } catch (e) {
@@ -196,6 +220,55 @@ export default function ResearchPage() {
                 <Notice title={tf("输入中出现了测试期内的年份：{l}", { l: joinList(mentions) })}>
                   {t("RD-Agent 回测测试期从 2022 年开始。描述测试期内发生的事等于提前透露考题（MINE-11）。如确需保留，请在审核页确认。")}
                 </Notice>
+              </div>
+            )}
+          </Panel>
+
+          <Panel eyebrow={t("补充材料（可选）")} title={t("外部资料检索")}>
+            <p className="text-xs text-faint">{t("联网检索公开资料，只采用测试期（2022）之前、日期可靠的结果；网页内容仅作灵感，不作为平台事实。")}</p>
+            <div className="flex flex-wrap items-center gap-2 mt-2">
+              <label htmlFor="web-q" className="sr-only">{t("检索关键词")}</label>
+              <input id="web-q" className="field h-8 flex-1 min-w-[16rem]" value={webQuery} maxLength={300}
+                onChange={(e) => setWebQuery(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); searchWeb(); } }}
+                placeholder={t("检索关键词；留空则用假设与方向")} />
+              <button type="button" className="btn h-8 shrink-0 px-3 text-xs" disabled={webBusy} onClick={searchWeb}>
+                {webBusy ? t("检索中…") : t("联网检索")}
+              </button>
+            </div>
+            {webError && <div className="mt-2"><ErrorBox error={webError} /></div>}
+            {web?.configured === false && (
+              <div className="mt-2"><Notice tone="warn" title={t("未配置联网搜索")}>
+                {web.error || t("在 .env 设置 FACTOPIA_SEARCH_API_KEY（博查或 Tavily）后重启 api。")}
+              </Notice></div>
+            )}
+            {web?.configured && web.error && <div className="mt-2"><ErrorBox error={web.error} /></div>}
+            {web?.configured && !web.error && (
+              <div className="mt-3 flex flex-col gap-2">
+                <p className="text-xs text-muted">{tf("来源：{p} · 只采用 {d} 之前；已排除 {n} 条日期未知或晚于测试期的结果", {
+                  p: web.provider, d: web.before, n: web.excluded })}{web.model && <span className="text-faint"> · {web.model}</span>}</p>
+                {web.warning && <Notice tone="warn" title={t("联网搜索来源需人工核验")}>{t(web.warning)}</Notice>}
+                {web.results.length === 0 ? <p className="text-sm text-muted">{t("没有找到测试期之前、日期可靠的资料。")}</p> : (
+                  <ul className="flex flex-col gap-2">
+                    {web.results.map((r) => (
+                      <li key={r.url || r.title} className="border border-line rounded p-2 text-sm">
+                        <label className="flex items-start gap-2">
+                          <input type="checkbox" className="mt-1" checked={webSelected.includes(r.url || r.title)}
+                            onChange={() => toggleWeb(r.url || r.title)} />
+                          <span className="min-w-0">
+                            {r.url
+                              ? <a href={r.url} target="_blank" rel="noreferrer" className="text-accent hover:underline">{r.title}</a>
+                              : <span className="font-medium">{r.title}</span>}
+                            <span className="text-xs text-faint"> · {r.source || "web"}{r.published ? ` · ${r.published}` : ""}</span>
+                            <div className="text-xs text-muted mt-0.5 line-clamp-3">{r.snippet}</div>
+                          </span>
+                        </label>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {web.results.length > 0 && <p className="text-xs text-faint">
+                  {tf("已选 {n}/8 条；会随假设一起交给 AI 起草，并记录在审核页。", { n: webSelected.length })}</p>}
               </div>
             )}
           </Panel>

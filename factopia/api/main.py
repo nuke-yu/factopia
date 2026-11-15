@@ -146,10 +146,13 @@ def surface(horizon: int, market: str | None = Query(None, pattern="^(hk|uk|fr)$
 @app.get("/api/runs")
 def runs():
     items = []
-    for p in sorted((RESULTS / "runs").glob("*/run.json"), reverse=True):
+    for p in (RESULTS / "runs").glob("*/run.json"):
         run = _json(p)
         if access.can(run["market"]):                              # 地区视角
             items.append({k: v for k, v in run.items() if k not in ("context", "log_dir")})
+    # 按真实开始时间倒序；不能按目录名排序：香港/英国/法国的 run_id 前缀不同，
+    # 字典序会把旧 run 排到最前，导致「04 运行中」默认显示旧批次。
+    items.sort(key=lambda r: str(r.get("started_at") or r.get("created_at") or r.get("run_id") or ""), reverse=True)
     return items
 
 
@@ -365,6 +368,14 @@ def _best_return(run_id: str) -> float | None:
 
 # ── 研究规格：起草、预览、锁定、运行（Spec 第 16 章）──────────────────────────────
 
+class ExternalEvidence(BaseModel):
+    title: str = Field(max_length=300)
+    url: str = Field(max_length=1000)
+    published: str | None = Field(None, max_length=20)
+    snippet: str = Field("", max_length=3000)
+    source: str | None = Field(None, max_length=200)
+
+
 class DraftIn(BaseModel):
     hypothesis: str = Field(min_length=10, max_length=4000)
     direction: str = Field("", max_length=1000)
@@ -377,6 +388,7 @@ class DraftIn(BaseModel):
     idea_ids: list[str] = Field([], max_length=24)   # 合并转立项 / 追加线索：全部来源线索（第 17.12 节）
     combo_id: str | None = None
     based_on: str | None = Field(None, max_length=60)   # 追加线索：已有研究 <id>.v<版本>
+    external_evidence: list[ExternalEvidence] = Field([], max_length=8)   # 研究立项页可选联网检索结果
 
 
 def _check_markets(markets: list[str]) -> None:
@@ -410,6 +422,14 @@ def knowledge_search(q: str = Query(..., min_length=1, max_length=300), kinds: s
     from factopia.research import semantic
     ks = [k for k in (kinds or "").split(",") if k in semantic.KIND_ZH] or None
     return semantic.search(q, ks, use_llm=llm)
+
+
+@app.get("/api/web/search")
+def web_search(q: str = Query(..., min_length=1, max_length=300), before: str | None = None,
+               count: int = Query(8, ge=1, le=20)):
+    """联网搜索（可选）：只返回测试期之前、日期可靠的外部资料。"""
+    from factopia.research import websearch
+    return websearch.search(q, before=before, count=count)
 
 
 @app.post("/api/research/draft")
@@ -2018,6 +2038,8 @@ class AgentIn(BaseModel):
     rounds: int = Field(1, ge=1, le=20)
     markets: list[str] | None = None
     budget_usd: float | None = Field(None, gt=0, le=20)
+    web_search: bool = False          # 仅勾选时才在诊断后检索外部资料
+    deep_think: bool = False          # Planner → Critic → 修订 的多智能体规划
 
 
 class AgentApproveIn(BaseModel):
@@ -2060,7 +2082,7 @@ def _agent_rounds(agent: dict) -> list[dict]:
     out = []
     for n in range(1, int(agent.get("current_round") or 0) + 1):
         out.append({"n": n, **{name: agent_store.read_round(agent["agent_id"], n, name)
-                               for name in ("facts", "diagnosis", "plan", "draft_action", "next_version_draft",
+                               for name in ("facts", "diagnosis", "external", "plan", "draft_action", "next_version_draft",
                                             "approval", "action", "evaluation")}})
     return out
 
@@ -2105,11 +2127,16 @@ def create_agent(body: AgentIn):
     if term:
         raise HTTPException(409, t("研究已人工终止（{by}，{at}）：不能再启动 Agent",
                                    by=term.get("by") or "—", at=term.get("at") or "—"))
+    if body.web_search:
+        from factopia.research import websearch
+        if not websearch.configured():
+            raise HTTPException(422, t("联网搜索未配置：在 .env 设置 FACTOPIA_SEARCH_API_KEY 后重启 api"))
     policy = agent_policy.load()
     if body.budget_usd is not None:
         policy["budget_usd"] = float(body.budget_usd)
     horizon = int(spec.get("horizon") or 20)
-    agent = agent_store.create(body.research_id, body.version, policy, list(markets), horizon)
+    agent = agent_store.create(body.research_id, body.version, policy, list(markets), horizon,
+                               web_search=body.web_search, deep_think=body.deep_think)
     agent["round_limit"] = min(int(body.rounds), int(policy["max_rounds"]))
     agent_store.save(agent)
     job = store.create_agent_job(agent["agent_id"], body.research_id, body.version, list(markets),

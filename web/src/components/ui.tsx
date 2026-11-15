@@ -5,7 +5,7 @@ import "katex/dist/katex.min.css";
 import { t, tf } from "../i18n";
 
 export function Panel({ title, eyebrow, actions, children, className = "" }: {
-  title: string; eyebrow?: string; actions?: ReactNode; children: ReactNode; className?: string;
+  title: ReactNode; eyebrow?: string; actions?: ReactNode; children: ReactNode; className?: string;
 }) {
   return (
     <section className={`panel p-4 ${className}`}>

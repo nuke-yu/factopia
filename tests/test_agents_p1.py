@@ -3,6 +3,7 @@
 运行：python -m unittest tests.test_agents tests.test_agents_p1 -v
 """
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -317,6 +318,49 @@ class AgentP1Tests(unittest.TestCase):
         self.assertEqual(result["status"], "awaiting_human")
         self.assertIsNotNone(astore.read_round(agent["agent_id"], 1, "next_version_draft"))
         self.assertEqual(astore.load(agent["agent_id"])["state"], "awaiting_human")
+
+    def test_critic_uses_second_model_with_main_fallback(self):
+        from factopia.research import draft
+        base = {"FACTOPIA_LLM_BASE_URL": "http://example.test", "FACTOPIA_LLM_API_KEY": "key",
+                "FACTOPIA_LLM_MODEL": "main-model", "FACTOPIA_LLM_LITE_MODEL": "lite-model"}
+        with mock.patch.dict(os.environ, {**base, "FACTOPIA_LLM_CRITIC_MODEL": "critic-model"}, clear=False):
+            c = draft.llm_config(role="critic")
+        self.assertEqual(c["model"], "critic-model")
+        self.assertEqual(c["lite_model"], "main-model")
+        with mock.patch.dict(os.environ, {**base, "FACTOPIA_LLM_CRITIC_MODEL": ""}, clear=False):
+            c = draft.llm_config(role="critic")
+        self.assertEqual(c["model"], "main-model")
+        self.assertIsNone(c["lite_model"])
+
+    def test_agent_start_flags_are_stored(self):
+        agent = astore.create("test_single", 1, POLICY, ["hk"], 20, web_search=True, deep_think=True)
+        self.assertTrue(agent["web_search"])
+        self.assertTrue(agent["deep_think"])
+        self.assertFalse(astore.create("test_single", 1, POLICY, ["hk"], 20)["web_search"])
+
+    def test_deep_think_planner_critic_revision(self):
+        policy = {**POLICY, "prompts": {**POLICY["prompts"], "planner": "iteration-planner-v2",
+                                        "plan_critic": "iteration-plan-critic-v1"}}
+        agent = astore.create("test_negative", 1, policy, ["hk"], 20)
+        agent["current_round"] = 1
+        astore.save(agent)
+        facts = {"facts": [{"id": "F1", "period": "valid", "text": "Hong Kong rank IC is weak."}]}
+        diagnosis = {"primary_cause": {"text": "Weak IC", "cites": ["F1"]}, "market_findings": [], "risks": [],
+                     "confidence": "medium"}
+        critique = {"verdict": "revise", "issues": [{"severity": "warn", "text": "Clarify the volume window.", "cites": ["F1"]}],
+                    "required_changes": ["State the volume window explicitly"], "alternative_action": None}
+        revised = {**plan_data("decrease"), "expected_outcome": "Revised outcome after critique"}
+        responses = [json.dumps(plan_data("decrease")), json.dumps(critique), json.dumps(revised)]
+
+        def fake_chat(prompt, task, role="main"):
+            return responses.pop(0), {"prompt_tokens": 5, "completion_tokens": 5, "usd": 0.0001}, "fake"
+
+        plan = loop._plan(facts, diagnosis, {}, policy, fake_chat, agent, {"ric_sign": -1},
+                          external=None, deep_think=True)
+        self.assertTrue(plan["deep_think"]["revised"])
+        self.assertEqual(plan["deep_think"]["critique"]["verdict"], "revise")
+        self.assertEqual(plan["expected_outcome"], "Revised outcome after critique")
+        self.assertTrue(astore.read_round(agent["agent_id"], 1, "plan_critique"))
 
     def test_terminate_research_stops_active_agents_and_is_idempotent(self):
         agent = astore.create("test_single", 1, POLICY, ["hk"], 20)
