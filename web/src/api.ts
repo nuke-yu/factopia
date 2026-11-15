@@ -132,7 +132,7 @@ export type DraftResult = {
     directions: string[]; exclusions: string[]; falsification: string; data_needs: DataNeed[];
     mandate_interpretations: { term: string; interpretation_zh: string; constraint_en: string | null }[];
     open_questions: string[]; leak_flags: string[]; system_questions: string[]; constraints: string[];
-    signal_source?: SignalSource; region_diff?: RegionDiff;
+    signal_source?: SignalSource; region_diff?: RegionDiff; seeds?: SeedsInput;
   };
   evidence: { groups: string[]; alpha158: EvidenceAlpha[]; internal?: InternalEvidence[]; past_runs: { run_id: string; market: Market; loop: number; hypothesis: string; adopted: boolean }[] };
   mandate: Mandate;
@@ -141,9 +141,36 @@ export type DraftResult = {
 };
 export type DraftInput = {
   hypothesis: string; direction: string; markets: Market[]; horizon: number; mandate: string; groups: string[]; include_past_runs: boolean;
-  exclusions?: string[];
   idea_id?: string | null; idea_ids?: string[]; combo_id?: string | null; based_on?: string | null;
+  exclusions?: string[];
   external_evidence?: ExternalEvidence[];
+  seeds?: SeedsInput | null;
+};
+
+// ── 起点因子：以因子库已有因子做变体 / 组合研究（Spec 第 16.7 节扩展）──
+export type SeedMode = "variant" | "combo" | "open";
+export type SeedRef = {
+  id: string; name: string; source: string; source_zh: string; description: string;
+  formulation: string | null; code?: string | null; approved_markets?: Market[];
+};
+export type SeedCandidate = SeedRef & {
+  status: string; group: string | null; markets: Partial<Record<Market, { rank_ic: number; t: number }>>;
+  label: string | null; period_note: string | null; provenance: string | null; approved_markets: Market[];
+};
+export type SeedList = { items: SeedCandidate[]; counts: Record<string, number>; note: string };
+export type SeedProposal = {
+  kind: "variant" | "combo"; kind_zh: string; title_zh: string; hypothesis_zh: string; hypothesis: string;
+  direction: string; change: string; logic_zh: string; falsification: string; risk_zh: string;
+  seeds: string[]; cites: string[];
+  seed_detail: { id: string; name: string; source_zh: string; description: string; formulation: string | null }[];
+};
+export type SeedProposeResult = {
+  items: SeedProposal[]; dropped: number; mode: SeedMode; brief: string; seeds: string[]; markets: Market[]; horizon: number;
+  model: string; prompt_version: string; at: string; prompt_chars: number; usage: { usd?: number };
+};
+export type SeedsInput = {
+  mode: SeedMode; items: SeedRef[]; brief: string; intent?: string;
+  proposal?: (Partial<SeedProposal> & { from_ai?: boolean }) | null; at?: string;
 };
 export type RegionDiff = {
   markets: Market[]; markets_version: string; rule_packs: Partial<Record<Market, string>>; differs: number; note: string;
@@ -156,7 +183,7 @@ export type Spec = {
   hypothesis_original: string; direction_original: string; hypothesis: string; hypothesis_zh: string; rationale: Rationale;
   directions: string[]; exclusions: string[]; falsification: string; data_needs: DataNeed[]; constraints: string[];
   evidence: { groups: string[]; include_past_runs: boolean; items: string[] }; questions: Question[];
-  run: { loops: number; budget_usd: number }; signal_source?: SignalSource; region_diff?: RegionDiff;
+  run: { loops: number; budget_usd: number }; signal_source?: SignalSource; region_diff?: RegionDiff; seeds?: SeedsInput;
   ai_draft: DraftResult["meta"] & { original: Pick<Spec, "hypothesis" | "rationale" | "directions" | "exclusions" | "falsification"> };
   based_on?: string | null; locked_at?: string; locked_by?: string; precheck_setup?: Precheck; edits?: { field: string; by: string; at: string }[]; past_runs?: string[];
 };
@@ -845,6 +872,10 @@ export const api = {
   researchExamples: () => get<ResearchSpec[]>("/research/examples"),
   mandates: () => get<Mandate[]>("/mandates"),
   draft: (body: DraftInput) => post<DraftResult>("/research/draft", body),
+  seedCandidates: (markets: Market[], source?: string) =>
+    get<SeedList>(`/research/seeds?markets=${markets.join(",")}${source ? `&source=${source}` : ""}`),
+  seedPropose: (body: { seeds: string[]; mode: SeedMode; brief: string; markets: Market[]; horizon: number; n?: number }) =>
+    post<SeedProposeResult>("/research/seeds/propose", body),
   preview: (spec: Partial<Spec>, market: Market) => post<Preview>("/research/preview", { spec, market }),
   lock: (spec: Spec) => post<Spec>("/research/versions", spec),
   versions: (id: string) => get<Spec[]>(`/research/${id}/versions`),

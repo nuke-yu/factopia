@@ -28,6 +28,7 @@ from factopia.lang import joinlist, market_label, t
 from factopia import sources as srcs
 from factopia.research import draft as drafting
 from factopia.research import evidence, mandates, regions, store, verdict
+from factopia.research import seeds as seedlib
 from factopia import rules as rulebook
 from factopia.research.context import build_context
 from factopia.rules import context as rule_ctx
@@ -388,6 +389,7 @@ class DraftIn(BaseModel):
     idea_ids: list[str] = Field([], max_length=24)   # 合并转立项 / 追加线索：全部来源线索（第 17.12 节）
     combo_id: str | None = None
     based_on: str | None = Field(None, max_length=60)   # 追加线索：已有研究 <id>.v<版本>
+    seeds: dict | None = None           # 起点因子：因子库中已有因子做变体 / 组合（第 16.7 节扩展）
     external_evidence: list[ExternalEvidence] = Field([], max_length=8)   # 研究立项页可选联网检索结果
 
 
@@ -424,6 +426,34 @@ def knowledge_search(q: str = Query(..., min_length=1, max_length=300), kinds: s
     return semantic.search(q, ks, use_llm=llm)
 
 
+@app.get("/api/research/seeds")
+def seed_candidates(markets: str = Query("hk,uk,fr"), source: str | None = Query(None, pattern="^(alpha158|approved|proprietary)$")):
+    """起点因子候选（因子库中可作为研究起点的条目）。统计只用测试期之前的数据。"""
+    ms = [m for m in markets.split(",") if m in MARKETS]
+    return seedlib.candidates(ms or list(MARKETS), source)
+
+
+class SeedsIn(BaseModel):
+    seeds: list[str] = Field([], max_length=6)
+    mode: str = "open"
+    brief: str = Field("", max_length=2000)
+    markets: list[str] = Field(min_length=1)
+    horizon: int = 20
+    n: int = Field(4, ge=1, le=6)
+
+
+@app.post("/api/research/seeds/propose")
+def seeds_propose(body: SeedsIn):
+    """AI 审查因子库并提出变体 / 组合研究构想（约 10–40 秒）。"""
+    _check_markets(body.markets)
+    try:
+        return seedlib.propose(body.seeds, body.mode, body.brief, body.markets, body.horizon, body.n)
+    except seedlib.SeedError as e:
+        raise HTTPException(422, str(e))
+    except drafting.DraftError as e:
+        raise HTTPException(502, str(e))
+
+
 @app.get("/api/web/search")
 def web_search(q: str = Query(..., min_length=1, max_length=300), before: str | None = None,
                count: int = Query(8, ge=1, le=20)):
@@ -448,6 +478,8 @@ def research_draft(body: DraftIn):
         return drafting.make_draft(body.model_dump())
     except KeyError:
         raise HTTPException(404, t("授权不存在：{mandate}", mandate=body.mandate))
+    except seedlib.SeedError as e:
+        raise HTTPException(422, str(e))
     except drafting.DraftError as e:
         raise HTTPException(502, str(e))
 
@@ -485,8 +517,13 @@ def _prepare_spec(raw: dict, lock: bool) -> dict:
     spec = {k: raw.get(k) for k in (
         "id", "title_zh", "based_on", "mandate", "markets", "horizon", "hypothesis_original", "direction_original",
         "hypothesis", "hypothesis_zh", "rationale", "directions", "exclusions", "falsification", "data_needs",
-        "constraints", "evidence", "questions", "run", "ai_draft", "signal_source")}
+        "constraints", "evidence", "questions", "run", "ai_draft", "signal_source", "seeds")}
     spec["horizon"] = int(spec.get("horizon") or 20)
+    if spec.get("seeds"):
+        try:
+            spec["seeds"] = seedlib.normalize(spec["seeds"])      # 编号以因子库为准重新校验，统计不入规格
+        except seedlib.SeedError as e:
+            raise HTTPException(422, str(e))
     spec["signal_source"] = spec.get("signal_source") or "price_volume"     # price_volume：RD-Agent；text：文本信号研究（第 14.17 节）
     if spec["signal_source"] not in ("price_volume", "text"):
         raise HTTPException(422, t("信号来源须为 price_volume（量价，RD-Agent）或 text（文本信号）"))

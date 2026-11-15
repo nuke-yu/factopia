@@ -1,11 +1,22 @@
 # 本地开发差异：挂载源码，修改代码后无需重建镜像
 services:
   app:
+    # 国内构建：Debian 官方源不通，用 .env 里的 APT_MIRROR 换成国内镜像；留空则用官方源
+    build:
+      args:
+        APT_MIRROR: ${APT_MIRROR:-}
     volumes:
       - .:/workspace
 
+  # RD-Agent 回测镜像（profile build-only）：同样支持 APT_MIRROR
+  qlib-runner:
+    build:
+      args:
+        APT_MIRROR: ${APT_MIRROR:-}
+
   # RD-Agent 各市场配置模板（本地开发挂载；云端部署时打包进镜像）
   # RD-Agent 扩展代码（factopia.mining.rdagent_ext）通过 PYTHONPATH 加载
+  # 源码来自仓库内 rdagents/ 快照（与 main 一致）
   rdagent:
     environment:
       PYTHONPATH: /workspace/factopia

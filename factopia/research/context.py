@@ -81,6 +81,41 @@ def _bullets(items) -> list[str]:
     return [f"- {x}" for x in (items or []) if str(x).strip()]
 
 
+MODE_EN = {"variant": "(a variation of one factor: window, sign, normalisation, condition)",
+           "combo": "(a combination of several factors: weighting, trigger, layered sort)",
+           "open": "(open: pick the starting factor from the library yourself)"}
+
+
+def seeds_section(sd: dict) -> list[str]:
+    """起点因子段：研究员锁定的起点与变体 / 组合意图（Spec 第 16.7 节扩展）。
+
+    只含名称、说明与公式；统计数值不放入（MINE-11 防泄漏）。与 draft._seeds_section 保持同一口径。
+    """
+    out = ["## Starting factors (existing factors from the internal factor library; the research must build on them)"]
+    its = sd.get("items") or []
+    for x in its:
+        seg = f"- {x.get('id')} ({x.get('name')}, {x.get('source_zh') or ''})"
+        if x.get("description"):
+            seg += f": {x['description']}"
+        if x.get("formulation"):
+            seg += f" | formula: {x['formulation']}"
+        out.append(seg)
+    if not its:
+        out.append("- no specific factor was chosen; the researcher described the target only")
+    if sd.get("mode"):
+        out.append(f"Requested mode: {sd['mode']} {MODE_EN.get(sd['mode'], '')}".rstrip())
+    if sd.get("brief"):
+        out.append(f"The researcher described the intended variation in their own words: \"{sd['brief']}\"")
+    if sd.get("intent"):
+        out.append(f"Stated intent: {sd['intent']}")
+    p = sd.get("proposal") or {}
+    if p.get("title_zh"):
+        out.append("An idea proposed by the assistant and accepted by the researcher: "
+                   + p["title_zh"] + (f" — change: {p['change']}" if p.get("change") else "")
+                   + (f" — why: {p['logic_zh']}" if p.get("logic_zh") else ""))
+    return out
+
+
 def research_section(research: dict) -> list[str]:
     """研究规格部分。锁定的版本（第 16.4 节）使用英文规范化假设；早期的手写示例只有方向与原文假设。"""
     if not research:
@@ -96,6 +131,8 @@ def research_section(research: dict) -> list[str]:
     parts = ["## Research specification (reviewed and locked by the research team)",
              f"Hypothesis: {str(research.get('hypothesis', '')).strip()}",
              f"Economic rationale ({rationale.get('category', 'other')}): {str(rationale.get('note', '')).strip()}"]
+    if research.get("seeds"):
+        parts += ["", *seeds_section(research["seeds"])]
     if research.get("directions"):
         parts += ["", "Candidate feature directions to explore first:", *_bullets(research["directions"])]
     if research.get("exclusions"):

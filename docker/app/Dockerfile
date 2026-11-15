@@ -15,10 +15,18 @@ ENV UV_PROJECT_ENVIRONMENT=/opt/venv \
     PYTHONUNBUFFERED=1
 
 # 编译 Qlib 的 Cython 扩展需要编译器（pyqlib 来自本地 qlibs/ 源码，见 pyproject.toml）
-# APT_MIRROR 构建参数可换 debian 源（国内网络传 mirrors.tuna.tsinghua.edu.cn 加速）
-ARG APT_MIRROR=deb.debian.org
-RUN sed -i "s/deb.debian.org/${APT_MIRROR}/g" /etc/apt/sources.list.d/debian.sources \
-    && apt-get update && apt-get install -y --no-install-recommends build-essential \
+# APT_MIRROR：可选的镜像（如 https://mirrors.aliyun.com）。国内直连 deb.debian.org 不通时
+# 由 compose.local.yml 传入；按基础镜像发行版自动选择路径，留空则保持官方源，云端构建行为不变。
+ARG APT_MIRROR=
+RUN if [ -n "$APT_MIRROR" ]; then . /etc/os-release; \
+      case "$ID" in \
+        ubuntu) repo="$APT_MIRROR/ubuntu"; comps="main universe";; \
+        *)      repo="$APT_MIRROR/debian"; comps="main";; \
+      esac; \
+      printf 'deb %s %s %s\n' "$repo" "$VERSION_CODENAME" "$comps" > /etc/apt/sources.list; \
+      rm -f /etc/apt/sources.list.d/*.sources; \
+    fi
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /workspace

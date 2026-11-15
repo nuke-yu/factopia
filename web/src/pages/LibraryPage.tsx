@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { Badge, ErrorBox, Loading, Panel, Seg } from "../components/ui";
 import { api, visibleMarkets, type KnowledgeSearch, type LibraryItem } from "../api";
+import { useDraft } from "../draft";
 import { MARKET_LABEL, useAsync } from "../lib";
 import { t, tf, joinList } from "../i18n";
 
@@ -89,8 +90,24 @@ function Search() {
 
 export default function LibraryPage() {
   const { data, error, loading } = useAsync(() => api.library(), []);
+  const { draft, update } = useDraft();
+  const navigate = useNavigate();
   const [src, setSrc] = useState<Src>("all");
   const [filter, setFilter] = useState("");
+
+  /** 以此为起点：把该因子作为研究起点带到立项页，AI 再研究它的变体或组合。 */
+  function useAsSeed(i: LibraryItem) {
+    update({
+      seeds: {
+        mode: "variant",
+        items: [{ id: i.id, name: i.name, source: i.source, source_zh: i.source === "approved" ? t("获批信号") : i.source === "alpha158" ? t("Alpha158 公开基准") : t("团队专有"), description: i.description ?? "", formulation: i.formulation ?? null }],
+        brief: draft.seeds?.brief ?? "",
+        proposal: null,
+      },
+    });
+    navigate("/research");
+  }
+
   const items = useMemo(() => (data?.items ?? []).filter((i) => (src === "all" || i.source === src)
     && (!filter || `${i.name} ${i.group ?? ""} ${i.description ?? ""}`.toLowerCase().includes(filter.toLowerCase()))), [data, src, filter]);
   if (loading) return <Loading what={t("因子库")} />;
@@ -123,7 +140,10 @@ export default function LibraryPage() {
             <tbody>
               {items.map((i) => (
                 <tr key={i.id} className="border-t border-line align-top">
-                  <td className="py-1 pr-2 num whitespace-nowrap">{i.name}</td>
+                  <td className="py-1 pr-2 num whitespace-nowrap">{i.name}
+                    <button type="button" className="block mt-0.5 text-[11px] text-accent hover:underline" onClick={() => useAsSeed(i)}>
+                      {t("以此为起点 →")}
+                    </button></td>
                   <td className="pr-2 whitespace-nowrap"><Badge tone={i.source === "approved" ? (i.approved_markets?.length ? "good" : "warn") : i.source === "proprietary" ? "accent" : "muted"}>{t(i.status)}</Badge>
                     {i.source === "approved" && <div className="mt-0.5">
                       {i.approved_markets?.length ? <span className="text-good">{t("获批：")}{joinList(i.approved_markets.map((m) => MARKET_LABEL[m]))}</span> : null}

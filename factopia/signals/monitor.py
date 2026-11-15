@@ -16,6 +16,7 @@
 import json
 import math
 import os
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -58,7 +59,13 @@ def compute_factor(name: str, code: str, data: Path, work: Path) -> pd.Series:
     (d / "factor.py").write_text(code, encoding="utf-8")
     for f in ("daily_pv.h5", "daily_benchmark.h5"):
         if (data / f).exists() and not (d / f).exists():
-            (d / f).symlink_to(data / f)
+            try:
+                (d / f).symlink_to(data / f)
+            except OSError:                      # Windows 默认不允许普通用户建符号链接（需开发者模式）
+                try:
+                    os.link(data / f, d / f)     # 同盘硬链接，成功时与符号链接一样不占额外空间
+                except OSError:
+                    shutil.copy2(data / f, d / f)
     (d / "result.h5").unlink(missing_ok=True)
     p = subprocess.run([sys.executable, "factor.py"], cwd=d, capture_output=True, text=True, timeout=FACTOR_TIMEOUT_S)
     if p.returncode != 0 or not (d / "result.h5").exists():
