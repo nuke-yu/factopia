@@ -76,7 +76,7 @@ def estimate(dataset: str, n: int | None = None) -> dict:
 
 
 def run(dataset: str, n: int | None = None, budget: float = 0.5) -> dict:
-    cfg = draft.llm_config()
+    cfg = draft.llm_config(lite=True)          # 候选生成，人工审批后生效：简单任务用轻量模型
     n = n or int(pipeline()["glossary_suggest"]["sample"])
     g = glossary()
     concepts = "\n".join(f"- {c}: {s['en_name']} / {s['fr_name']} / {s['zh_name']}" for c, s in g["concepts"].items())

@@ -21,6 +21,9 @@ from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from factopia import access
+from factopia.agents import approve as agent_approve
+from factopia.agents import policy as agent_policy
+from factopia.agents import store as agent_store
 from factopia.lang import joinlist, market_label, t
 from factopia import sources as srcs
 from factopia.research import draft as drafting
@@ -143,10 +146,13 @@ def surface(horizon: int, market: str | None = Query(None, pattern="^(hk|uk|fr)$
 @app.get("/api/runs")
 def runs():
     items = []
-    for p in sorted((RESULTS / "runs").glob("*/run.json"), reverse=True):
+    for p in (RESULTS / "runs").glob("*/run.json"):
         run = _json(p)
         if access.can(run["market"]):                              # 地区视角
             items.append({k: v for k, v in run.items() if k not in ("context", "log_dir")})
+    # 按真实开始时间倒序；不能按目录名排序：香港/英国/法国的 run_id 前缀不同，
+    # 字典序会把旧 run 排到最前，导致「04 运行中」默认显示旧批次。
+    items.sort(key=lambda r: str(r.get("started_at") or r.get("created_at") or r.get("run_id") or ""), reverse=True)
     return items
 
 
@@ -160,7 +166,7 @@ def run_detail(run_id: str):
     spec = _run_spec(run)
     rule = verdict.rules(spec) if spec else None
     return {"run": {**run, "state": _run_state(run, job)}, "rounds": rounds,
-            "job": _job_public(job) if job else None, "batch": batch,
+            "job": _job_public(job) if job else None, "batch": batch, "agent": _agent_of_run(run_id),
             "verdicts": verdict.judge_rounds(run, rounds, rule) if rule else None,
             "rule": ({k: rule[k] for k in ("primary", "ric_sign", "sign_from_text")} | {"primary_market": run["market"] == rule["primary"]}) if rule else None}
 
@@ -260,6 +266,21 @@ def _job_of_run(run_id: str) -> dict | None:
     return next((j for j in store.list_jobs() if j.get("run_id") == run_id), None)
 
 
+def _agent_of_run(run_id: str) -> dict | None:
+    """该运行是否由研究迭代 Agent 的子任务触发。"""
+    for agent in agent_store.list_agents():
+        for jid in agent.get("child_jobs") or []:
+            try:
+                child = store.load_job(jid)
+            except (FileNotFoundError, OSError):
+                continue
+            if child.get("run_id") == run_id:
+                return {"agent_id": agent["agent_id"], "state": agent.get("state"),
+                        "current_version": agent.get("current_version"),
+                        "research_id": (agent.get("root") or {}).get("research_id")}
+    return None
+
+
 def _job_public(job: dict) -> dict:
     return {k: v for k, v in job.items() if k != "log_dir"} | {"state_zh": JOB_STATE.get(job["state"], job["state"])}
 
@@ -332,6 +353,13 @@ def projects():
     return items
 
 
+@app.get("/api/projects/search")
+def project_search(q: str = Query(..., min_length=1, max_length=300)):
+    """研究项目语义检索：AI 搜索用向量模型比较查询与项目标题 + 假设；向量不可用时退回关键词。"""
+    from factopia.research import semantic
+    return semantic.search_projects(q, projects())
+
+
 def _best_return(run_id: str) -> float | None:
     rounds = _json(RESULTS / "runs" / run_id / "rounds.json")
     adopted = [r["metrics"]["annual_return_with_cost"] for r in rounds if r.get("decision") and r.get("metrics")]
@@ -339,6 +367,14 @@ def _best_return(run_id: str) -> float | None:
 
 
 # ── 研究规格：起草、预览、锁定、运行（Spec 第 16 章）──────────────────────────────
+
+class ExternalEvidence(BaseModel):
+    title: str = Field(max_length=300)
+    url: str = Field(max_length=1000)
+    published: str | None = Field(None, max_length=20)
+    snippet: str = Field("", max_length=3000)
+    source: str | None = Field(None, max_length=200)
+
 
 class DraftIn(BaseModel):
     hypothesis: str = Field(min_length=10, max_length=4000)
@@ -352,6 +388,7 @@ class DraftIn(BaseModel):
     idea_ids: list[str] = Field([], max_length=24)   # 合并转立项 / 追加线索：全部来源线索（第 17.12 节）
     combo_id: str | None = None
     based_on: str | None = Field(None, max_length=60)   # 追加线索：已有研究 <id>.v<版本>
+    external_evidence: list[ExternalEvidence] = Field([], max_length=8)   # 研究立项页可选联网检索结果
 
 
 def _check_markets(markets: list[str]) -> None:
@@ -387,12 +424,26 @@ def knowledge_search(q: str = Query(..., min_length=1, max_length=300), kinds: s
     return semantic.search(q, ks, use_llm=llm)
 
 
+@app.get("/api/web/search")
+def web_search(q: str = Query(..., min_length=1, max_length=300), before: str | None = None,
+               count: int = Query(8, ge=1, le=20)):
+    """联网搜索（可选）：只返回测试期之前、日期可靠的外部资料。"""
+    from factopia.research import websearch
+    return websearch.search(q, before=before, count=count)
+
+
 @app.post("/api/research/draft")
 def research_draft(body: DraftIn):
     """AI 起草研究规格（RS-02）：约 30–60 秒。"""
     _check_markets(body.markets)
     if body.horizon not in HORIZONS:
         raise HTTPException(422, t("预测周期必须是 {horizons} 之一", horizons=joinlist(HORIZONS)))
+    if body.based_on:
+        parent_id = body.based_on.split(".", 1)[0]
+        term = store.termination(parent_id)
+        if term:
+            raise HTTPException(409, t("研究已人工终止（{by}，{at}）：不能再生成新版本",
+                                       by=term.get("by") or "—", at=term.get("at") or "—"))
     try:
         return drafting.make_draft(body.model_dump())
     except KeyError:
@@ -477,6 +528,10 @@ def _prepare_spec(raw: dict, lock: bool) -> dict:
 def lock_version(body: dict):
     """锁定研究规格（RS-08）：生成新的版本号，此后不可修改。锁定前先做立项预检（BR-21）：命中阻断规则不允许锁定。"""
     spec = _prepare_spec(body, lock=True)
+    term = store.termination(spec.get("id"))
+    if term:
+        raise HTTPException(409, t("研究已人工终止（{by}，{at}）：不能再生成新版本",
+                                   by=term.get("by") or "—", at=term.get("at") or "—"))
     pre = rulebook.evaluate(rule_ctx.setup_context(spec), ["setup"])
     if pre["blocked"]:
         hits = [f"{h['rule_id']} {h['title']}（{h['reason']}）" for h in pre["hits"] if h["severity"] == "block"]
@@ -515,6 +570,13 @@ def ideas_list(channel: str | None = None, status: str | None = None, market: st
     return _ideas().listing(channel, status, market)
 
 
+@app.get("/api/ideas/search")
+def ideas_search(q: str = Query(..., min_length=1, max_length=300)):
+    """线索池 AI 查询：用 embedding 匹配标题与概述；向量不可用时退回关键词。"""
+    from factopia.research import semantic
+    return semantic.search_ideas(q, _ideas().listing()["items"])
+
+
 @app.get("/api/ideas/{iid}")
 def ideas_detail(iid: str):
     return _idea_call(_ideas().detail, iid)
@@ -533,6 +595,19 @@ class IdeaIn(BaseModel):
     feedback_role: str | None = None
     document: dict | None = None
     ai_suggestion: dict | None = None
+    source_ref: dict | None = None
+
+
+class IdeaUpdateIn(BaseModel):
+    title: str = Field(max_length=200)
+    body: str = Field("", max_length=20000)
+    markets: list[str] = []
+    submitted_by: str = Field(max_length=60)
+    confirm_no_client_data: bool = False
+    direction: str | None = None
+    period: str | None = None
+    feedback_role: str | None = None
+    document: dict | None = None
 
 
 @app.post("/api/ideas")
@@ -548,6 +623,15 @@ def ideas_create(body: IdeaIn):
         except (I.IdeaError, drafting.DraftError) as e:
             idea = {**idea, "extract_error": str(e)}
     return idea
+
+
+@app.put("/api/ideas/{iid}")
+def ideas_update(iid: str, body: IdeaUpdateIn):
+    """修改人工线索的文本、市场与渠道字段；自动回流线索不可修改。"""
+    _idea_check(iid)
+    for m in body.markets:
+        access.require(m, t("在其他地区市场提交线索"))
+    return _idea_call(_ideas().update, iid, body.model_dump())
 
 
 class IdeaSuggestIn(BaseModel):
@@ -975,6 +1059,41 @@ def study_view(research_id: str, version: int):
             "region_view": access.role()["name"]}
 
 
+class ResearchTerminateIn(BaseModel):
+    version: int | None = None          # 终止操作发生在哪个版本，仅用于追溯
+    reason: str = "人工终止当前研究"
+    by: str = "研究员（演示，未登录）"
+
+
+@app.get("/api/research/{research_id}/termination")
+def research_termination(research_id: str):
+    """研究是否已人工终止；研究立项页据此禁止再生成新版本。"""
+    vs = store.versions(research_id) if drafting.ID_PATTERN.match(research_id) else []
+    if not vs:
+        raise HTTPException(404, t("研究不存在或还没有锁定的版本：{rid}", rid=research_id))
+    spec = store.load_version(research_id, vs[-1])
+    markets = spec.get("markets") or []
+    if markets and not any(access.can(m) for m in markets):
+        access.deny(t("研究 {rid} v{version}（不涉及本地区市场）", rid=research_id, version=vs[-1]))
+    return {"terminated": store.termination(research_id)}
+
+
+@app.post("/api/research/{research_id}/terminate")
+def terminate_research(research_id: str, body: ResearchTerminateIn):
+    """人工终止当前研究：写终止标记并停止该研究下所有活动 Agent；之后不能再启动 Agent。"""
+    vs = store.versions(research_id) if drafting.ID_PATTERN.match(research_id) else []
+    if not vs:
+        raise HTTPException(404, t("研究不存在或还没有锁定的版本：{rid}", rid=research_id))
+    version = body.version if body.version in vs else vs[-1]
+    spec = store.load_version(research_id, version)
+    markets = spec.get("markets") or []
+    if markets and not any(access.can(m) for m in markets):
+        access.deny(t("研究 {rid} v{version}（不涉及本地区市场）", rid=research_id, version=version))
+    out = agent_approve.terminate_research(research_id, version, body.reason, body.by)
+    return {"terminated": out["terminated"],
+            "agents": [{"agent_id": x["agent"]["agent_id"], "state": x["agent"]["state"]} for x in out["agents"]]}
+
+
 def study(research_id: str, version: int):
     """研究结论（Spec 第 14.5 节）：同一锁定版本在各市场的结果，按可证伪测试判定。"""
     spec = get_version(research_id, version)
@@ -985,13 +1104,17 @@ def study(research_id: str, version: int):
     markets = {m: _study_market(m, runs, jobs, rule) for m in rule["markets"]}
     diags = {m: (e.get("focus") or {}).get("diagnostics") for m, e in markets.items()}
     exp = store.RESEARCH_DIR / research_id / f"explain_v{version}.json"
+    from factopia import ideas as ideas_mod
+    saved_ideas = [{"id": i["id"], "title": i["title"], "run": (i.get("source_ref") or {}).get("run")}
+                   for i in ideas_mod.find_by_source(f"{research_id}.v{version}")]
     return {"research_id": research_id, "version": version, "hypothesis": spec.get("hypothesis"),
             "title": spec.get("title_zh") or spec.get("title"),
             "rule": {k: rule[k] for k in ("primary", "markets", "ric_sign", "sign_from_text", "text")},
             "overall": verdict.overall(markets, rule), "transfer": verdict.transfer(markets, rule, diags),
             "cross_market": _cross_market(markets),
             "markets": markets, "findings": _study_findings(markets, rule),
-            "explanation": json.loads(exp.read_text(encoding="utf-8")) if exp.exists() else None}
+            "explanation": json.loads(exp.read_text(encoding="utf-8")) if exp.exists() else None,
+            "terminated": store.termination(research_id), "saved_ideas": saved_ideas}
 
 
 @app.post("/api/research/{research_id}/versions/{version}/explain")
@@ -1803,12 +1926,27 @@ def start_runs(research_id: str, version: int, body: RunIn):
     return store.create_jobs(research_id, version, markets, spec["horizon"], body.loops, body.budget_usd, kind)
 
 
+def _job_markets(job: dict) -> list[str]:
+    """Agent job 的 market 是 all；按 Agent 根研究的市场做地区过滤。"""
+    if job.get("kind") == "agent":
+        try:
+            return agent_store.load(job["agent_id"])["root"]["markets"]
+        except Exception:
+            return []
+    return [job.get("market")]
+
+
+def _job_visible(job: dict) -> bool:
+    return access.cross_region() or any(access.can(m) for m in _job_markets(job))
+
+
 @app.get("/api/jobs")
 def list_jobs(batch: str | None = None):
-    return [_job_public(j) for j in store.list_jobs() if (batch is None or j["batch_id"] == batch) and access.can(j["market"])]
+    return [_job_public(j) for j in store.list_jobs()
+            if (batch is None or j["batch_id"] == batch) and _job_visible(j)]
 
 
-JOB_ID = re.compile(r"^\d{14}_[0-9a-f]{4}_\d+_[a-z]{2}$")
+JOB_ID = re.compile(r"^\d{14}_[0-9a-f]{4}_\d+_[a-z]{2,3}$")
 
 
 def _load_job(job_id: str) -> dict:
@@ -1818,7 +1956,8 @@ def _load_job(job_id: str) -> dict:
         job = store.load_job(job_id)
     except FileNotFoundError:
         raise HTTPException(404, t("任务不存在"))
-    access.require(job["market"], t("任务 {job_id}", job_id=job_id))
+    if not _job_visible(job):
+        access.deny(t("任务 {job_id}", job_id=job_id), job.get("market"))
     return job
 
 
@@ -1891,6 +2030,240 @@ def cancel_job(job_id: str):
         raise HTTPException(409, t("任务已结束"))
     store.request_cancel(job_id)
     return {"ok": True}
+
+
+class AgentIn(BaseModel):
+    research_id: str
+    version: int
+    rounds: int = Field(1, ge=1, le=20)
+    markets: list[str] | None = None
+    budget_usd: float | None = Field(None, gt=0, le=20)
+    web_search: bool = False          # 仅勾选时才在诊断后检索外部资料
+    deep_think: bool = False          # Planner → Critic → 修订 的多智能体规划
+
+
+class AgentApproveIn(BaseModel):
+    draft: dict | None = None
+    run: bool = True
+    by: str = "研究员（演示，未登录）"
+
+
+class AgentRejectIn(BaseModel):
+    reason: str
+    by: str = "研究员（演示，未登录）"
+
+
+class AgentStopIn(BaseModel):
+    reason: str = "人工停止"
+    by: str = "研究员（演示，未登录）"
+
+
+def _agent_visible(agent: dict) -> bool:
+    markets = (agent.get("root") or {}).get("markets") or []
+    return access.cross_region() or any(access.can(m) for m in markets)
+
+
+def _agent_load(agent_id: str) -> dict:
+    try:
+        agent = agent_store.load(agent_id)
+    except Exception:
+        raise HTTPException(404, t("Agent 不存在"))
+    if not _agent_visible(agent):
+        access.deny(t("研究迭代 Agent {id}", id=agent_id))
+    return agent
+
+
+def _agent_job(agent_id: str) -> dict | None:
+    jobs = [j for j in store.list_jobs() if j.get("kind") == "agent" and j.get("agent_id") == agent_id]
+    return jobs[-1] if jobs else None
+
+
+def _agent_rounds(agent: dict) -> list[dict]:
+    out = []
+    for n in range(1, int(agent.get("current_round") or 0) + 1):
+        out.append({"n": n, **{name: agent_store.read_round(agent["agent_id"], n, name)
+                               for name in ("facts", "diagnosis", "external", "plan", "draft_action", "next_version_draft",
+                                            "approval", "action", "evaluation")}})
+    return out
+
+
+def _agent_trace(agent_id: str, limit: int = 200) -> list[dict]:
+    path = agent_store.dir_path(agent_id) / "trace.jsonl"
+    if not path.exists():
+        return []
+    items = []
+    for line in path.read_text(encoding="utf-8").splitlines()[-limit:]:
+        try:
+            items.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return items
+
+
+@app.get("/api/agents")
+def list_agents():
+    """研究迭代 Agent 列表（按根研究的市场做地区过滤）。"""
+    out = []
+    for agent in agent_store.list_agents():
+        if not _agent_visible(agent):
+            continue
+        job = _agent_job(agent["agent_id"])
+        out.append({**agent, "job_state": job["state"] if job else None})
+    return out
+
+
+@app.post("/api/agents")
+def create_agent(body: AgentIn):
+    """从结果页启动研究迭代 Agent；只创建 agent 记录与 runner job，实际推进由 runner 执行。"""
+    if not drafting.ID_PATTERN.match(body.research_id) or body.version not in store.versions(body.research_id):
+        raise HTTPException(404, t("研究版本不存在"))
+    spec = store.load_version(body.research_id, body.version)
+    markets = body.markets or spec.get("markets") or []
+    if not markets or any(m not in MARKETS for m in markets):
+        raise HTTPException(422, t("市场必须是 {markets} 中的一个或多个", markets=", ".join(MARKETS)))
+    for m in markets:
+        access.require(m, t("研究 {rid} v{version}", rid=body.research_id, version=body.version))
+    term = store.termination(body.research_id)
+    if term:
+        raise HTTPException(409, t("研究已人工终止（{by}，{at}）：不能再启动 Agent",
+                                   by=term.get("by") or "—", at=term.get("at") or "—"))
+    if body.web_search:
+        from factopia.research import websearch
+        if not websearch.configured():
+            raise HTTPException(422, t("联网搜索未配置：在 .env 设置 FACTOPIA_SEARCH_API_KEY 后重启 api"))
+    policy = agent_policy.load()
+    if body.budget_usd is not None:
+        policy["budget_usd"] = float(body.budget_usd)
+    horizon = int(spec.get("horizon") or 20)
+    agent = agent_store.create(body.research_id, body.version, policy, list(markets), horizon,
+                               web_search=body.web_search, deep_think=body.deep_think)
+    agent["round_limit"] = min(int(body.rounds), int(policy["max_rounds"]))
+    agent_store.save(agent)
+    job = store.create_agent_job(agent["agent_id"], body.research_id, body.version, list(markets),
+                                 horizon, float(policy.get("budget_usd") or 2.0))
+    return {"agent": agent, "job": _job_public(job)}
+
+
+@app.get("/api/agents/{agent_id}")
+def get_agent(agent_id: str):
+    agent = _agent_load(agent_id)
+    job = _agent_job(agent_id)
+    children = []
+    for cid in agent.get("child_jobs") or []:
+        try:
+            children.append(_job_public(store.load_job(cid)))
+        except (FileNotFoundError, OSError):
+            continue
+    report_path = agent_store.dir_path(agent_id) / "report.md"
+    root = agent.get("root") or {}
+    return {"agent": agent, "rounds": _agent_rounds(agent), "children": children,
+            "job": _job_public(job) if job else None,
+            "report": report_path.read_text(encoding="utf-8") if report_path.exists() else None,
+            "terminated": store.termination(root.get("research_id"))}
+
+
+@app.get("/api/agents/{agent_id}/trace")
+def get_agent_trace(agent_id: str, limit: int = Query(200, ge=1, le=1000)):
+    _agent_load(agent_id)
+    return {"items": _agent_trace(agent_id, limit)}
+
+
+@app.get("/api/agents/{agent_id}/report")
+def get_agent_report(agent_id: str):
+    _agent_load(agent_id)
+    path = agent_store.dir_path(agent_id) / "report.md"
+    return {"markdown": path.read_text(encoding="utf-8") if path.exists() else ""}
+
+
+@app.post("/api/agents/{agent_id}/approve")
+def approve_agent(agent_id: str, body: AgentApproveIn):
+    _agent_load(agent_id)
+    try:
+        out = agent_approve.approve(agent_id, draft=body.draft, run=body.run, by=body.by)
+    except agent_approve.ApprovalError as e:
+        raise HTTPException(409, str(e))
+    except Exception as e:
+        raise HTTPException(400, str(e))
+    return {"agent": out["agent"], "saved": out["saved"],
+            "job": _job_public(out["job"]) if out.get("job") else None}
+
+
+@app.post("/api/agents/{agent_id}/reject")
+def reject_agent(agent_id: str, body: AgentRejectIn):
+    _agent_load(agent_id)
+    try:
+        out = agent_approve.reject(agent_id, body.reason, by=body.by)
+    except agent_approve.ApprovalError as e:
+        raise HTTPException(409, str(e))
+    return {"agent": out["agent"], "job": _job_public(out["job"]) if out.get("job") else None}
+
+
+@app.post("/api/agents/{agent_id}/stop")
+def stop_agent(agent_id: str, body: AgentStopIn):
+    _agent_load(agent_id)
+    try:
+        out = agent_approve.stop(agent_id, body.reason, by=body.by)
+    except agent_approve.ApprovalError as e:
+        raise HTTPException(409, str(e))
+    return {"agent": out["agent"], "jobs": [_job_public(j) for j in out["jobs"]]}
+
+
+@app.get("/api/agents/{agent_id}/overlap")
+def agent_overlap(agent_id: str):
+    """当前 Agent 版本与已获批 / 历史研究版本的打分相关性（冗余检查，BR-28）。"""
+    agent = _agent_load(agent_id)
+    from factopia.portfolio import combine
+    from factopia.research import library
+    rid = agent["root"]["research_id"]
+    version = int(agent.get("current_version") or 0)
+    current_key = f"{rid}.v{version}"
+    approved = set()
+    try:
+        for x in library.approved():
+            m = re.match(r"^(.+) v(\d+)$", str(x.get("group") or ""))
+            if m:
+                approved.add(f"{m.group(1)}.v{m.group(2)}")
+    except Exception:
+        pass
+    out = {}
+    for market in agent["root"]["markets"]:
+        if not access.can(market):
+            continue
+        try:
+            cands = combine.candidates(market, study)
+        except Exception as e:
+            out[market] = {"ok": False, "reason": f"无法读取候选信号：{e}"[:300]}
+            continue
+        if not any(c["key"] == current_key for c in cands):
+            out[market] = {"ok": False, "reason": "当前版本在该市场没有采纳轮次或打分文件，无法比较"}
+            continue
+        try:
+            res = combine.analyse(market, cands)
+        except Exception as e:
+            out[market] = {"ok": False, "reason": f"相关性计算失败：{e}"[:300]}
+            continue
+        if not res.get("ok"):
+            out[market] = {"ok": False, "reason": res.get("reason") or "候选信号不足"}
+            continue
+        signals = {s["key"]: s for s in res.get("signals") or []}
+        pairs = []
+        for key, sig in signals.items():
+            if key == current_key:
+                continue
+            corr = (res.get("score_corr") or {}).get(f"{current_key}|{key}")
+            if corr is None:
+                corr = (res.get("score_corr") or {}).get(f"{key}|{current_key}")
+            ic = ((res.get("ic_corr") or {}).get(current_key) or {}).get(key)
+            pairs.append({"key": key, "title": sig.get("title"), "kind": sig.get("kind"),
+                          "approved": key in approved, "corr": corr, "ic_corr": ic,
+                          "redundant": corr is not None and abs(corr) >= 0.7})
+        pairs.sort(key=lambda x: -abs(x["corr"] or 0))
+        out[market] = {"ok": True, "current": signals.get(current_key),
+                       "pairs": pairs, "max_abs": abs(pairs[0]["corr"]) if pairs and pairs[0]["corr"] is not None else None,
+                       "redundant": bool(pairs and pairs[0].get("redundant")),
+                       "complement": res.get("verdict"),
+                       "note": "打分相关性的绝对值为 0.7 及以上视为冗余；候选为各研究版本的采纳轮次，统计期为测试期"}
+    return {"agent_id": agent_id, "research_id": rid, "version": version, "markets": out}
 
 
 @app.get("/api/research/examples")

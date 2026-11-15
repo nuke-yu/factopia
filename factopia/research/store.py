@@ -83,6 +83,37 @@ def research_ids() -> list[str]:
     return sorted(p.name for p in RESEARCH_DIR.glob("*") if p.is_dir() and versions(p.name))
 
 
+# ── 人工终止研究（结果页 / 研究 Agent 页）────────────────────
+# 按研究编号（而不是单个版本）终止：终止后该研究的任何版本都不能再启动 Agent。
+# 版本字段只记录终止操作发生在哪个版本，便于追溯；已终止的研究不会自动解除。
+
+def termination_path(research_id: str) -> Path:
+    return RESEARCH_DIR / research_id / "terminated.json"
+
+
+def termination(research_id: str | None) -> dict | None:
+    if not research_id:
+        return None
+    path = termination_path(research_id)
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def terminate(research_id: str, version: int | None = None, reason: str = "人工终止当前研究",
+              by: str = "研究员（演示，未登录）") -> dict:
+    """写入终止标记；重复调用返回第一次的记录（幂等）。"""
+    existing = termination(research_id)
+    if existing:
+        return existing
+    rec = {"research_id": research_id, "version": version, "at": now(), "by": by, "reason": str(reason)[:1000]}
+    _atomic_write(termination_path(research_id), _dumps(rec, indent=2))
+    return rec
+
+
 # ── 运行任务 ─────────────────────────────────────────────────
 
 def create_jobs(research_id: str, version: int, markets: list[str], horizon: int, loops: int, budget_usd: float,
@@ -137,6 +168,20 @@ def create_paper_job(signal_id: str, market: str) -> dict:
            "research_id": rid, "version": ver, "market": market, "horizon": 0, "loops": 0, "budget_usd": 0.0,
            "target_signal": signal_id, "state": "queued", "created_at": now(), "started_at": None, "ended_at": None,
            "run_id": None, "cost_usd": 0.0, "rounds": 0, "error": None}
+    write_job(job)
+    return job
+
+
+def create_agent_job(agent_id: str, research_id: str, version: int, markets: list[str],
+                     horizon: int, budget_usd: float) -> dict:
+    """研究迭代 Agent 的 runner 任务（kind = "agent"）：等待子任务时不占并行槽。"""
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    job = {"job_id": f"{stamp}_{secrets.token_hex(2)}_0_all", "batch_id": f"{stamp}_a",
+           "kind": "agent", "agent_id": agent_id, "research_id": research_id, "version": int(version),
+           "market": "all", "horizon": int(horizon), "loops": 0, "budget_usd": float(budget_usd),
+           "state": "queued", "created_at": now(), "started_at": None, "ended_at": None,
+           "run_id": None, "cost_usd": 0.0, "rounds": 0, "error": None,
+           "child_jobs": [], "agent_state": "queued"}
     write_job(job)
     return job
 
@@ -245,5 +290,16 @@ def retry_job(job: dict) -> dict:
         run = json.loads((RUNTIME / "results" / "runs" / job["target_run"] / "run.json").read_text(encoding="utf-8"))
         new = create_validate_job(run, job["loop"], job.get("placebo_n", 20))
         return {"batch_id": new["batch_id"], "jobs": [new]}
+    if job.get("kind") == "agent":
+        try:                                      # 重置 Agent 状态，让它从检查点继续
+            from factopia.agents import store as agent_store
+            agent = agent_store.load(job["agent_id"])
+            agent.update(state="queued", last_error=None, stop_reason=None)
+            agent_store.save(agent)
+        except Exception:
+            pass
+        job.update(state="queued", error=None, ended_at=None, agent_state="queued")
+        write_job(job)
+        return {"batch_id": job["batch_id"], "jobs": [job]}
     return create_jobs(job["research_id"], job["version"], [job["market"]], job["horizon"], job["loops"], job["budget_usd"],
                        job.get("kind"))

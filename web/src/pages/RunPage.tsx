@@ -14,11 +14,20 @@ const LIVE_POLL_MS = 5000;
 const SPEEDS = [10, 30, 60, 120];
 const mmss = (s: number) => `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
 
+function agentRunNotice(state: string): string {
+  if (state === "waiting_children") return t("研究 Agent 正在进行可信度检查，完成后会自动评估");
+  if (state === "evaluating") return t("研究 Agent 正在评估");
+  if (state === "stopped" || state === "done") return t("研究 Agent 已完成评估，点击查看结论");
+  if (state === "failed") return t("研究 Agent 处理失败，点击查看错误");
+  return t("研究 Agent 正在继续，点击查看进度");
+}
+
 export default function RunPage() {
   const [params, setParams] = useSearchParams();
   const jobId = params.get("job");
   const runs = useAsync(() => api.runs(), [params.get("run")]);
-  const runId = params.get("run") ?? (jobId ? "" : runs.data?.find((r) => r.rounds >= 3)?.run_id ?? runs.data?.[0]?.run_id ?? "");
+  // 默认跟随最新一次运行（包括 Agent 刚创建的子运行），不要优先跳到旧的完整回放。
+  const runId = params.get("run") ?? (jobId ? "" : runs.data?.[0]?.run_id ?? "");
   return (
     <div className="flex flex-col gap-5">
       <div className="flex flex-wrap items-end gap-4">
@@ -37,7 +46,7 @@ export default function RunPage() {
       </div>
       {runs.error && <ErrorBox error={runs.error} />}
       {!runId && jobId && <JobWaiting jobId={jobId} onRun={(rid) => setParams({ run: rid, job: jobId })} />}
-      {runId && <Replay key={runId} runId={runId} />}
+      {runId && <Replay key={runId} runId={runId} jobId={jobId || undefined} />}
     </div>
   );
 }
@@ -127,13 +136,13 @@ function StopButton({ jobId }: { jobId: string }) {
   );
 }
 
-function Replay({ runId }: { runId: string }) {
+function Replay({ runId, jobId }: { runId: string; jobId?: string }) {
   const [running, setLive] = useState(false);
   const tick = useTick(running, LIVE_POLL_MS);
   const detail = useAsync(() => api.run(runId), [runId, tick]);
   const events = useAsync(() => api.events(runId), [runId, tick]);
-  const jobId = detail.data?.job?.job_id;
-  const liveState = useAsync(() => (jobId && running ? api.jobLive(jobId) : Promise.resolve({})), [jobId, tick]);
+  const detailJobId = detail.data?.job?.job_id;
+  const liveState = useAsync(() => (detailJobId && running ? api.jobLive(detailJobId) : Promise.resolve({})), [detailJobId, tick]);
   const backtest = useAsync(() => (running ? api.backtest(runId) : Promise.resolve({})), [runId, Math.floor(tick / 3)]);
   const total = events.data?.at(-1)?.t ?? 0;
   const [clock, setClock] = useState(0);
@@ -159,11 +168,16 @@ function Replay({ runId }: { runId: string }) {
   }, [playing, speed, total, events.data]);
   useEffect(() => { if (clock >= total && total > 0) setPlaying(false); }, [clock, total]);
 
+  // 点击「运行编号」时任务可能已经开始、但 run.json 还没导出：先显示任务准备/原始输出，
+  // 导出后自动重载过程视图，而不是直接报“运行不存在”。
+  if (detail.error && jobId) {
+    return <JobWaiting jobId={jobId} onRun={() => { detail.reload(); events.reload(); }} />;
+  }
   if (!detail.data || !events.data) {
     if (detail.error || events.error) return <ErrorBox error={(detail.error ?? events.error)!} />;
     return <Loading what={t("运行过程")} />;
   }
-  const { run, rounds, job, batch } = detail.data;
+  const { run, rounds, job, batch, agent } = detail.data;
   const visible = events.data.filter((e) => e.t <= clock);
   const finished = !running && clock >= total;
 
@@ -228,7 +242,13 @@ function Replay({ runId }: { runId: string }) {
       )}
       {finished && (
         <Notice tone="accent" title={run.state === "已完成" ? t("运行结束") : tf("运行{s}", { s: t(run.state) })}>
-          {tf("共 {r} 轮，采纳 {a} 轮，大模型费用 {c}。", { r: run.rounds, a: run.adopted, c: `$${run.cost_usd.toFixed(2)}` })}<Link to={`/results?run=${run.run_id}`} className="text-accent underline">{t("查看结果分析 →")}</Link>
+          {tf("共 {r} 轮，采纳 {a} 轮，大模型费用 {c}。", { r: run.rounds, a: run.adopted, c: `$${run.cost_usd.toFixed(2)}` })}
+          {agent ? (
+            <>
+              <Link to={`/agents/${agent.agent_id}`} className="text-accent underline">{agentRunNotice(agent.state)} →</Link>
+              <Link to={`/results?run=${run.run_id}`} className="text-muted underline ml-2">{t("查看本次结果")}</Link>
+            </>
+          ) : <Link to={`/results?run=${run.run_id}`} className="text-accent underline">{t("查看结果分析 →")}</Link>}
           {job && <span className="text-muted">{t("（回测明细在运行结束后约 1 分钟内导出）")}</span>}
         </Notice>
       )}

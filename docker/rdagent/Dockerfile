@@ -4,8 +4,8 @@
 # - 源码来自仓库内 rdagents/（RD-Agent v1.0.0 副本），不再从 GitHub clone；
 #   该目录经命名卷与 dind 共享，保证所有路径都是容器内路径（见全局设计 7.4）
 
-# pip 源可通过 --build-arg PIP_INDEX_URL=... 覆盖（默认官方 PyPI；国内网络可传镜像加速）
-ARG PIP_INDEX_URL=https://pypi.org/simple
+# pip 源可通过 --build-arg PIP_INDEX_URL=... 覆盖（默认阿里云；海外可传官方 PyPI）
+ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
 
 # ---- 构建阶段：编译 RD-Agent 自带的 Web UI（Vue + Vite，需要 Node 22）----
 # 由 `rdagent server_ui` 提供服务，含 Playground：选择场景、上传资料、启动与控制运行、实时查看过程
@@ -35,17 +35,29 @@ FROM condaforge/miniforge3:latest
 ARG PIP_INDEX_URL
 ENV PIP_INDEX_URL=${PIP_INDEX_URL}
 
-RUN conda create -y -n rdagent python=3.11 && conda clean -afy
+# 国内网络常连不上 conda.anaconda.org，且各镜像站时有下架/超时：
+# 依次尝试多个国内 conda-forge 镜像，任一可用即继续。如需固定某个源，直接改下面的默认值。
+ARG CONDA_FORGE_CHANNELS="https://conda.anaconda.org/conda-forge https://mirrors.ustc.edu.cn/anaconda/cloud/conda-forge https://mirrors.ustc.edu.cn/conda-forge https://mirrors.bfsu.edu.cn/anaconda/cloud/conda-forge https://mirror.nju.edu.cn/anaconda/cloud/conda-forge https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge https://mirrors.cloud.tencent.com/anaconda/cloud/conda-forge https://mirrors.huaweicloud.com/anaconda/cloud/conda-forge"
+RUN ok=0; for ch in $CONDA_FORGE_CHANNELS; do \
+        echo "== conda channel attempt: $ch"; \
+        if CONDA_REMOTE_CONNECT_TIMEOUT_SECS=10 CONDA_REMOTE_READ_TIMEOUT_SECS=30 CONDA_REMOTE_MAX_RETRIES=1 \
+           conda create -y -n rdagent --override-channels -c "$ch" python=3.11; then \
+            ok=1; break; \
+        fi; \
+        rm -rf /opt/conda/envs/rdagent; conda clean -afy >/dev/null 2>&1 || true; \
+    done; \
+    [ "$ok" = 1 ] || { echo "所有 conda 镜像均不可用：请检查网络，或给 Docker 构建配置代理"; exit 1; }; \
+    conda clean -afy
 ENV CONDA_DEFAULT_ENV=rdagent \
     PATH=/opt/conda/envs/rdagent/bin:$PATH
 
 # 依赖单独成层：rdagents/ 代码变更时无需重新下载依赖（含 paper trading 所需 longport/yfinance 等）
 COPY rdagents/requirements.txt /tmp/rdagent-requirements.txt
-RUN pip install --no-cache-dir -r /tmp/rdagent-requirements.txt tables longport yfinance exchange_calendars
+RUN pip install --no-cache-dir -i "$PIP_INDEX_URL" -r /tmp/rdagent-requirements.txt tables longport yfinance exchange_calendars
 
 # 源码目录即安装目录：RD-Agent 会把自身目录下的模板文件夹挂载给回测容器，
 COPY rdagents /opt/rdagent-src
-RUN pip install --no-cache-dir --no-deps -e /opt/rdagent-src \
+RUN pip install --no-cache-dir -i "$PIP_INDEX_URL" --no-deps -e /opt/rdagent-src \
     && cp -a /opt/rdagent-src /opt/rdagent-src-image
 
 # Web UI 静态文件（由 UI_STATIC_PATH 指向）

@@ -1,0 +1,28 @@
+# 研究迭代 Agent（WF-02）策略；Spec 第 18.10、18.12 节。
+# P0 只实现 new_version / stop；其余工具列在白名单里，P1 接入后再生效（available_tools 会按实现过滤）。
+max_rounds: 5
+budget_usd: 2.0
+no_improve_patience: 2
+human_gate: costly_actions        # all | costly_actions | none
+child_loops: 2                    # 每轮 RD-Agent 子运行跑几轮（P1 默认 2，控制费用/时间）
+child_budget_usd: 0.6             # 每个市场子运行的预算上限（美元）
+tools:
+  - new_version
+  - run_rdagent
+  - run_text
+  - validate
+  - diagnose
+  - redundancy
+  - complement
+  - rule_precheck
+  - write_idea
+  - stop
+costly_tools:
+  - new_version
+  - run_rdagent
+  - run_text
+prompts:
+  critic: iteration-critic-v1
+  planner: iteration-planner-v2
+  plan_critic: iteration-plan-critic-v1
+  evaluator: iteration-evaluator-v1

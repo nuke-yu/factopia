@@ -1,6 +1,7 @@
 # Factopia 最小 POC 需求规格（Spec）
 
-> 版本：v0.3（2026-10-07） 状态：草案，待评审
+> 版本：v1.35（2026-11-01） 状态：草案，待评审
+> v1.35 更新（2026-11-01）：新增第 18 章「研究迭代 Agent（WF-02）」——平台自有的 agentic workflow，RD-Agent 降为它调用的工具；结果页「继续研究」三分支（新版本 / 新线索 / Agent）；明确不使用 LangGraph；与 RD-Agent 只保留「进程 + 文件」契约（EXT-02、第 18 章）。
 > v1.34 更新（2026-10-14）：线索池的 AI 建议改为按证据生成，生成依据全部可见（数据维度、19 个方向 × 9 项打分、全部证据、完整提示词）——研究员可先输入想法；不输入时平台按研究缺口、测试期前的显著因子、以往轮次是否采纳、排除方向、获批信号给方向排序，页面显示选择理由与 AI 引用的证据（第 17.11 节）。
 > v1.33 更新（2026-10-13）：修复从断点继续的四个缺陷——排队 / 运行中状态被误拒、旧日志中的错误触发停止、续跑未重新生成因子数据目录（续跑后各轮全部读不到数据）、`--loop-n` 应为总轮数（第 16.10 节）。
 > v1.32 更新（2026-10-13）：研究任务可"从断点继续"——失败或停止的 RD-Agent 任务从最近的检查点续跑剩下的轮数（同一运行编号与日志，已完成轮次与费用保留，续跑记录写明当时的模型）；原"重新运行"保留为从头开始。失败提示改为指向"从断点继续"（第 16.9 节）。
@@ -174,11 +175,12 @@
 | BR-55 | 香港："可扩展至**互联互通**合资格证券；涉及互联互通时增加相应检查" | 股票池为恒生指数成分股，不涉及互联互通；规则包没有互联互通检查 | 原文为"可扩展""涉及时"，不在 POC 范围 |
 | BR-56 | 法国研究标准化重点："**可持续披露字段**" | 规则包有 SFDR 规则、授权有可持续偏好；数据字典没有可持续披露字段（无数据源） | 需数据商（ESG / SFDR 披露数据），不在 POC 范围 |
 
-**L. 扩展（业务 spec 未直接要求，用户 2026-10-11 决定增加）**
+**L. 扩展（用户 2026-10-11 / 2026-11-01 决定增加）**
 
 | 编号 | 内容 | 依据 | 状态 | 说明 |
 |---|---|---|---|---|
 | EXT-01 | 研究线索池：首页汇集投资假设、论文 / 研报、研究员经验、人工反馈四个人工渠道，以及监控预警、组合归因、审批退回三个自动回流渠道；统一为线索卡片后转研究立项（第 17 章） | 创意形成阶段；BR-25、32 与"可追溯链路" | ✅ | 已实现并快速检查（第 17.10 节）：首页"00 线索池"，四个人工渠道 + 三个自动回流渠道，敏感信息拦截、论文许可与抽取、防泄漏提示、相似提示、转立项与追溯、地区视角 |
+| EXT-02 | 研究迭代 Agent（WF-02）：以一次研究版本为输入，自动观察、诊断、规划、执行、评估，形成下一版本 / 新线索 / 停止建议；RD-Agent 降为它调用的工具；结果页「继续研究」三分支；不使用 LangGraph（第 18 章） | 补足"结果 → 下一步研究"的闭环；BR-25、26、28、32、37、38 | 🟡 | 设计完成（第 18 章）；P0/P1/P2/P3 主要能力已落盘（`factopia/agents/`），27 个 app 测试 + 3 个 runner 测试通过（含 7 个 Agent 红队用例）；P1 真实闭环完成（v2/v3 运行 + 可信度检查 + 评估 `not_improved`）；P3 规则预检、自动线索回流、因子库/版本重叠、演示脚本完成；待完整端到端走查 |
 
 ### 0.2 本 spec 中与业务 spec 冲突、已改为以业务 spec 为准的决定
 
@@ -1035,6 +1037,7 @@ RD-Agent 原版默认 1 天，是为了在学术基准上比较方法，并非�
 3. **治理链路**：验证关卡（VAL）→ 规则预检（RULE）→ 报告（RPT）→ 香港—伦敦—巴黎模拟审批与审计证据包（第 12 章）。
 4. **组合与监控**：授权组合与汇率拆分（PORT）→ 信号目录 → 分市场监控与单一市场衰减演示。
 5. 第 10.6 节中标为"最小 POC"的补充需求，随相应模块一起实现。
+6. **研究迭代 Agent（WF-02，2026-11-01 增补）**：按第 18 章实施；先做 P0 + P1 的单链 MVP（诊断 → 新版本 → 运行 → 评估），再补页面与治理工具。
 
 ### 10.6 业务 spec 中本 spec 尚未覆盖的要求（2026-10-10 补充）
 
@@ -2409,6 +2412,8 @@ AI 解释引用了 38 条事实中的多条，指出英法印花税 / 金融交�
 | 模块接口 | 各模块保持独立调用（NFR-06），由平台编排层调用 |
 | 阶段 | 最小 POC 先实现研究台与简化的状态流转；完整的风控台、组合台、审批与信号目录属于阶段 2 |
 
+**研究迭代 Agent（WF-02，2026-11-01）：** 平台自有的 agentic workflow，见第 18 章。以一次研究版本为输入，按"观察 → 诊断 → 规划 → 人工闸门 → 执行 → 评估"循环，决定下一版本、新线索或停止；RD-Agent 只作为被调用的工具。技术选型为显式状态机 + 现有 runner，不使用 LangGraph；与 RD-Agent 只保留"进程 + 文件"契约。
+
 ---
 
 ## 16. 研究立项页面（研究规格生成）
@@ -2458,7 +2463,7 @@ AI 解释引用了 38 条事实中的多条，指出英法印花税 / 金融交�
         │
         ▼
 ⑤ 回顾：逐轮查看假设与结果，标注"值得深挖 / 死路 / 待定"
-   → 一键基于本版本生成下一版本（标注带入排除方向或研究方向）
+   → 结果页「继续研究」：生成同一研究的新版本 / 把新发现存入线索池 / 交给研究迭代 Agent（第 18.7 节）
 ```
 
 ### 16.4 研究规格的内容
@@ -2934,3 +2939,388 @@ v1 的问题：研究角度从 18 个里随机抽取；以往研究只给题目�
 - 合并 3 条（英国监控、法国组合归因 × 2）：假设每句带来源，3 条均被引用；AI 指出英国与法国对同一信号方向的竞争性假设，决定分市场独立检验；列出 2 项数据做不到的内容（逐笔成本、日内冲击）；市场为英国、法国。
 - 追加 1 条（香港监控"建议暂停"）到 hk_vol_adj_momentum_reversal v5：保留原假设 [B]，指出原假设与上线期负 rank IC 的冲突，把原方向与反向信号作为竞争方向。
 - 少于 2 条、未填处理人均被拒绝（"追加已属于该研究的线索"的拒绝逻辑已实现，现有研究都没有来源线索，未实测）；锁定后 3 条线索均为"已转立项"并指向同一版本，事件记录带合成编号。
+
+---
+
+## 18. 研究迭代 Agent（WF-02）
+
+> 2026-11-01 新增：Factopia 平台自有的 agentic workflow，定位为「研究迭代 Agent」；RD-Agent 是该 workflow 调用的工具。本章同时记录结果页「继续研究」入口（第 18.7 节）、技术选型「不使用 LangGraph」（第 18.8 节）与 RD-Agent 兼容契约（第 18.9 节）。
+
+### 18.1 背景：RD-Agent 之外缺的是什么
+
+| 问题 | 现状 | 新工作流 |
+|---|---|---|
+| 一次研究结束后，下一步靠人 | 研究员在结果页看诊断，自己判断改什么、是否换方向 | Agent 收集事实、诊断、规划、执行、评估，形成闭环 |
+| RD-Agent 的「采纳」主要看收益 | 第 14.5、14.6 节：多个采纳轮次未通过可证伪测试 | 以 `verdict` 与 `diagnostics` 为事实，不沿用 RD-Agent 的采纳结论 |
+| 多次尝试挑结果 | 第 14.6 节：第 4 轮才转正，属于多次尝试后的结果 | 每轮预注册成功标准；记录尝试次数；防 p-hacking |
+| 跨市场、跨版本、组合与规则没有闭环 | 各页面分别展示，靠人串联 | Agent 跨市场、跨版本决策；工具覆盖诊断、验证、因子库、组合、规则、线索 |
+| 过程不可见 | 页面只显示结果 | 每步事实、提示词、模型、费用、工具参数、决策全部留痕 |
+
+**业务价值：** 这条工作流把"结果 → 下一步"从人工判断变成可审计的闭环：缩短研究周期、减少重复试错、降低假阳性入库，并把跨市场迁移、组合反馈与规则预检纳入同一决策链；RD-Agent 的产出因此能被连续使用，而不是每次运行后停在结果页。它不是流程补丁，也不改变现有审批与发布的人类决策。
+
+**对应的业务需求：**
+
+| 业务要求 | 本工作流的作用 |
+|---|---|
+| BR-25 AI 辅助发现 | 诊断与规划阶段把结果转成下一条可检验假设 |
+| BR-26 主动检查泄漏、过拟合、定义不稳定、实施成本 | 事实过滤、可信度状态、诊断与评估 |
+| BR-28 信号智能、互补组合 | 冗余检查、互补组合工具 |
+| BR-32 组合反馈闭环 | 组合归因与建议回流到下一轮规划 |
+| BR-37 三市场并行、可复现回测 | `run_rdagent` 走现有 runner |
+| BR-38 三市场比较与经济解释 | 诊断与迁移分类进入决策 |
+
+### 18.2 定位与边界
+
+| 维度 | RD-Agent（WF-01） | 研究迭代 Agent（WF-02） |
+|---|---|---|
+| 层级 | 因子生成与回测工具 | 研究决策与编排层 |
+| 范围 | 单市场一次运行内 | 跨市场、跨版本、跨模块 |
+| 决策依据 | 收益导向的 AI 评审 | 可证伪测试、诊断、可信度、因子库、规则与授权 |
+| 输出 | 因子代码与轮次结果 | 下一版本 / 新线索 / 停止 / 升级建议 |
+| 关系 | 被 Agent 调用 | 调用 RD-Agent、文本研究、验证、诊断、组合、规则、线索 |
+
+**不做什么：** 不自动批准、不自动发布、不下单；不替代审批台；不修改 RD-Agent 源码；不允许 Agent 执行任意代码（只调用白名单工具）。
+
+### 18.3 对象、状态与留痕
+
+**对象：**
+
+| 对象 | 内容 |
+|---|---|
+| `agent` | `agent_id`、根研究版本、市场与周期、策略（轮数 / 预算 / 耐心 / 闸门）、状态、费用 |
+| `round` | 第 n 轮：事实、诊断、计划、动作、评估 |
+| `facts` | 编号 `F#` 的事实清单，每条带来源与期间 |
+| `diagnosis` | 主因、各市场发现、风险、置信度；每条结论引用 `F#` |
+| `plan` | 一个动作、参数、预期结果、预注册成功标准、备选动作、停止条件 |
+| `action` | 工具名、参数、子任务编号、执行结果 |
+| `evaluation` | 改进 / 未改进 / 无法判定；与父版本对比；证据 |
+| `memory` | 试过的动作、结果、排除方向；下一轮读取 |
+| `trace` | 每次 LLM / 工具调用的输入、输出、模型、tokens、费用、耗时 |
+
+**状态：**
+
+```
+queued → observing → diagnosing → planning → awaiting_human
+      → acting → waiting_children → evaluating
+      → (下一轮 | done | stopped | failed)
+```
+
+- `awaiting_human`：付费动作、生成新版本、提交审批等需要人批准；演示模式可配置为自动。
+- `waiting_children`：子任务（RD-Agent / 文本研究 / 可信度检查）在 runner 中执行；Agent 释放线程，runner 主循环在子任务全部结束后重新入队。**不能占着并行槽等待。**
+- 每个阶段结束原子写 `runtime/agents/<agent_id>/agent.json`；进程重启后从最近检查点继续。
+
+**落盘：**
+
+```
+runtime/agents/<agent_id>/
+├── agent.json
+├── rounds/001/{facts,diagnosis,plan,action,evaluation}.json
+├── memory.json
+├── trace.jsonl
+└── report.md
+```
+
+### 18.4 工作流
+
+```
+入口：选择一个研究版本 vN（RD-Agent / 文本信号 / Alpha158 / 团队因子）
+      + 预算 + 最大轮数 + 人工闸门策略
+        │
+        ▼
+① OBSERVE 事实收集（确定性，不调 LLM）
+   结果 / 诊断 / 可信度 / 迁移分类 / 因子库重叠 / 规则预检 / 线索池
+   → facts.json：每条 fact 带编号 F#、来源、期间
+        │
+        ▼
+② DIAGNOSE 诊断（LLM Critic）
+   主因排序、市场差异、泄漏 / 过拟合 / 定义不稳定 / 成本 / 容量
+   → diagnosis.json：每条结论必须引用 F#，区分事实与推断
+        │
+        ▼
+③ PLAN 规划（LLM Planner）
+   从动作菜单中选择一个干预 + 参数 + 预期结果 + 成功标准
+   → plan.json：预注册，评估时不能改标准
+        │
+        ▼
+④ GATE 人工闸门（可配置）
+   付费运行 / 新建版本 / 提交审批 → 人批准；演示模式可自动
+        │
+        ▼
+⑤ ACT 执行（确定性工具）
+   new_version / run_rdagent / run_text / validate / diagnose
+   redundancy / complement / rule_precheck / write_idea
+   → 生成子任务，交给现有 runner，等待完成
+        │
+        ▼
+⑥ EVALUATE 评估（确定性比较 + LLM 总结）
+   改进 / 未改进 / 无法判定；写入 memory（哪些动作有效）
+        │
+   ┌────┴────┐
+   ▼         ▼
+ 继续       收敛 / 升级
+ 回到①      → 迭代报告 + 下一步建议 → 交现有审批与信号目录
+```
+
+### 18.5 Agent 角色与提示词
+
+| 角色 | 提示词版本 | 输入 | 输出 | 规则 |
+|---|---|---|---|---|
+| Critic 诊断官 | `iteration-critic-v1` | facts、memory、父版本结论 | `primary_cause`、`market_findings[]`、`risks[]`、`confidence` | 每条结论必须引用 `F#`；无引用丢弃；区分事实与推断；不得引用测试期 / holdout 数值 |
+| Planner 规划官 | `iteration-planner-v1` | diagnosis、动作菜单、预算、memory | `action`、`args`、`expected_outcome`、`success_criteria`、`alternatives_rejected`、`stop_condition` | 只能选白名单动作；每轮只做一个；执行前写明预期与阈值 |
+| Evaluator 评估官 | `iteration-evaluator-v1` | plan、父版本结果、子版本结果 | `verdict`（improved / not_improved / inconclusive）、`reason`、`evidence` | 只按预注册标准判定；不得事后改标准 |
+
+- 复用 [factopia/research/draft.py](../factopia/research/draft.py) 的 `llm_config()` 与 `_chat()`；不引入第二个 LLM 客户端。
+- 提示词文件放在 `factopia/agents/prompts/`；版本号写入每次调用与 trace（BR-46）。
+- JSON 输出按结构校验；不合格重试一次，仍不合格则该轮失败并转人工。
+
+### 18.6 动作空间与工具
+
+| 干预 | 改动 | 工具 / 复用模块 |
+|---|---|---|
+| `refine_definition` | 基于诊断改写方向 / 定义，生成新版本 | `research/draft.py`、`research/store.py` |
+| `change_horizon` | 改预测周期 | 新版本 + runner |
+| `localize` | 只保留某市场或分市场参数 | 新版本 + runner |
+| `neutralize` | 行业 / 风格中性化后重算 IC | `diagnostics` |
+| `cost_aware` | 降低换手、持有期平滑、成本后重评 | 诊断 / 新版本 |
+| `combine` | 与库内因子或获批信号组合、正交化 | `portfolio` |
+| `text_signal` | 改走文本信号研究 | `text/research.py` |
+| `new_angle` | 当前方向判死，写回线索池 | `ideas` |
+| `stop` | 收敛或放弃，出报告 | `agents/report.py` |
+
+**工具白名单：** `observe`、`new_version`、`run_rdagent`、`run_text`、`validate`、`diagnose`、`redundancy`、`complement`、`rule_precheck`、`write_idea`、`stop`。Planner 不能发明工具；参数按 JSON schema 校验。
+
+**工具与现有入口的关系：**
+
+- `run_rdagent` / `run_text`：调用 `store.create_jobs`，与页面「开始运行」完全相同；继承预算、取消、续跑、可信度检查排队。
+- `validate`：调用 `store.create_validate_job`，不调用大模型。
+- `diagnose`：调用 `diagnostics.diagnose_run`，只读已导出结果。
+- `redundancy`：新增小工具，读 score 与因子库，计算与已获批 / 团队因子的相关性；不重跑回测。
+- `complement` / `rule_precheck` / `write_idea`：调用现有模块。
+- `new_version`：用 `draft.make_draft` 生成规格，研究员确认后 `store.save_version`；**不直接锁定**。
+
+### 18.7 结果页的「继续研究」入口
+
+**位置：** 放在「研究结论」面板（`StudyPanel`）右上角操作区，不放在「运行」下拉旁边。下拉选择的是某个市场的一次运行，下一步研究基于的是**研究版本**；如放在下拉旁，按钮必须写明「基于 vN」。
+
+**交互：** 一个主按钮「继续研究」，三个分支：
+
+| 分支 | 文案 | 去向 | 结果 |
+|---|---|---|---|
+| 默认 | 生成下一版（vN+1） | 研究立项页，预填父版本内容，`based_on = rid.vN` | 同一 `research_id` 的下一版本，保留血缘 |
+| 新方向 | 把新发现存入线索池 | 线索池新建表单，预填标题 / 正文 / 市场 / 来源运行 | 线索卡，之后转立项为新研究 |
+| 自动 | AI 生成下一版假设（vN+1）并自动运行 | 启动 WF-02，进入 Agent 页 | Agent 诊断后提出动作，人工批准后执行 |
+
+```
+┌ 研究结论 · <研究编号> vN · 香港 / 英国 / 法国 ──────────────────────────┐
+│  [假设否定]  [可信度存疑]                         基于 vN ▾  继续研究     │
+└──────────────────────────────────────────────────────────────────────────┘
+                                  │
+                 ┌──────────────────────────────────────────┐
+                 │ 生成下一版（vN+1）              推荐     │
+                 │ 同一研究，保留版本血缘，可对比 vN / vN+1  │
+                 ├──────────────────────────────────────────┤
+                 │ 把新发现存入线索池                        │
+                 │ 新方向先查重、可合并，之后再转立项        │
+                 ├──────────────────────────────────────────┤
+                 │ AI 生成下一版假设（vN+1）并自动运行      │
+                 │ AI 诊断后提出下一步，执行前需你批准       │
+                 └──────────────────────────────────────────┘
+```
+
+**预填：**
+
+| 去向 | 预填 | 用户还要做 | 落到 |
+|---|---|---|---|
+| 新版本 | 假设、方向、排除项、市场、周期、授权、`based_on`、来源运行 | 改假设 / 可证伪测试，审核锁定 | 同 `research_id` 的 vN+1 |
+| 新线索 | 标题、正文（新发现）、市场、来源运行 | 补提交人、确认无客户信息、查重 / 合并 | 线索卡 → 转立项 |
+| Agent | 根版本、市场、周期、预算、轮数、闸门策略 | 批准计划 / 预算 | `runtime/agents/<id>` |
+
+**边界状态：**
+
+| 状态 | 行为 |
+|---|---|
+| 没有锁定版本 | 三个分支都禁用 |
+| 运行未完成 | 「生成下一版本」禁用，提示等运行结束 |
+| 结果受泄漏影响 | 允许新版本 / 线索，标注「仅用于流程展示」 |
+| 版本有 3 个市场 | 按钮范围是整个版本；菜单显示 `vN · 香港/英国/法国` |
+| 只迭代一个市场 | 新版本允许只选该市场，父版本不变 |
+| 文本信号研究 | 同一入口，新版本走文本研究 |
+
+**不直接放「生成新研究项目」的原因：** 平台的数据模型是「研究项目 = `research_id` + 多个版本」；直接新建会断血缘。新研究应从线索池进入，保留查重、合并、来源、文档许可与防泄漏确认。
+
+**实现衔接：**
+
+- `StudyPanel` 已有 `actions` 槽位；结果页已有 `research.id` / `research.version`。
+- `Draft` 已有 `basedOn`、`ideaIds`；`ResearchPage` 已把 `based_on` 传给起草接口；缺的是从结果页进入时初始化 `Draft`（URL 参数或 `update()` 后 `navigate()`）。
+- 线索池手工线索的 `source_ref` 目前为空（`ideas.create` 固定写 `None`）；需增加 `source_ref` 字段并在线索卡显示「来源：运行 / 研究版本」。
+- Agent 入口为新接口 `POST /api/agents` 与新页面 `/agents/:id`。
+
+### 18.8 技术选型：不使用 LangGraph
+
+**决定（2026-11-01）：** 使用显式状态机 + 现有 runner，不引入 LangGraph 或其他 Agent 框架。
+
+| 维度 | 框架带来的成本 | Factopia 已有的 | 结论 |
+|---|---|---|---|
+| 运行环境 | `langgraph` + `langchain-core` 等依赖 | `rdagent` 镜像是固定版本的 conda 环境（Python 3.11），RD-Agent / Qlib / litellm 全部锁死；`app` 镜像用 uv 锁版本 | 往 rdagent 环境加依赖有冲突风险；单独建服务又多一套编排 |
+| 状态管理 | checkpointer 保存图状态 | `runtime/jobs/*.json`、live 状态、断点续跑、取消 | 两套状态源，容易出现「图说完成了、文件还没完成」 |
+| 长任务等待 | 图节点等待或 interrupt/resume | RD-Agent 一次运行 10–40 分钟；runner 已实现「建子任务 → 释放线程 → 轮询完成」 | 图节点阻塞会占死线程；对齐 interrupt 更绕 |
+| 人工闸门 | `interrupt` + resume | 审批台、暂停 / 恢复、哈希链留痕 | 需要把 interrupt 映射到现有审批记录，重复建设 |
+| 成本与审计 | 不提供 | `llm_cost`、prompt 版本、trace、冻结指纹 | 仍需自己写；框架只多一层不透明的图 |
+| 国内构建 | 新增依赖、重建镜像 | 现有镜像与 `uv.lock` 已稳定 | 当前阶段不值得承担构建风险 |
+
+**等价语义：** 不引框架，但按同样的概念实现：
+
+| LangGraph 概念 | 本方案 |
+|---|---|
+| State | `agent.json` + 每轮 `facts/diagnosis/plan/action/evaluation.json` |
+| Node | 一个函数：`observe(state) -> state`、`diagnose(state) -> state` … |
+| Edge | 显式转移表：`{"diagnosed": "plan", "planned": "gate", ...}` |
+| Checkpoint | 每个节点结束原子写一次 `agent.json` |
+| Interrupt | `awaiting_human` 状态 + API 批准 / 拒绝 |
+| Resume | runner 主循环发现子任务结束，重新入队 |
+| Trace | `trace.jsonl` 追加写 |
+
+**重新评估的条件：** 项目后续明确要求使用某个 Agent 框架；团队已非常熟悉该框架；把 Agent 做成独立服务且不塞进 rdagent 的 conda 环境。即使使用，也只做薄层，文件状态仍是唯一真相；不要把 RD-Agent 放进图节点，不要向 rdagent 环境加依赖。
+
+### 18.9 与 RD-Agent 的兼容契约
+
+RD-Agent 是**被调用的工具**，不是宿主框架。组合方式：
+
+```
+Factopia Agent（WF-02）
+   │  只通过 runner 建任务
+   ▼
+Factopia runner / job 队列
+   │  entrypoint.sh
+   ▼
+RD-Agent（黑盒：fin_factor，自己的 workflow）
+   │  写 run.json / rounds.json / parquet
+   ▼
+Factopia 导出与诊断（export / diagnostics / validate）
+```
+
+| 契约 | 内容 | 现有位置 |
+|---|---|---|
+| 调用方式 | 通过 `entrypoint.sh rdagent fin_factor` 启动，**不 import、不改源码、不 patch** | `docker/rdagent/entrypoint.sh` |
+| 输入规格 | 通过 `FACTOPIA_RESEARCH` 传锁定版本；市场、周期、股票池由环境变量控制 | `factopia/runner.py`、`factopia/research/store.py` |
+| 提示词上下文 | 新增版本仍走 `factopia/research/context.py`，不绕过它另写一套 | `factopia/research/context.py` |
+| 输出文件 | Agent 只读 `run.json`、`rounds.json`、`backtest/`、`positions/`、`signal/`、`validation/` | `factopia/export/rdagent_run.py` |
+| 生命周期 | 通过 `store.create_jobs` 建任务，继承预算、取消、断点续跑、可信度检查排队 | `factopia/runner.py`、`factopia/research/store.py` |
+| 防泄漏与时间切分 | 数据截止 2023-12-31、测试期 2022–2023；Agent 决策只看验证期 | `factopia/research/periods.py`、`factopia/text/research.py` |
+
+**不要做的四件事：**
+
+1. 不要把 RD-Agent 当成 LangGraph 图的一个节点；它是长任务，正确做法是 Agent 调 `run_rdagent` → 建 Factopia job → 返回 `job_id` → Agent 进入 `waiting_children`。
+2. 不要在 Agent 里直接调 RD-Agent 的 Python 接口；绕过 runner 就丢掉预算、实时进度、取消与可信度检查排队。
+3. 不要为了 Agent 修改 RD-Agent 的场景模板或源码；需要不同场景时走 `factopia/mining/rdagent_ext/`。
+4. 不要把 LangGraph 或任何新依赖装进 rdagent 的 conda 环境；Agent 的 LLM 调用继续用 `draft.llm_config()` / `_chat()`。
+
+**真正的兼容风险是契约漂移：** RD-Agent 锁在 v1.0.0、Qlib 锁在提交 `2fb9380`。升级时只要 `run.json` / `rounds.json` 的导出格式不变，Agent 层不受影响；格式变了只改 `factopia/export/rdagent_run.py`。
+
+### 18.10 数据、接口与任务
+
+| 项目 | 内容 |
+|---|---|
+| 新包 | `factopia/agents/`：`store.py`、`observe.py`、`loop.py`、`tools.py`、`policy.py`、`report.py`、`prompts/` |
+| 配置 | `configs/agents/iteration.yaml`：轮数、预算、耐心、闸门、工具白名单、提示词版本 |
+| API | `POST /api/agents`、`GET /api/agents`、`GET /api/agents/{id}`、`GET /api/agents/{id}/trace`、`POST /api/agents/{id}/rounds/{n}/approve` / `reject`、`POST /api/agents/{id}/pause` / `stop`、`GET /api/agents/{id}/report` |
+| runner | `execute()` 增加 `"agent": run_agent`；`waiting_children` 不占并行槽；重启从检查点续跑 |
+| 页面 | 结果页「继续研究」；新增「研究 Agent」页（时间线、事实、诊断、计划、工具调用、批准 / 拒绝、血缘图、trace） |
+| 依赖 | 不新增 Python 依赖；LLM 走现有 `draft._chat` |
+| CLI | `python -m factopia.agents run --research <id> --version <n> --rounds 1 [--dry-run]`；`--dry-run` 只生成事实、诊断与计划，不执行动作 |
+
+**P0 配置示例（`configs/agents/iteration.yaml`）：**
+
+```yaml
+max_rounds: 5
+budget_usd: 2.0
+no_improve_patience: 2
+human_gate: costly_actions        # all | costly_actions | none
+tools: [new_version, run_rdagent, run_text, validate, diagnose,
+        redundancy, complement, rule_precheck, write_idea, stop]
+prompts:
+  critic: iteration-critic-v1
+  planner: iteration-planner-v1
+  evaluator: iteration-evaluator-v1
+```
+
+### 18.11 防泄漏、防过拟合、成本与治理
+
+| 约束 | 做法 |
+|---|---|
+| 防泄漏 | 决策事实只用验证期及以前；测试期只用于最终报告；holdout 只由确定性可信度检查使用；Agent 只看到可信度状态，不看到数值；`observe.py` 按期间过滤并写测试 |
+| 防 p-hacking | 每轮先写预期与成功标准；`memory` 记录尝试次数；最终报告披露轮数 / 版本数；沿用平台显著性门槛 |
+| 成本 | 单轮 + 总预算上限；付费动作必须人工批准；能用确定性工具算的不调 LLM；费用写入 `llm_costs.jsonl` |
+| 可复现 | 记录模型、提示词版本、温度、工具参数、数据快照；LLM 决策原文入 trace，审计时可重放 |
+| 不自动发布 | Agent 只产出建议与新版本；审批台与信号目录仍由人操作；不自动批准、发布、下单 |
+| 提示词注入 | 研究假设作为不可信输入；事实由系统生成；工具白名单；JSON schema 校验；引用不存在的 `F#` 丢弃 |
+| 留痕 | trace 追加写；关键操作复用哈希链（与线索池、审批一致） |
+
+### 18.12 实施计划
+
+| 阶段 | 内容 | 验收 |
+|---|---|---|
+| P0 骨架 | `agents/` 包、facts、Critic / Planner 提示词、单轮 CLI；只接 `new_version` | 命令行跑通一轮，生成诊断与计划 |
+| P1 闭环 | `run_rdagent` / `run_text` / `validate`；runner `waiting_children`；预算与轮数 | 自动完成「诊断 → 新版本 → 运行 → 评估」 |
+| P2 产品化 | API、页面、人工闸门、血缘图、trace、报告 | 页面完整演示；重启可续跑 |
+| P3 加分 | 库重叠、互补组合、规则预检、线索回流、红队测试 | 演示脚本可用；红队用例通过 |
+
+MVP = P0 + P1 的单链；首次端到端演示先做这条。
+
+**P0 落地（2026-11-01）：** 代码在 `factopia/agents/`（`store`、`policy`、`observe`、`llm`、`tools`、`loop`、`report`、`__main__`）、`configs/agents/iteration.yaml`、`factopia/agents/prompts/`；单元测试在 `tests/test_agents.py`，6 个用例全部通过。P0 只接 `new_version` / `stop`，不接 API / 前端 / runner。运行方式见 README 或第 18.10 节的 CLI。
+
+**P1 落地（2026-11-13）：** `advance()` 可恢复状态机、`kind="agent"` job、`waiting_children` supervisor、`run_rdagent` / `run_text` / `validate` / `diagnose` 工具、CLI `approve` / `reject` 已实现；`tests/test_agents_p1.py`（8）与 `tests/test_runner_agent.py`（3）通过。真实 Agent `agt_20261112173012_63be` 已完成 P1 闭环：批准 v2 → 子运行 `hk_h20_20261112173853`（2 轮）→ 可信度检查 → 评估 `not_improved`（子版本 rank IC −0.0094，父版本 −0.0216；收益与回撤改善但预注册的 rank IC 方向/幅度未达标）。期间修复 `_evaluate` 中局部变量遮蔽模块 `verdict` 的 bug，并新增评估回归测试。
+
+**P2 落地（2026-11-15）：** Agent API（启动 / 详情 / trace / report / approve / reject / stop）、agent job 的地区可见性、结果页「继续研究」三分支（下一版本 / 存入线索池 / Agent）、Agent 页（时间线、事实/诊断/计划、草稿审改、批准/拒绝、trace、报告）、研究立项 `based_on` 预填、线索池预填与 `source_ref` 来源追溯已实现；前端 `npm run build` 通过。待浏览器端到端演示与 UI 打磨；API key 日志脱敏仍待团队决定。
+
+**P3 落地（2026-11-15）：** 评估后自动执行 setup 规则预检并写入评估摘要；`not_improved` / `inconclusive` 时自动回流线索（渠道「研究 Agent 反馈」，按 Agent/轮次/结论去重）；`GET /api/agents/{id}/overlap` 复用 `portfolio.combine` 计算与已获批 / 历史版本的打分相关性（绝对值 ≥ 0.7 视为冗余）及互补结论；Agent 页显示规则预检、重叠面板、阶段 toast、评估后四个下一步操作（查看结果 / 继续研究 / 线索 / 审批）及规则预检、构建组合入口；7 个 Agent 红队用例通过；演示脚本见 `docs/Agent工作流-演示脚本.md`。待完整端到端走查。
+
+### 18.13 需求清单
+
+| 编号 | 要求 | 状态 |
+|---|---|---|
+| AGT-01 | 以研究版本启动 Agent，记录根版本、策略、预算；可从结果页进入 | 设计 ✅，实现 ❌ |
+| AGT-02 | 事实包带编号、来源、期间；决策事实不含测试期 / holdout 数值 | 设计 ✅ |
+| AGT-03 | 诊断结论必须引用事实；无引用丢弃；区分事实与推断 | 设计 ✅ |
+| AGT-04 | 每轮只选一个白名单动作；执行前预注册预期与成功标准 | 设计 ✅ |
+| AGT-05 | 付费 / 新版本 / 提交审批需人工批准；批准 / 拒绝留痕；可暂停 / 停止 | 设计 ✅ |
+| AGT-06 | 动作通过 runner 任务执行；不 import / patch RD-Agent；继承预算、取消、续跑、可信度排队 | 设计 ✅ |
+| AGT-07 | 评估只按预注册标准；结论为改进 / 未改进 / 无法判定；写入 memory | 设计 ✅ |
+| AGT-08 | 轮数、预算、无改进耐心上限；到限停止或升级人工 | 设计 ✅ |
+| AGT-09 | trace 记录提示词、模型、tokens、费用、工具参数与结果；提示词版本可追溯 | 设计 ✅ |
+| AGT-10 | 不自动批准、发布、下单；最终结果交现有审批台与信号目录 | 设计 ✅ |
+| AGT-11 | 结果页「继续研究」三分支：新版本 / 新线索 / Agent；预填与边界状态符合第 18.7 节 | 设计 ✅ |
+| AGT-12 | 不引入 LangGraph；状态机、检查点、中断恢复与图语义等价；文件状态为唯一真相 | 设计 ✅ |
+| AGT-13 | RD-Agent 兼容契约：进程 + 文件；不向 rdagent conda 环境加依赖 | 设计 ✅ |
+| AGT-14 | 手工线索支持 `source_ref`，可从结果 / 运行追溯到线索卡 | 设计 ✅ |
+
+### 18.14 快速检查与演示脚本
+
+**快速检查（实现后逐条执行）：**
+
+1. 从 v5 启动 Agent：facts 中不出现测试期 / holdout 的具体数值，只出现可信度状态；
+2. 诊断输出中每条结论都带 `F#`；删掉引用后该条被丢弃；引用不存在的编号被丢弃；
+3. Planner 尝试选择白名单外的工具时被拒绝；参数不符合 schema 时被拒绝；
+4. 付费动作停在 `awaiting_human`；批准后继续，拒绝后进入 `stopped`，两者都写 trace；
+5. 子任务运行期间 Agent 处于 `waiting_children`，不占 runner 并行槽；重启 runner 后能从检查点继续；
+6. Evaluator 只按 plan 中的预注册标准判定；修改标准需要新开一轮，不能在评估时改；
+7. trace 包含提示词、模型、tokens、费用、工具参数与结果；
+8. 最终报告只生成建议，不自动提交审批、不自动发布。
+
+**演示脚本（接第 14.5 节 v5）：**
+
+1. 观察：香港采纳轮 rank IC −0.012、扣成本收益高于起点、约 1/3 股票同分；英国几乎为零；法国方向相反；
+2. 诊断：判断「收益改善可能来自少数股票与并列处理，而非排序能力」，引用事实编号，标记可信度未通过；
+3. 规划：选择 `change_horizon` 或 `refine_definition`，预注册「验证期 rank IC 提升 ≥ 0.005 且扣成本超额仍高于起点」；
+4. 执行：生成 v6，三个市场并行运行；付费动作弹人工批准；
+5. 评估：未改进则读取 memory，下一轮改 `neutralize` 或 `localize FR`；连续两轮无改进则停止，写迭代报告与回流线索；
+6. 交接：报告交给规则预检 / 组合 / 审批流程。
+
+### 18.15 局限与待确认
+
+- **LLM 非确定性：** 同一事实可能产生不同计划；用预注册、引用过滤与确定性评估约束，审计以 trace 为准。
+- **成本：** RD-Agent 一轮约 0.1–0.3 美元；多轮 Agent 可能超过人工研究；用预算上限与人工闸门控制。
+- **数据限制：** 法国真实公告从 2024-08 起，香港 / 英国为模拟数据；文本方向的迭代受限。
+- **框架要求：** 如项目后续明确要求 LangGraph / 其他框架，按第 18.8 节的条件重新评估；优先独立服务，不污染 rdagent 环境。
+- **待确认：** Agent 默认闸门策略（全自动 / 付费动作需批准 / 每轮都需批准）；是否把「研究 Agent」页并入研究台；是否增加 `source_ref` 之外的新线索字段。
+- **待确认：** Agent 是否需要支持「从断点继续」（与 RD-Agent 续跑一致）；建议 P1 实现。

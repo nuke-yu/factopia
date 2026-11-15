@@ -87,6 +87,8 @@ def proprietary() -> list[dict]:
         for f in doc.get("factors") or []:
             out.append({k: f.get(k) for k in FIELDS} | {"id": f"proprietary:{doc.get('source_name', p.stem)}:{f['name']}",
                                                         "source": "proprietary", "status": f.get("status") or "专有",
+                                                        # markets 是可选字段；统一成对象，避免页面按市场取值时报 null
+                                                        "markets": f.get("markets") or {},
                                                         "provenance": f"{p.name} {doc.get('version', '')}".strip()})
     return out
 

@@ -89,12 +89,12 @@ def _context(markets: list[str]) -> dict:
                        "France (CAC 40, EUR, 0.4% financial transaction tax on buys); markets in scope for this idea: " + ", ".join(markets)}
 
 
-def _chat(prompt: str, task: str = "线索 AI 建议") -> tuple[dict, dict, str]:
+def _chat(prompt: str, task: str = "线索 AI 建议", lite: bool = False) -> tuple[dict, dict, str]:
     from factopia.research import draft as drafting
-    cfg = drafting.llm_config()
+    cfg = drafting.llm_config(lite=lite)
     text, usage = drafting._chat(prompt, cfg, task)
     try:
-        return json.loads(text), usage, cfg["model"]
+        return json.loads(text), usage, usage.get("model") or cfg["model"]
     except json.JSONDecodeError as e:
         raise I.IdeaError(t("大模型输出不是合法 JSON：{e}", e=e)) from e
 
@@ -168,14 +168,14 @@ def suggest(channel: str, markets: list[str] | None = None, avoid: list[str] | N
 def auto_hypothesis(iid: str) -> dict:
     """自动回流线索：AI 把平台记录（监控预警、组合归因、审批退回）改写为可检验的研究假设，存入线索并留痕。"""
     idea = I.load(iid)
-    if idea["channel"] not in ("monitor", "portfolio", "approval"):
+    if idea["channel"] not in ("monitor", "portfolio", "approval", "agent"):
         raise I.IdeaError(t("只有自动回流的线索需要 AI 改写为研究假设"))
     if idea.get("ai_hypothesis"):
         return idea
     ctx = _context(idea["markets"] or list(I.MARKETS))
     prompt = AUTO_PROMPT_FILE.read_text(encoding="utf-8").format(
         channel=idea["channel_zh"], title=idea["title"], body=idea["body"], markets=ctx["markets"], data=ctx["data"], language=llm_language())
-    raw, usage, model = _chat(prompt, "线索 AI 研究假设")
+    raw, usage, model = _chat(prompt, "线索 AI 研究假设", lite=True)
     hyp = str(raw.get("hypothesis") or "").strip()
     if len(hyp) < 20:
         raise I.IdeaError(t("AI 没有给出完整的研究假设，请再试一次"))

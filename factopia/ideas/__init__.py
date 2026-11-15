@@ -44,9 +44,10 @@ CHANNELS = {
     "paper_trading": {"zh": "模拟盘反馈", "manual": False},
     "portfolio": {"zh": "组合归因建议", "manual": False},
     "approval": {"zh": "审批退回 / 拒绝", "manual": False},
+    "agent": {"zh": "研究 Agent 反馈", "manual": False},
 }
 STATUS_ZH = {"new": "待处理", "converted": "已转立项", "duplicate": "重复", "dismissed": "不跟进"}
-ACTION_ZH = {"create": "创建", "extract": "抽取候选因子", "ai_hypothesis": "AI 改写为研究假设", "convert": "转为研究立项", "duplicate": "标为重复",
+ACTION_ZH = {"create": "创建", "update": "修改线索", "extract": "抽取候选因子", "ai_hypothesis": "AI 改写为研究假设", "convert": "转为研究立项", "duplicate": "标为重复",
              "dismiss": "不跟进", "comment": "意见", "reopen": "重新打开"}
 LICENCES = {"internal": "团队内部资料", "open": "公开许可", "purchased": "已购买授权"}
 FEEDBACK_ROLES = ("投资组合经理", "客户团队", "本地研究员（香港）", "本地研究员（英国）", "本地研究员（法国）", "合规", "模型风险", "其他")
@@ -201,6 +202,23 @@ def _clean_markets(ms) -> list[str]:
     return [m for m in MARKETS if m in (ms or [])]
 
 
+def _source_dedupe_key(channel, title, text, markets, ref) -> str | None:
+    """同一研究版本 + 完全相同的标题/正文/市场 → 同一条线索；不同内容或不同来源不去重。"""
+    source = str((ref or {}).get("research") or "")
+    if not source:
+        return None
+    raw = json.dumps({"channel": channel, "title": title, "body": text, "markets": markets or [], "research": source},
+                     ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def find_by_source(research: str) -> list[dict]:
+    """该研究版本来源、仍在处理或已转立项的线索（结果页据此禁用重复存入）。"""
+    return [i for i in all_ideas()
+            if (i.get("source_ref") or {}).get("research") == research
+            and i.get("status") in ("new", "converted") and visible(i)]
+
+
 def _paragraphs(text: str) -> list[str]:
     parts = [re.sub(r"\s+", " ", p).strip() for p in re.split(r"\n\s*\n", text or "")]
     out = []
@@ -268,11 +286,25 @@ def create(body: dict) -> dict:
     hits = pii_hits(("标题", title), ("内容", text), ("文档", doc_text))
     if hits:
         raise IdeaError("内容中疑似包含个人身份信息，请删除后重新提交：" + "；".join(f"{h['type']}（{h['field']}：{h['context']}）" for h in hits[:5]))
+    mkts = _clean_markets(body.get("markets"))
+    ref = body.get("source_ref")
+    ref = ({k: str(ref[k])[:200] for k in ("research", "run", "note") if ref.get(k)} or None) if isinstance(ref, dict) else None
+    dedupe_key = _source_dedupe_key(ch, title, text, mkts, ref)
+    if dedupe_key:
+        for old in all_ideas():
+            old_key = old.get("dedupe_key")
+            if not old_key and old.get("source_ref"):
+                old_key = _source_dedupe_key(old.get("channel"), old.get("title"), old.get("body"),
+                                             old.get("markets") or [], old.get("source_ref"))
+            if old_key == dedupe_key and old.get("status") in ("new", "converted") and visible(old):
+                return {**old, "deduped": True}
     iid = _new_id()
     idea = {"id": iid, "channel": ch, "channel_zh": CHANNELS[ch]["zh"], "title": title, "body": text, "language": language(f"{title} {text} {doc_text[:2000]}"),
-            "markets": _clean_markets(body.get("markets")), "submitted_by": by, "role": str(body.get("role") or "").strip()[:60] or None,
-            "source_ref": None, "created_at": now(), "status": "new", "links": {}, "pii_checked": True,
+            "markets": mkts, "submitted_by": by, "role": str(body.get("role") or "").strip()[:60] or None,
+            "source_ref": ref, "created_at": now(), "status": "new", "links": {}, "pii_checked": True,
             "fields": {k: str(body.get(k) or "").strip()[:500] for k in ("direction", "period", "feedback_role") if body.get(k)}}
+    if dedupe_key:
+        idea["dedupe_key"] = dedupe_key
     if ch == "feedback" and idea["fields"].get("feedback_role") not in FEEDBACK_ROLES + (None,):
         idea["fields"]["feedback_role"] = "其他"
     if ch == "paper":
@@ -300,6 +332,74 @@ def create(body: dict) -> dict:
     _append(iid, {"action": "create", "by": by, "channel": ch, "sha256": idea.get("document", {}).get("sha256") if ch == "paper" else None,
                   "ai_suggestion": (idea.get("ai_suggested") or {}).get("id"), "ai_edited": (idea.get("ai_suggested") or {}).get("edited")})
     return idea
+
+
+def update(iid: str, body: dict) -> dict:
+    """人工修改线索：只改文本、市场、渠道字段与论文元数据；来源、状态、文件与历史保持不变。"""
+    idea = load(iid)
+    if not CHANNELS[idea["channel"]]["manual"]:
+        raise IdeaError("自动回流线索由平台生成，不能修改")
+    title = str(body.get("title") or "").strip()[:200]
+    text = str(body.get("body") or "").strip()[:20000]
+    by = str(body.get("submitted_by") or "").strip()[:60]
+    if not title:
+        raise IdeaError("请填写标题")
+    if not by:
+        raise IdeaError("请填写提交人")
+    if not body.get("confirm_no_client_data"):
+        raise IdeaError("请确认内容不含真实客户身份信息")
+    if idea["channel"] != "paper" and len(text) < 10:
+        raise IdeaError("内容太短（至少 10 个字）")
+    hits = pii_hits(("标题", title), ("内容", text))
+    if hits:
+        raise IdeaError("内容中疑似包含个人身份信息，请删除后重新提交：" + "；".join(f"{h['type']}（{h['field']}：{h['context']}）" for h in hits[:5]))
+
+    changes = []
+
+    def put(key, value):
+        if idea.get(key) != value:
+            changes.append(key)
+            idea[key] = value
+
+    put("title", title)
+    put("body", text)
+    put("markets", _clean_markets(body.get("markets")))
+    put("submitted_by", by)
+    put("language", language(f"{title} {text}"))
+    fields = {k: str(body.get(k) or "").strip()[:500] for k in ("direction", "period", "feedback_role") if body.get(k)}
+    if idea["channel"] == "feedback" and fields.get("feedback_role") not in FEEDBACK_ROLES + (None,):
+        fields["feedback_role"] = "其他"
+    put("fields", fields)
+    if idea.get("ai_suggested"):
+        idea["ai_suggested"]["edited"] = (str(idea["ai_suggested"].get("title") or "").strip() != title
+                                          or str(idea["ai_suggested"].get("body") or "").strip() != text)
+    if idea["channel"] == "paper":
+        doc_in = body.get("document") or {}
+        doc = dict(idea.get("document") or {})
+        for k in ("source", "licence", "licence_note"):
+            if k in doc_in:
+                doc[k] = str(doc_in.get(k) or "").strip()[:300]
+        for k in ("published", "sample_start", "sample_end"):
+            if k in doc_in:
+                doc[k] = str(doc_in.get(k) or "")[:10] or None
+        if doc.get("licence") in LICENCES:
+            doc["licence_zh"] = LICENCES[doc["licence"]]
+        if not doc.get("source") or doc.get("licence") not in LICENCES:
+            raise IdeaError("论文 / 研报须填写来源与许可类型")
+        if doc.get("licence") in ("open", "purchased") and not str(doc.get("licence_note") or "").strip():
+            raise IdeaError("公开许可须注明许可名称；已购买授权须注明合同或订阅")
+        if doc != idea.get("document"):
+            changes.append("document")
+            idea["document"] = doc
+            idea["leakage"] = leakage(doc)
+    new_key = _source_dedupe_key(idea["channel"], title, text, idea["markets"], idea.get("source_ref"))
+    if new_key and new_key != idea.get("dedupe_key"):
+        idea["dedupe_key"] = new_key
+    idea["similar"] = similar(idea)
+    _save(idea)
+    _append(iid, {"action": "update", "by": by, "fields": changes})
+    return {**idea, "events": events(iid), "chain": verify_chain(iid), "action_zh": ACTION_ZH,
+            "status_zh": STATUS_ZH, "paragraph_count": len(paragraphs(iid))}
 
 
 def paragraphs(iid: str) -> list[str]:
@@ -349,6 +449,7 @@ def extract(iid: str, by: str = SYSTEM_BY) -> dict:
     cfg = drafting.llm_config()
     try:
         text, usage = drafting._chat(prompt, cfg, "论文因子抽取")
+        model_used = usage.get("model") or cfg["model"]
         raw = json.loads(text)
     except json.JSONDecodeError as e:
         raise IdeaError(lang.t("大模型输出不是合法 JSON：{e}", e=e)) from e
@@ -375,10 +476,10 @@ def extract(iid: str, by: str = SYSTEM_BY) -> dict:
     idea["document"] = doc
     idea["leakage"] = leakage(doc)
     idea["extraction"] = {"factors": cands, "dropped_no_cite": dropped, "paragraphs_used": n, "paragraphs_total": len(paras),
-                          "summary_zh": str(raw.get("summary_zh") or "")[:800], "model": cfg["model"], "prompt_version": PROMPT_VERSION,
+                          "summary_zh": str(raw.get("summary_zh") or "")[:800], "model": model_used, "prompt_version": PROMPT_VERSION,
                           "usage": {k: usage.get(k) for k in ("prompt_tokens", "completion_tokens")}, "at": now()}
     _save(idea)
-    _append(iid, {"action": "extract", "by": by, "factors": len(cands), "dropped": dropped, "model": cfg["model"], "prompt_version": PROMPT_VERSION})
+    _append(iid, {"action": "extract", "by": by, "factors": len(cands), "dropped": dropped, "model": model_used, "prompt_version": PROMPT_VERSION})
     return idea
 
 
@@ -496,6 +597,32 @@ def _auto(key: str, idx: dict, channel: str, title: str, body: str, markets: lis
     _save(idea)
     _append(iid, {"action": "create", "by": SYSTEM_BY, "channel": channel, "source": key})
     idx[key] = iid
+
+
+def agent_feedback(agent_id: str, research_id: str, version: int, round_no: int, verdict: str,
+                   reason: str, markets: list[str], run_id: str | None = None) -> dict:
+    """研究迭代 Agent 评估未改进/无法判定时自动回流线索；按 agent + 轮次 + 结论去重。"""
+    DIR.mkdir(parents=True, exist_ok=True)
+    idx = _sources()
+    key = f"agent:{agent_id}:{round_no}:{verdict}"
+    if key in idx:
+        try:
+            return load(idx[key])
+        except IdeaError:
+            pass
+    label = {"not_improved": "未改进", "inconclusive": "无法判定", "improved": "改进"}.get(verdict, verdict)
+    title = f"研究 Agent 评估{label}：{research_id} v{version} 第 {round_no} 轮"
+    body = (f"研究迭代 Agent 对 {research_id} v{version} 第 {round_no} 轮的评估为「{label}」。\n"
+            f"原因：{reason}\n\n"
+            "自动回流说明：建议先查看诊断与可信度检查，再决定修改假设、换方向或停止。")
+    ref = {"research": f"{research_id}.v{version}", "note": "研究迭代 Agent 自动回流"}
+    if run_id:
+        ref["run"] = run_id
+    _auto(key, idx, "agent", title, body, markets, ref)
+    tmp = DIR / "sources.json.tmp"
+    tmp.write_text(json.dumps(idx, ensure_ascii=False, indent=0), encoding="utf-8")
+    tmp.replace(DIR / "sources.json")
+    return load(idx[key])
 
 
 def _migrate_monitor_keys(idx: dict) -> None:
