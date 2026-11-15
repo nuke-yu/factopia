@@ -34,6 +34,16 @@ RUN mkdir -p /tmp/vendor && cd /tmp/vendor && npm init -y >/dev/null \
 # Miniforge：只使用免费的 conda-forge 源，不涉及 Anaconda 默认源的服务条款与商业许可
 FROM condaforge/miniforge3:latest
 
+# APT_MIRROR：可选的 Debian 镜像，国内直连 deb.debian.org 不通时由构建参数传入（默认空＝官方源）
+ARG APT_MIRROR=
+RUN if [ -n "$APT_MIRROR" ]; then . /etc/os-release; \
+      case "$ID" in \
+        ubuntu) repo="$APT_MIRROR/ubuntu"; comps="main universe";; \
+        *)      repo="$APT_MIRROR/debian"; comps="main";; \
+      esac; \
+      printf 'deb %s %s %s\n' "$repo" "$VERSION_CODENAME" "$comps" > /etc/apt/sources.list; \
+      rm -f /etc/apt/sources.list.d/*.sources; \
+    fi
 RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
 # 走代理克隆 GitHub 仓库时 HTTP/2 多路复用流易被中断（curl 92），强制 HTTP/1.1 提高稳定性
 RUN git config --global http.version HTTP/1.1

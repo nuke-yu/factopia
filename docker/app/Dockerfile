@@ -9,6 +9,17 @@ ENV UV_PROJECT_ENVIRONMENT=/opt/venv \
     PYTHONUNBUFFERED=1
 
 # 编译 Qlib 的 Cython 扩展需要编译器；从 Git 安装需要 git
+# APT_MIRROR：可选的 Debian 镜像（如 https://mirrors.aliyun.com）。国内直连 deb.debian.org 不通时
+# 由 compose.local.yml 传入；留空则完全保持官方源，云端构建行为不变。
+ARG APT_MIRROR=
+RUN if [ -n "$APT_MIRROR" ]; then . /etc/os-release; \
+      case "$ID" in \
+        ubuntu) repo="$APT_MIRROR/ubuntu"; comps="main universe";; \
+        *)      repo="$APT_MIRROR/debian"; comps="main";; \
+      esac; \
+      printf 'deb %s %s %s\n' "$repo" "$VERSION_CODENAME" "$comps" > /etc/apt/sources.list; \
+      rm -f /etc/apt/sources.list.d/*.sources; \
+    fi
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential git \
     && rm -rf /var/lib/apt/lists/*
 

@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
-import { api, type DraftResult, type Market, type Spec } from "./api";
+import { api, type DraftResult, type Market, type SeedsInput, type Spec } from "./api";
 
 // 研究立项页填写的输入、AI 起草结果、审核页锁定的版本（Spec 第 16 章）。在页面之间共享，刷新页面后清空。
 export type Draft = {
@@ -15,6 +15,7 @@ export type Draft = {
   ideaIds?: string[];        // 合并转立项 / 追加线索：全部来源线索（Spec 第 17.12 节）
   comboId?: string | null;
   basedOn?: { id: string; version: number } | null;   // 追加线索：锁定为该研究的新版本
+  seeds?: SeedsInput | null;                          // 起点因子：从因子库已有因子做变体 / 组合（第 16.7 节扩展）
 };
 
 const DEFAULT: Draft = {

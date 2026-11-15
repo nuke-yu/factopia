@@ -1,0 +1,47 @@
+# RD-Agent 主程序镜像（本地源码版）。
+#
+# 与同目录 Dockerfile 的差别：
+# - 不从 GitHub 克隆 v1.0.0，而是把本地仓库整个拷进镜像。构建上下文由 compose.local.yml 的
+#   additional_contexts 提供（键名 rdagent_src，默认指向 ../../rd-agent，可用 FACTOPIA_RDAGENT_SRC 覆盖），
+#   因此改动本地 RD-Agent 源码后重新 build 即生效，也可以直接在本地仓库里调试。
+# - 省略 Vue Web UI 的构建（rdagent server_ui / rdagent-web 需要 Node 打包）。日常研究走 Factopia 界面，
+#   需要 RD-Agent 自带界面时用同目录的 Dockerfile（联网从 GitHub 构建）。
+# - 写入本地源码的 commit 作为 .factopia_version：entrypoint.sh 据此判断共享卷里的源码是否需要从镜像重新同步。
+#
+# 构建：docker compose -f docker-compose.yml -f compose.local.yml build rdagent
+FROM condaforge/miniforge3:latest
+
+# 国内网络：conda-forge 走清华镜像（conda.anaconda.org 直连不通），pip 走清华 PyPI（pypi.org 直连不通）
+RUN printf 'channels:\n  - conda-forge\ndefault_channels:\n  - conda-forge\nchannel_alias: https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud\nshow_channel_urls: true\n' > /opt/conda/.condarc
+ENV PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple \
+    PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
+
+# APT_MIRROR：可选的 Debian 镜像，国内直连 deb.debian.org 不通时由 compose.local.yml 传入
+ARG APT_MIRROR=
+RUN if [ -n "$APT_MIRROR" ]; then . /etc/os-release; \
+      case "$ID" in \
+        ubuntu) repo="$APT_MIRROR/ubuntu"; comps="main universe";; \
+        *)      repo="$APT_MIRROR/debian"; comps="main";; \
+      esac; \
+      printf 'deb %s %s %s\n' "$repo" "$VERSION_CODENAME" "$comps" > /etc/apt/sources.list; \
+      rm -f /etc/apt/sources.list.d/*.sources; \
+    fi
+RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
+# 走代理克隆 GitHub 仓库时 HTTP/2 多路复用流易被中断（curl 92），强制 HTTP/1.1
+RUN git config --global http.version HTTP/1.1
+
+RUN conda create -y -n rdagent python=3.11 && conda clean -afy
+ENV CONDA_DEFAULT_ENV=rdagent \
+    PATH=/opt/conda/envs/rdagent/bin:$PATH
+
+# 本地 RD-Agent 源码（构建上下文 rdagent_src）
+COPY --from=rdagent_src . /opt/rdagent-src
+
+RUN pip install --no-cache-dir -e /opt/rdagent-src tables longport \
+    && (git -C /opt/rdagent-src rev-parse --short HEAD > /opt/rdagent-src/.factopia_version 2>/dev/null \
+        || echo "local-$(date +%Y%m%d%H%M%S)" > /opt/rdagent-src/.factopia_version) \
+    && cp -a /opt/rdagent-src /opt/rdagent-src-image
+
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

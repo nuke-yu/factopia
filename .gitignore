@@ -21,3 +21,7 @@ web/*.tsbuildinfo
 
 .DS_Store
 /runtime/
+
+# 会话工作目录
+.screenshots/
+/.workbuddy/

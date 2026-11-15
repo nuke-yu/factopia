@@ -17,9 +17,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from factopia.research import evidence, mandates, regions
+from factopia.research import seeds as seedlib
 from factopia.lang import llm_language
 
-PROMPT_VERSION = "rs-draft-v3"   # v3：加入内部知识检索结果（因子库、以往研究、字段口径，只含名称与说明）
+PROMPT_VERSION = "rs-draft-v4"   # v4：加入起点因子（因子库中已有因子做变体 / 组合，Spec 第 16.7 节扩展）
 PROMPT_FILE = Path(__file__).parent / "prompts" / f"{PROMPT_VERSION}.md"
 ID_PATTERN = re.compile(r"^[a-z][a-z0-9_]{2,39}$")
 TEST_YEAR = re.compile(r"20(?:2[2-9]|[3-9]\d)")
@@ -204,9 +205,42 @@ def _system_questions(d: dict, inputs: dict) -> list[str]:
     return qs
 
 
+def _seeds_section(sd: dict | None) -> str:
+    """起点因子段（英文，发给 RD-Agent）：只含名称、说明与公式，不含任何统计数值。"""
+    if not sd:
+        return "- none (the researcher did not start from an existing factor)"
+    lines = ["The researcher chose these existing factors from the internal factor library as the starting points; "
+             "the research must explore variations or combinations of them:"]
+    for x in sd.get("items") or []:
+        seg = f"- {x['id']} ({x['name']}, {x.get('source_zh') or ''})"
+        if x.get("description"):
+            seg += f": {x['description']}"
+        if x.get("formulation"):
+            seg += f" | formula: {x['formulation']}"
+        lines.append(seg)
+    if not sd.get("items"):
+        lines.append("- no specific factor was chosen; the researcher described the target only (see below)")
+    lines.append(f"Requested mode: {sd['mode']} "
+                 + {"variant": "(a variation of one factor: window, sign, normalisation, condition)",
+                    "combo": "(a combination of several factors: weighting, trigger, layered sort)",
+                    "open": "(open: choose the starting factor yourself from the library)"}.get(sd["mode"], ""))
+    if sd.get("brief"):
+        lines += ["The researcher described the intended variation or combination in their own words "
+                  f"(may be in Chinese, English or French): \"{sd['brief']}\""]
+    if sd.get("intent"):
+        lines.append(f"Stated intent: {sd['intent']}")
+    p = sd.get("proposal") or {}
+    if p.get("title_zh"):
+        lines += ["An idea proposed by the assistant and accepted by the researcher:",
+                  f"- {p['title_zh']}" + (f" — change: {p['change']}" if p.get("change") else "")
+                  + (f" — why: {p['logic_zh']}" if p.get("logic_zh") else "")]
+    return "\n".join(lines)
+
+
 def make_draft(inputs: dict) -> dict:
-    """inputs：hypothesis、direction、markets、horizon、mandate、groups、include_past_runs。"""
+    """inputs：hypothesis、direction、markets、horizon、mandate、groups、include_past_runs、seeds。"""
     mandate = mandates.parse(mandates.load(inputs["mandate"]))
+    sd = seedlib.normalize(inputs.get("seeds")) if inputs.get("seeds") else None
     alpha = evidence.alpha158_findings(inputs["markets"], inputs["horizon"], inputs.get("groups") or None)
     past = evidence.past_runs(inputs["markets"], inputs["horizon"]) if inputs.get("include_past_runs", True) else []
     internal = internal_knowledge(inputs["hypothesis"] + " " + (inputs.get("direction") or ""))
@@ -218,6 +252,7 @@ def make_draft(inputs: dict) -> dict:
         mandate_constraints="\n".join(f"- {c}" for c in mandate["constraints"]) or "- none",
         mandate_free_text="\n".join(f"- {t}" for t in mandate["free_text"]) or "- none",
         evidence=_evidence_text(alpha),
+        seeds_section=_seeds_section(sd),
         past_runs="\n".join(f"- {line}" for line in evidence.past_runs_lines(past)) or "- none (runs affected by data leakage are excluded)",
     )
     cfg = llm_config()
@@ -244,6 +279,13 @@ def make_draft(inputs: dict) -> dict:
         for iid in idea_ids:
             draft["system_questions"] += ideas.confirm_questions(iid)
     draft["constraints"] = mandate["constraints"] + [t["constraint_en"] for t in draft["mandate_interpretations"] if t["constraint_en"]] + PLATFORM_CONSTRAINTS
+    if sd:
+        draft["seeds"] = sd                                  # 起点因子随规格锁定，进提示词（context.research_section）
+        p = sd.get("proposal") or {}
+        if p.get("from_ai"):
+            draft["system_questions"].append(
+                f"研究起点与候选方向来自 AI 构想（模型 {p.get('model') or '—'}，提示词 {p.get('prompt_version') or '—'}）："
+                f"引用因子 {'、'.join(p.get('cites') or [])}；改动方式「{p.get('change') or '—'}」，主要风险「{p.get('risk_zh') or '—'}」。")
     return {
         "draft": draft,
         "evidence": {"alpha158": alpha, "past_runs": past, "groups": inputs.get("groups") or [], "internal": internal},

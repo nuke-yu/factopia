@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { api, MARKETS, type Market } from "../api";
+import { api, MARKETS, type Market, type SeedProposal, type SeedRef } from "../api";
 import { testPeriodMentions, useDraft, type Draft } from "../draft";
 import { cssVar, MARKET_LABEL, useAsync } from "../lib";
 import { t, tf, joinList, IS_ZH } from "../i18n";
 import { Badge, ErrorBox, Loading, Notice, Panel, Seg } from "../components/ui";
+import SeedPanel from "../components/SeedPanel";
 
 const HORIZONS: { value: Draft["horizon"]; label: string }[] = [
   { value: 1, label: t("1 天") }, { value: 5, label: t("1 周") }, { value: 20, label: t("1 个月") }, { value: 60, label: t("1 个季度") },
@@ -32,13 +33,26 @@ export default function ResearchPage() {
   const toggle = <T,>(list: T[], v: T) => (list.includes(v) ? list.filter((x) => x !== v) : [...list, v]);
   const ready = draft.markets.length > 0 && draft.hypothesis.trim().length > 10 && !!mandate && !busy;
 
+  /** 采用 AI 构想：把构想的假设与方向写进立项，并记下起点因子与模型来源（供审核页追溯）。 */
+  function adoptSeed(p: SeedProposal) {
+    const items: SeedRef[] = p.seed_detail.map((s) => ({
+      id: s.id, name: s.name, source: "", source_zh: s.source_zh, description: s.description, formulation: s.formulation,
+    }));
+    update({
+      hypothesis: p.hypothesis_zh || p.hypothesis,
+      direction: p.direction || p.change,
+      seeds: { mode: p.kind, items, brief: draft.seeds?.brief ?? "", proposal: { ...p, from_ai: true } as SeedProposal },
+    });
+  }
+
   async function startDraft() {
     setBusy(true); setError(null);
     try {
       const r = await api.draft({ hypothesis: draft.hypothesis, direction: draft.direction, markets: draft.markets, horizon: draft.horizon,
         mandate: draft.mandate, groups: draft.groups.length === cube.data?.groups.length ? [] : draft.groups, include_past_runs: draft.includePastRuns,
         idea_id: draft.ideaId ?? null, idea_ids: draft.ideaIds ?? [], combo_id: draft.comboId ?? null,
-        based_on: draft.basedOn ? `${draft.basedOn.id}.v${draft.basedOn.version}` : null });
+        based_on: draft.basedOn ? `${draft.basedOn.id}.v${draft.basedOn.version}` : null,
+        seeds: draft.seeds ?? null });
       setResult(r); setLocked(null);
       navigate("/audit");
     } catch (e) {
@@ -131,7 +145,10 @@ export default function ResearchPage() {
             </div>
           </Panel>
 
-          <Panel eyebrow={t("第 3 步")} title={t("投资假设")}>
+          <SeedPanel markets={draft.markets} horizon={draft.horizon} value={draft.seeds}
+            onChange={(seeds) => update({ seeds })} onAdopt={adoptSeed} />
+
+          <Panel eyebrow={t("第 4 步")} title={t("投资假设")}>
             <label className="label" htmlFor="hyp">{t("假设（中文、英文或法文）")}</label>
             <textarea id="hyp" className="field mt-1 min-h-28 leading-relaxed" value={draft.hypothesis} onChange={(e) => update({ hypothesis: e.target.value })} />
             <label className="label mt-3 block" htmlFor="dir">{t("研究方向")}</label>
@@ -145,7 +162,7 @@ export default function ResearchPage() {
             )}
           </Panel>
 
-          <Panel eyebrow={t("第 4 步")} title={t("证据筛选")}>
+          <Panel eyebrow={t("第 5 步")} title={t("证据筛选")}>
             <div className="label mb-2">{t("提供给 AI 的因子类型")}</div>
             <div className="flex flex-wrap gap-2">
               {cube.data?.groups.map((g) => {
@@ -176,6 +193,12 @@ export default function ResearchPage() {
               <li className="flex justify-between gap-3"><span className="text-muted">{t("授权约束")}</span><span className="text-right">{mandate ? tf("{a} 条 + {b} 条待解释", { a: mandate.constraints.length, b: mandate.free_text.length }) : "—"}</span></li>
               <li className="flex justify-between gap-3"><span className="text-muted">{t("证据：显著因子")}</span><span className="num">{tf("{n} 个", { n: evidence.length })}</span></li>
               <li className="flex justify-between gap-3"><span className="text-muted">{t("证据：以往运行")}</span><span>{draft.includePastRuns ? t("包含") : t("不包含")}</span></li>
+              <li className="flex justify-between gap-3"><span className="text-muted">{t("起点因子")}</span>
+                <span className="text-right num">
+                  {draft.seeds?.items.length
+                    ? draft.seeds.items.map((x) => x.name).join(" / ")
+                    : draft.seeds?.mode === "open" ? t("AI 自主审查因子库") : draft.seeds?.brief ? t("按描述研究") : t("未指定")}
+                </span></li>
             </ul>
             {evidence.length > 0 && (
               <div className="mt-3 flex flex-wrap gap-1.5">
