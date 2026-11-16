@@ -1,8 +1,9 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import EChart from "../components/EChart";
 import { Badge, ErrorBox, Loading, Notice, Panel, Seg, Stat } from "../components/ui";
 import {
-  api, type GlossaryCandidate, type ReviewAccuracy, type ReviewItem, type ReviewTier, type TextCompareRow, type TextConcept, type TextDataset, type TextDoc, type TextFiling,
+  api, type DigRound, type GlossaryCandidate, type ReviewAccuracy, type ReviewItem, type ReviewTier, type TextCompareRow, type TextConcept, type TextDataset, type TextDig, type TextDoc, type TextFiling,
   type TextHit, type TextOverview, type TextSummary,
 } from "../api";
 import { cssVar, fix, MARKET_LABEL, marketColor, SHOW_FORMULAS, signed, useAsync, useThemeVersion } from "../lib";
@@ -246,7 +247,7 @@ function IcChart({ monthly }: { monthly: Record<string, number> }) {
   return <EChart option={option} notMerge className="h-[200px]" />;
 }
 
-function DocView({ ds, id, onClose }: { ds: string; id: string; onClose: () => void }) {
+function DocView({ ds, id, onClose, onDig }: { ds: string; id: string; onClose: () => void; onDig?: () => void }) {
   const { data, error, loading } = useAsync<TextDoc>(() => api.textDoc(ds, id), [ds, id]);
   const [onlyLabelled, setOnlyLabelled] = useState(true);
   if (loading) return <Loading what={t("公告")} />;
@@ -258,6 +259,7 @@ function DocView({ ds, id, onClose }: { ds: string; id: string; onClose: () => v
       actions={<>
         <Seg label={t("段落")} value={onlyLabelled ? "y" : "n"} onChange={(v) => setOnlyLabelled(v === "y")}
           options={[{ value: "y", label: t("只看标注段落") }, { value: "n", label: t("全部段落") }]} />
+        {onDig && <button className="btn btn-primary" onClick={onDig}>{t("以本篇为起点深挖")}</button>}
         <button className="btn" onClick={onClose}>{t("关闭")}</button>
       </>}>
       <div className="flex flex-col gap-2 mb-3">
@@ -300,22 +302,215 @@ function DocView({ ds, id, onClose }: { ds: string; id: string; onClose: () => v
   );
 }
 
+// ── 公告深挖（WF-04，docs/Agentic-workflow-情报台-深挖.md）──────────────────
+const DIG_RUNNING = new Set(["queued", "planning", "rewriting", "searching", "annotating", "summarizing", "extracting", "concluding"]);
+const DIG_TOOL_ZH: Record<string, string> = { query: t("检索并提取"), finish: t("收尾出结论"), give_up: t("数据不足放弃") };
+const DIG_STATE_ZH: Record<string, string> = {
+  queued: t("排队中"), web_searching: t("联网检索公开资料"), planning: t("规划下一步"), rewriting: t("改写查询"),
+  searching: t("检索相关公告"), annotating: t("补概念标注"), summarizing: t("生成检索摘要"), extracting: t("提取风险事实"),
+  concluding: t("生成结论"), done: t("已完成"), insufficient: t("数据不足"), stopped: t("已停止"), failed: t("失败"),
+};
+const DIG_DROP_ZH: Record<string, string> = {
+  no_valid_cites: t("引用段落编号无效"), unknown_concept: t("概念不在术语表"), bad_direction: t("方向值无效"),
+  empty_statement: t("事实正文为空"), evidence_not_verbatim: t("证据不是原文片段"), no_date: t("引用公告没有日期"),
+  not_object: t("格式不是对象"),
+};
+const DIG_MARKET: Record<string, "hk" | "uk" | "fr"> = { fr: "fr", demo_hk: "hk", demo_uk: "uk" };
+
+function DigPanel({ ds, instrument, company, filingId, onClose }:
+  { ds: string; instrument: string; company: string; filingId: string | null; onClose: () => void }) {
+  const [tick, setTick] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [webSearch, setWebSearch] = useState(false);
+  const navigate = useNavigate();
+  const { data, error, loading } = useAsync<TextDig>(() => api.textDigs(ds, instrument), [ds, instrument, tick]);
+  useEffect(() => {
+    if (!data || !DIG_RUNNING.has(data.dig.state)) return;
+    const timer = setInterval(() => setTick((t) => t + 1), 5000);
+    return () => clearInterval(timer);
+  }, [data]); // eslint-disable-line react-hooks/exhaustive-deps
+  const start = async () => {
+    setBusy(true); setErr(null);
+    try { await api.textDigCreate({ dataset: ds, instrument, company, filing_id: filingId ?? undefined, web_search: webSearch }); setTick((t) => t + 1); }
+    catch (e) { setErr(String((e as Error).message ?? e)); } finally { setBusy(false); }
+  };
+  const cancel = async () => {
+    if (!data?.dig.job_id) return;
+    setBusy(true); setErr(null);
+    try { await api.cancelJob(data.dig.job_id); setTick((t) => t + 1); } catch (e) { setErr(String((e as Error).message ?? e)); } finally { setBusy(false); }
+  };
+  const toIdea = async () => {
+    const b = data?.dig; const c = b?.conclusion;
+    if (!b || !c) return;
+    setBusy(true); setErr(null);
+    const body = [c.summary,
+      (c.groups ?? []).map((g) => `${g.name}：${g.summary}`).join("\n"),
+      (c.timeline ?? []).map((tl) => `${tl.date} ${tl.statement}`).join("\n"),
+      c.signal_note].filter(Boolean).join("\n\n");
+    try {
+      const r = await api.createIdea({ channel: "hypothesis", title: `${b.company} 公告深挖风险画像`,
+        body, markets: [DIG_MARKET[ds] ?? "fr"], submitted_by: t("研究员（演示，未登录）"), confirm_no_client_data: true });
+      navigate(`/ideas?id=${r.id}`);                 // 跳线索池并自动定位到新线索
+    } catch (e) { setErr(String((e as Error).message ?? e)); } finally { setBusy(false); }
+  };
+  const b = data?.dig;
+  const state = b?.state ?? "";
+  const tone = state === "done" ? "good" : state === "insufficient" ? "warn" : state === "failed" ? "bad" : state === "stopped" ? "muted" : "accent";
+  return (
+    <Panel title={`${t("公告深挖")} · ${b?.company ?? company}`} eyebrow={`${instrument} · ${t("有界检索-提取循环：AI 自行决定查什么、提取什么、何时收尾")}`}
+      actions={<>
+        <label className="text-xs text-muted flex items-center gap-1 cursor-pointer whitespace-nowrap"
+          title={t("勾选后启动时先联网检索该公司公开资料（门户网站、彭博社、经济论坛等）；仅作启发，来源需人工核验")}>
+          <input type="checkbox" checked={webSearch} disabled={busy || DIG_RUNNING.has(state)}
+            onChange={(e) => setWebSearch(e.target.checked)} />
+          {t("联网搜索")}
+        </label>
+        {!b && !loading && !error && <button className="btn btn-primary" disabled={busy} onClick={start}>{busy ? t("启动中…") : t("启动深挖")}</button>}
+        {b && DIG_RUNNING.has(state) && <button className="btn" disabled={busy} onClick={cancel}>{t("取消深挖")}</button>}
+        {b && !DIG_RUNNING.has(state) && <button className="btn" disabled={busy} onClick={start}>{busy ? t("启动中…") : t("重新深挖")}</button>}
+        <button className="btn" onClick={onClose}>{t("关闭")}</button>
+      </>}>
+      <div className="flex flex-wrap items-center gap-2 mb-2">
+        {b && <Badge tone={tone}>{DIG_STATE_ZH[state] ?? state}</Badge>}
+        {b && <span className="num text-xs text-faint">{tf("第 {n}/{m} 轮", { n: b.round, m: b.max_rounds })} · ${b.cost_usd.toFixed(4)} · {b.facts.length} {t("条事实")}</span>}
+        {b?.seed.simulated && <SimBadge simulated />}
+      </div>
+      {loading && !data && <p className="text-sm text-muted">{t("加载深挖记录…")}</p>}
+      {error && <div className="text-sm text-muted">{t("该公司还没有公告深挖记录。")}
+        <button className="btn h-7 px-2 text-xs ml-2" disabled={busy} onClick={start}>{t("启动深挖")}</button></div>}
+      {err && <p className="text-xs text-bad">{err}</p>}
+      {b?.last_error && <p className="text-xs text-bad">{b.last_error}</p>}
+      {b?.stop_reason && !DIG_RUNNING.has(state) && <p className="text-xs text-muted">{b.stop_reason}</p>}
+      {data && data.rounds.length > 0 && (
+        <ul className="flex flex-col gap-1.5 text-sm">
+          {data.rounds.map((r: DigRound) => (
+            <li key={r.round} className="flex flex-col gap-0.5 border-l-2 border-line pl-2">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="num text-xs text-faint">{tf("第 {n} 轮", { n: r.round })}</span>
+                {r.plan?.action && <Badge tone="muted">{DIG_TOOL_ZH[r.plan.action] ?? r.plan.action}</Badge>}
+                {r.plan?.model && <span className="text-xs text-faint">{r.plan.model}</span>}
+                {r.search?.hits.length != null && <span className="text-xs text-muted">{tf("命中 {n} 段", { n: r.search.hits.length })}</span>}
+                {r.search && r.search.scoped_out > 0 && <span className="text-xs text-faint">{tf("过滤别家公司 {n}", { n: r.search.scoped_out })}</span>}
+                {r.annotate && !r.annotate.skipped && r.annotate.labelled > 0 && <span className="text-xs text-muted">{tf("补标注 {n} 段（已进复核队列）", { n: r.annotate.labelled })}</span>}
+                {r.annotate?.skipped && <span className="text-xs text-faint">{t("标注跳过")}</span>}
+                {r.summarize?.sentences.length != null && r.summarize.sentences.length > 0 && <span className="text-xs text-muted">{tf("摘要 {n} 句", { n: r.summarize.sentences.length })}</span>}
+                {r.extract && !r.extract.skipped && <span className="text-xs text-muted">{tf("新增 {n} 条事实", { n: r.extract.added_facts.length })}</span>}
+                {r.extract?.skipped && <span className="text-xs text-faint">{t("本轮无命中，跳过提取")}</span>}
+              </div>
+              {r.plan?.error && <span className="text-xs text-bad">{r.plan.error}</span>}
+              {r.plan?.args?.query != null && <span className="text-xs text-muted">{tf("查询：{q}", { q: String(r.plan.args.query) })}</span>}
+              {r.rewrite && r.rewrite.terms.length > 0 && <span className="text-xs text-faint">{tf("改写：{t}", { t: joinList(r.rewrite.terms) })}</span>}
+              {r.rewrite?.error && <span className="text-xs text-warn">{tf("改写失败，回退原文查询：{e}", { e: r.rewrite.error })}</span>}
+              {r.plan?.rationale?.text && <span className="text-xs text-muted">{r.plan.rationale.text}</span>}
+              {r.search?.error && <span className="text-xs text-warn">{tf("检索不可用：{e}", { e: r.search.error })}</span>}
+              {r.extract?.dropped.length ? <span className="text-xs text-faint">{tf("丢弃 {n} 条：{r}", { n: r.extract.dropped.length, r: joinList([...new Set(r.extract.dropped.map((d) => DIG_DROP_ZH[d.reason] ?? d.reason))]) })}</span> : null}
+              {r.extract?.error && <span className="text-xs text-warn">{r.extract.error}</span>}
+              {r.conclusion && <span className="text-xs text-accent">{r.conclusion.give_up ? t("本轮收尾：数据不足结论") : t("本轮收尾：风险画像")}</span>}
+            </li>
+          ))}
+        </ul>
+      )}
+      {b?.web?.results.length ? (
+        <details className="text-sm mt-2">
+          <summary className="cursor-pointer text-warn">{tf("联网资料（{n} 条 · 仅作启发，来源需人工核验）", { n: b.web.results.length })}</summary>
+          {b.web.warning && <p className="text-xs text-warn mt-1">{b.web.warning}</p>}
+          <ul className="mt-1.5 flex flex-col gap-1">
+            {b.web.results.map((r, k) => (
+              <li key={k} className="text-xs flex flex-col gap-0.5 border-b border-line pb-1">
+                <span><span className="num text-faint mr-1">W{k + 1}</span>
+                  <span className="font-medium">{r.title}</span>
+                  {r.source && <span className="text-faint ml-1">· {r.source}</span>}
+                  {r.published && <span className="text-faint ml-1">{r.published}</span>}</span>
+                <span className="text-muted">{r.snippet}</span>
+                {r.url && <a className="text-accent break-all" href={r.url} target="_blank" rel="noreferrer">{r.url}</a>}
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
+      {b?.web?.error && !b.web.results.length && <p className="text-xs text-warn mt-2">{tf("联网检索不可用：{e}", { e: b.web.error })}</p>}
+      {b && b.facts.length > 0 && (
+        <details className="text-sm mt-2"><summary className="cursor-pointer text-accent">{tf("事实清单（{n} 条）", { n: b.facts.length })}</summary>
+          <ul className="mt-1.5 flex flex-col gap-1">
+            {b.facts.map((f) => (
+              <li key={f.id} className="text-xs flex flex-col gap-0.5 border-b border-line pb-1">
+                <span><span className="num text-faint mr-1">{f.id}</span>
+                  <Badge tone="muted">{f.name}</Badge>
+                  <Badge tone={f.direction === 1 ? "bad" : "good"}>{f.direction === 1 ? t("风险加重") : t("风险缓解")}</Badge>
+                  {f.review_status === "pending" && <Badge tone="warn">{t("引用待复核段落")}</Badge>}
+                  <span className="text-faint ml-1">{f.date}</span></span>
+                <span className="text-muted">{f.statement}</span>
+                <span className="text-faint">「{f.evidence}」 {f.refs.map((r) => `${r.title} · ${tf("第 {i} 段", { i: r.paragraph + 1 })}`).join("；")}</span>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+      {b?.conclusion?.give_up && (
+        <div className="text-sm mt-2 border border-line rounded p-3">
+          <div className="label">{t("数据不足结论")}</div>
+          <p className="text-muted mt-1">{b.conclusion.give_up.reason}</p>
+          {b.conclusion.give_up.evidence_gaps.length > 0 && <p className="text-xs text-faint mt-1">{t("缺什么：")}{joinList(b.conclusion.give_up.evidence_gaps)}</p>}
+          {b.conclusion.give_up.suggestion && <p className="text-xs text-faint">{t("建议：")}{b.conclusion.give_up.suggestion}</p>}
+        </div>
+      )}
+      {b?.conclusion && !b.conclusion.give_up && (
+        <div className="text-sm mt-2 flex flex-col gap-2 border border-line rounded p-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="label">{t("深挖结论 · 风险画像")}</div>
+            <button className="btn h-7 px-2 text-xs" disabled={busy} onClick={toIdea}>{t("转为线索")}</button>
+            {b.conclusion.fallback && <Badge tone="muted">{t("结论模型不可用，按事实清单兜底")}</Badge>}
+          </div>
+          <p className="text-muted">{b.conclusion.summary}</p>
+          {b.conclusion.groups?.length ? (
+            <div className="flex flex-col gap-1">
+              {b.conclusion.groups.map((g, k) => (
+                <p key={k} className="text-xs text-muted"><Badge tone="muted">{g.name}</Badge> {g.summary}
+                  <span className="num text-faint"> [{g.cites.join(" ")}]</span></p>
+              ))}
+            </div>
+          ) : null}
+          {b.conclusion.timeline?.length ? (
+            <details><summary className="cursor-pointer text-accent text-xs">{tf("风险时间线（{n} 条）", { n: b.conclusion.timeline.length })}</summary>
+              <ul className="mt-1.5 flex flex-col gap-0.5">
+                {b.conclusion.timeline.map((tl, k) => (
+                  <li key={k} className="text-xs text-muted"><span className="num text-faint">{tl.date}</span> {tl.statement}
+                    <span className="num text-faint"> [{tl.cites.join(" ")}]</span></li>
+                ))}
+              </ul>
+            </details>
+          ) : null}
+          {b.conclusion.signal_note && <p className="text-xs text-faint">{t("与文本信号对照：")}{b.conclusion.signal_note}</p>}
+          {b.conclusion.web_note && <p className="text-xs text-warn">{t("外部资料要点（来源需人工核验）：")}{b.conclusion.web_note}</p>}
+          {b.conclusion.follow_ups?.length ? <p className="text-xs text-muted">{t("待深挖线索：")}{joinList(b.conclusion.follow_ups)}</p> : null}
+        </div>
+      )}
+    </Panel>
+  );
+}
+
 function FilingsTab({ ov }: { ov: TextOverview }) {
   const ready = ov.datasets.filter((d) => d.ready);
   const [ds, setDs] = useState(ready[0]?.dataset ?? "fr");
   const [open, setOpen] = useState<string | null>(null);
+  const [dig, setDig] = useState<{ instrument: string; company: string; filingId: string | null } | null>(null);
   const { data, error, loading } = useAsync(() => api.textFilings(ds), [ds]);
   const cur = ov.datasets.find((d) => d.dataset === ds);
   return (
     <div className="flex flex-col gap-4">
-      <Seg label={t("数据集")} value={ds} onChange={(v) => { setDs(v); setOpen(null); }}
+      <Seg label={t("数据集")} value={ds} onChange={(v) => { setDs(v); setOpen(null); setDig(null); }}
         options={ov.datasets.map((d) => ({ value: d.dataset, label: `${MARKET_LABEL[d.market]}${d.simulated ? t("（模拟）") : ""}` }))} />
       {cur?.evaluation && Object.keys(cur.evaluation.ic_monthly).length > 0 && (
         <Panel title={t("逐月 Rank IC")} eyebrow={t("风险表述变化 vs 未来收益 · 绿色 = 方向符合假设（负相关）")}>
           <IcChart monthly={cur.evaluation.ic_monthly} />
         </Panel>
       )}
-      {open && <DocView ds={ds} id={open} onClose={() => setOpen(null)} />}
+      {open && <DocView ds={ds} id={open} onClose={() => setOpen(null)} onDig={() => {
+        const f = data?.items.find((x) => x.id === open) ?? data?.excluded?.find((x) => x.id === open);
+        if (f) { setOpen(null); setDig({ instrument: f.instrument, company: f.company, filingId: open }); }
+      }} />}
+      {dig && <DigPanel ds={ds} instrument={dig.instrument} company={dig.company} filingId={dig.filingId} onClose={() => setDig(null)} />}
       {loading ? <Loading what={t("公告列表")} /> : error ? <ErrorBox error={error} /> : data && (
         <Panel title={tf("公告与风险表述打分（{n} 篇）", { n: data.total })} eyebrow={`${data.source} · ${data.licence}`}>
           <div className="overflow-x-auto max-h-[560px]">
@@ -329,7 +524,8 @@ function FilingsTab({ ov }: { ov: TextOverview }) {
                 {data.items.map((f: TextFiling) => (
                   <tr key={f.id} className={`border-t border-line cursor-pointer hover:bg-bg-3 ${open === f.id ? "bg-accent/10" : ""}`}
                     onClick={() => setOpen(f.id)} tabIndex={0} onKeyDown={(e) => e.key === "Enter" && setOpen(f.id)}>
-                    <td className="py-1.5 pr-3 whitespace-nowrap">{f.company}<div className="num text-xs text-faint">{f.instrument}</div></td>
+                    <td className="py-1.5 pr-3 whitespace-nowrap">{f.company}<div className="num text-xs text-faint">{f.instrument}</div>
+                      <button className="btn h-6 px-1.5 text-xs mt-0.5" onClick={(e) => { e.stopPropagation(); setDig({ instrument: f.instrument, company: f.company, filingId: null }); }}>{t("公告深挖")}</button></td>
                     <td className="pr-3 max-w-[28ch] truncate" title={f.title}>{f.title}</td>
                     <td className="pr-3">{LANG[f.language] ?? f.language}</td>
                     <td className="pr-3 num text-xs whitespace-nowrap">{time(f.published_at)}</td>

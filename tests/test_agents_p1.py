@@ -362,6 +362,36 @@ class AgentP1Tests(unittest.TestCase):
         self.assertEqual(plan["expected_outcome"], "Revised outcome after critique")
         self.assertTrue(astore.read_round(agent["agent_id"], 1, "plan_critique"))
 
+    def test_critic_can_request_one_supplementary_search(self):
+        policy = {**POLICY, "prompts": {**POLICY["prompts"], "planner": "iteration-planner-v2",
+                                        "plan_critic": "iteration-plan-critic-v1"}}
+        agent = astore.create("test_negative", 1, policy, ["hk"], 20, web_search=True, deep_think=True)
+        agent["current_round"] = 1
+        astore.save(agent)
+        facts = {"facts": [{"id": "F1", "period": "valid", "text": "Hong Kong rank IC is weak."}]}
+        diagnosis = {"primary_cause": {"text": "Weak IC", "cites": ["F1"]}, "market_findings": [], "risks": [],
+                     "confidence": "medium"}
+        critique = {"verdict": "revise", "issues": [], "required_changes": ["Add external support"],
+                    "alternative_action": None, "needs_external_search": True,
+                    "search_query": "volume short-term reversal"}
+        revised = {**plan_data("decrease"), "expected_outcome": "Revised with external support"}
+        responses = [json.dumps(plan_data("decrease")), json.dumps(critique), json.dumps(revised)]
+
+        def fake_chat(prompt, task, role="main"):
+            return responses.pop(0), {"prompt_tokens": 5, "completion_tokens": 5, "usd": 0.0001}, "fake"
+
+        fake_external = {"configured": True, "provider": "fake", "query": "volume short-term reversal",
+                         "before": "2021-12-31", "results": [{"title": "Paper", "url": "https://example.test/paper",
+                         "published": "2020-01-01", "snippet": "finding", "source": "example.test"}],
+                         "error": None, "raw_count": 1, "excluded": 0}
+        with mock.patch("factopia.research.websearch.search", return_value=fake_external):
+            plan = loop._plan(facts, diagnosis, {}, policy, fake_chat, agent, {"ric_sign": -1},
+                              external=None, deep_think=True)
+        self.assertTrue(plan["deep_think"]["revised"])
+        self.assertEqual(plan["deep_think"]["revision_external"]["results"][0]["title"], "Paper")
+        saved = astore.read_round(agent["agent_id"], 1, "external_revision")
+        self.assertEqual(saved["results"][0]["title"], "Paper")
+
     def test_terminate_research_stops_active_agents_and_is_idempotent(self):
         agent = astore.create("test_single", 1, POLICY, ["hk"], 20)
         agent.update(state="acting")

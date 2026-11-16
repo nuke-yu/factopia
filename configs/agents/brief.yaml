@@ -1,0 +1,14 @@
+# AI 调研（WF-03）策略：线索 → 立项前的有界调研循环（docs/Agentic-workflow-线索-AI调研.md）
+max_rounds: 3                      # 检索轮数上限；满轮强制收尾
+budget_usd: 0.5                    # 调研总预算（美元）；超限强制收尾
+mandate: demo_crossborder_hk       # 起草研究规格时默认的授权名称
+horizon: 20                        # 起草研究规格时默认的预测周期
+tools:                             # Planner 白名单
+  - search_internal
+  - search_external
+  - evidence
+  - draft
+  - give_up
+prompts:
+  planner: brief-planner-v1
+  conclusion: brief-conclusion-v1

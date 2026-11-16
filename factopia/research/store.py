@@ -186,6 +186,32 @@ def create_agent_job(agent_id: str, research_id: str, version: int, markets: lis
     return job
 
 
+def create_brief_job(brief_id: str, idea_id: str, markets: list[str], budget_usd: float) -> dict:
+    """AI 调研的 runner 任务（kind="brief"）：只调用大模型与检索，不启动回测容器。"""
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    job = {"job_id": f"{stamp}_{secrets.token_hex(2)}_0_all", "batch_id": f"{stamp}_b",
+           "kind": "brief", "brief_id": brief_id, "idea_id": idea_id,
+           "research_id": None, "version": None, "market": "all", "horizon": 0, "loops": 0,
+           "budget_usd": float(budget_usd), "state": "queued", "created_at": now(),
+           "started_at": None, "ended_at": None, "run_id": None, "cost_usd": 0.0, "rounds": 0,
+           "error": None, "brief_state": "queued"}
+    write_job(job)
+    return job
+
+
+def create_dig_job(dig_id: str, instrument: str, budget_usd: float) -> dict:
+    """公告深挖的 runner 任务（kind="dig"）：只调用大模型与文本检索，不启动回测容器。"""
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    job = {"job_id": f"{stamp}_{secrets.token_hex(2)}_0_all", "batch_id": f"{stamp}_d",
+           "kind": "dig", "dig_id": dig_id, "instrument": instrument,
+           "research_id": None, "version": None, "market": "all", "horizon": 0, "loops": 0,
+           "budget_usd": float(budget_usd), "state": "queued", "created_at": now(),
+           "started_at": None, "ended_at": None, "run_id": None, "cost_usd": 0.0, "rounds": 0,
+           "error": None, "dig_state": "queued"}
+    write_job(job)
+    return job
+
+
 def write_job(job: dict) -> None:
     _atomic_write(JOBS_DIR / f"{job['job_id']}.json", _dumps(job, indent=2))
 
