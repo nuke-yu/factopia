@@ -760,6 +760,43 @@ def ideas_convert(iid: str, body: IdeaConvertIn):
     return _idea_call(_ideas().prefill, iid, body.factors or None)
 
 
+@app.post("/api/ideas/{iid}/brief")
+def ideas_brief_create(iid: str):
+    """AI 调研（WF-03）：为线索启动有界调研循环，产出研究规格草稿（进入审核页）或「暂不可立项」结论。"""
+    _idea_check(iid)
+    from factopia.agents import brief, policy as policy_mod
+    try:
+        idea = _ideas().detail(iid)
+        rec = brief.create(iid, idea, policy_mod.load_brief())
+        job = store.create_brief_job(rec["brief_id"], iid, rec["idea"]["markets"],
+                                     float(rec["policy"]["budget_usd"]))
+        rec["job_id"] = job["job_id"]
+        brief.save(rec)
+    except brief.BriefError as e:
+        raise HTTPException(409 if "已有" in str(e) else 422, str(e))
+    except policy_mod.PolicyError as e:
+        raise HTTPException(422, str(e))
+    return {"brief_id": rec["brief_id"], "job_id": job["job_id"], "state": rec["state"],
+            "created_at": rec["created_at"]}
+
+
+@app.get("/api/ideas/{iid}/brief")
+def ideas_brief_latest(iid: str):
+    """最新一次 AI 调研的状态、轮次与结论（前端 5 秒轮询）。"""
+    _idea_check(iid)
+    from factopia.agents import brief
+    rec = brief.latest(iid)
+    if not rec:
+        raise HTTPException(404, t("该线索还没有 AI 调研记录"))
+    rounds = []
+    for n in range(1, int(rec.get("round") or 0) + 1):
+        rounds.append({"round": n,
+                       "plan": brief.read_round(rec["brief_id"], n, "plan"),
+                       "action": brief.read_round(rec["brief_id"], n, "action"),
+                       "conclusion": brief.read_round(rec["brief_id"], n, "conclusion")})
+    return {"brief": rec, "rounds": rounds}
+
+
 # ---------------------------------------------------------------- 地区规则包与预检（第 14.12 节）
 
 @app.get("/api/rules/packs")
@@ -2484,6 +2521,58 @@ def text_summary(body: SummaryIn):
         return tsearch.summarize(body.q, hits)
     except drafting.DraftError as e:
         raise HTTPException(503, str(e))
+
+
+class DigCreateIn(BaseModel):
+    dataset: str
+    instrument: str = Field(min_length=1, max_length=40)
+    company: str = Field("", max_length=200)
+    filing_id: str | None = None
+    web_search: bool = False
+
+
+@app.post("/api/text/dig")
+def text_dig_create(body: DigCreateIn):
+    """公告深挖（WF-04）：为公司启动有界检索-提取-决策循环，产出风险画像或数据不足结论。"""
+    _text_ds(body.dataset)                          # 数据集与地区权限
+    from factopia.agents import dig, policy as policy_mod
+    try:
+        filing = None
+        if body.filing_id:
+            s = tcommon.read_json(tcommon.ds_dir(body.dataset) / "summary.json") or {}
+            meta = next((f for f in s.get("filings") or [] if f["id"] == body.filing_id), None)
+            if not meta:
+                raise HTTPException(404, t("公告不存在"))
+            filing = {"id": meta["id"], "title": meta["title"], "published_at": meta["published_at"],
+                      "tone_total": meta.get("tone_total"), "change": meta.get("change"),
+                      "concepts": [c for c, v in (meta.get("changes") or {}).items() if v is not None]}
+        rec = dig.create(body.dataset, body.company, body.instrument, filing, policy_mod.load_dig(),
+                         web_search=body.web_search)
+        job = store.create_dig_job(rec["dig_id"], rec["instrument"], float(rec["policy"]["budget_usd"]))
+        rec["job_id"] = job["job_id"]
+        dig.save(rec)
+    except dig.DigError as e:
+        raise HTTPException(409 if "已有" in str(e) else 422, str(e))
+    except policy_mod.PolicyError as e:
+        raise HTTPException(422, str(e))
+    return {"dig_id": rec["dig_id"], "job_id": job["job_id"], "state": rec["state"],
+            "created_at": rec["created_at"]}
+
+
+@app.get("/api/text/digs")
+def text_digs(dataset: str = Query(...), instrument: str = Query(..., min_length=1, max_length=40)):
+    """该公司最近一次公告深挖的状态、轮次与结论（前端 5 秒轮询）。"""
+    _text_ds(dataset)
+    from factopia.agents import dig
+    rec = dig.latest(dataset, instrument)
+    if not rec:
+        raise HTTPException(404, t("该公司还没有公告深挖记录"))
+    rounds = []
+    for n in range(1, int(rec.get("round") or 0) + 1):
+        rounds.append({"round": n, **{name: dig.read_round(rec["dig_id"], n, name)
+                                      for name in ("plan", "rewrite", "search", "annotate", "summarize",
+                                                   "extract", "conclusion")}})
+    return {"dig": rec, "rounds": rounds}
 
 
 class ReviewIn(BaseModel):

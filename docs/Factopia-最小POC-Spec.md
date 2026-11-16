@@ -3273,7 +3273,7 @@ MVP = P0 + P1 的单链；首次端到端演示先做这条。
 
 **P2 落地（2026-11-15）：** Agent API（启动 / 详情 / trace / report / approve / reject / stop）、agent job 的地区可见性、结果页「继续研究」三分支（下一版本 / 存入线索池 / Agent）、Agent 页（时间线、事实/诊断/计划、草稿审改、批准/拒绝、trace、报告）、研究立项 `based_on` 预填、线索池预填与 `source_ref` 来源追溯已实现；前端 `npm run build` 通过。待浏览器端到端演示与 UI 打磨；API key 日志脱敏仍待团队决定。
 
-**P3 落地（2026-11-15）：** 评估后自动执行 setup 规则预检并写入评估摘要；`not_improved` / `inconclusive` 时自动回流线索（渠道「研究 Agent 反馈」，按 Agent/轮次/结论去重）；`GET /api/agents/{id}/overlap` 复用 `portfolio.combine` 计算与已获批 / 历史版本的打分相关性（绝对值 ≥ 0.7 视为冗余）及互补结论；Agent 页显示规则预检、重叠面板、阶段 toast、评估后四个下一步操作（查看结果 / 继续研究 / 线索 / 审批）及规则预检、构建组合入口；7 个 Agent 红队用例通过；演示脚本见 `docs/Agent工作流-演示脚本.md`。待完整端到端走查。
+**P3 落地（2026-11-15）：** 评估后自动执行 setup 规则预检并写入评估摘要；`not_improved` / `inconclusive` 时自动回流线索（渠道「研究 Agent 反馈」，按 Agent/轮次/结论去重）；`GET /api/agents/{id}/overlap` 复用 `portfolio.combine` 计算与已获批 / 历史版本的打分相关性（绝对值 ≥ 0.7 视为冗余）及互补结论；Agent 页显示规则预检、重叠面板、阶段 toast、评估后四个下一步操作（查看结果 / 继续研究 / 线索 / 审批）及规则预检、构建组合入口；7 个 Agent 红队用例通过；演示脚本见 `docs/Agentic-workflow-结果-研究迭代.md`。待完整端到端走查。
 
 ### 18.13 需求清单
 

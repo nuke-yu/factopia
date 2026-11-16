@@ -119,13 +119,16 @@ def _bailian(cfg: dict, query: str, before: str, count: int) -> list[dict]:
 
     接口不返回搜索引擎原始结构化结果，URL/日期由模型整理；页面会提示人工核验。
     """
+    date_rule = (f"Only include sources published on or before {before}. " if before
+                 else "Include recent sources; there is no date restriction. ")
+    date_rule2 = f"Do not include sources published after {before}; " if before else ""
     prompt = (
         "Use web search to find public sources about: " + query + "\n"
-        f"Only include sources published on or before {before}. "
-        "Return JSON only: {\"results\":[{\"title\":\"source title\",\"url\":\"https://... or empty\","
-        "\"published\":\"YYYY-MM-DD or empty\",\"snippet\":\"one-sentence finding\"}]}. "
-        f"At most {count} results. Do not include sources published after {before}; "
-        "if the date is unknown use an empty string. Only use URLs returned by search; never invent a URL."
+        + date_rule
+        + "Return JSON only: {\"results\":[{\"title\":\"source title\",\"url\":\"https://... or empty\","
+          "\"published\":\"YYYY-MM-DD or empty\",\"snippet\":\"one-sentence finding\"}]}. "
+        f"At most {count} results. " + date_rule2
+        + "if the date is unknown use an empty string. Only use URLs returned by search; never invent a URL."
     )
     body = {"model": cfg["model"], "messages": [{"role": "user", "content": prompt}],
             "enable_search": True, "response_format": {"type": "json_object"},

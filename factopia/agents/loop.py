@@ -8,6 +8,7 @@ P0 是同步 CLI：只生成事实、诊断、计划，以及 new_version 的下
     Checkpoint=每个节点后的原子写，Interrupt=awaiting_human，Resume=runner 重新入队（P1）。
 """
 import json
+import re
 from pathlib import Path
 
 from factopia.agents import children, llm, observe, policy as policy_mod, report, store, tools
@@ -388,11 +389,11 @@ def _keep(item, fact_ids: set[str]) -> dict | None:
     return {"text": text[:2000], "cites": cites}
 
 
-def _external_text(external: dict | None) -> str:
+def _external_text(external: dict | None, start: int = 1) -> str:
     if not external:
         return "- none"
     lines = []
-    for i, r in enumerate(external.get("results") or [], 1):
+    for i, r in enumerate(external.get("results") or [], start):
         lines.append(f"- [W{i}] {r.get('title')} ({r.get('published') or 'date unknown'}; {r.get('url')}) "
                      f"{str(r.get('snippet') or '')[:500]}")
     if external.get("error"):
@@ -422,6 +423,56 @@ def _web_search(agent: dict, diagnosis: dict) -> dict:
     return out
 
 
+def _revision_query(agent: dict, critique: dict) -> str:
+    """Critic 要求补证时生成一条短查询；去掉测试期年份和 F#/W# 标记。"""
+    q = str(critique.get("search_query") or "").strip()
+    if not q:
+        parts = []
+        try:
+            root = agent["root"]
+            spec = research_store.load_version(root["research_id"], int(agent["current_version"]))
+            parts += [spec.get("title_zh"), spec.get("hypothesis")]
+        except Exception:
+            pass
+        parts += [str(x) for x in (critique.get("required_changes") or [])[:2]]
+        q = " ".join(str(x).strip() for x in parts if str(x).strip())
+    q = re.sub(r"\b20(?:2[2-9]|[3-9]\d)\b", " ", q)      # 不把测试期年份带进搜索
+    q = re.sub(r"\[[FW]\d+\]", " ", q)
+    return re.sub(r"\s+", " ", q).strip()[:300]
+
+
+def _revision_search(agent: dict, critique: dict) -> dict | None:
+    """Critic 明确要求补充外部证据时，平台执行一次受控检索。
+
+    只有 Agent 启动时勾选联网才执行；结果写入 external_revision.json，
+    并注入 Planner 修订 prompt。失败不阻断修订。
+    """
+    if not agent.get("web_search") or not critique.get("needs_external_search"):
+        return None
+    query = _revision_query(agent, critique)
+    if not query:
+        return None
+    from factopia.research import websearch
+    try:
+        out = websearch.search(query)
+    except Exception as e:
+        out = {"configured": False, "provider": None, "query": query, "before": None,
+               "results": [], "error": str(e)[:500], "raw_count": 0, "excluded": 0}
+    round_no = int(agent.get("current_round") or 0)
+    out = {**out, "at": store.now(), "phase": "revision"}
+    try:
+        store.write_round(agent["agent_id"], round_no, "external_revision", out)
+    except Exception:
+        pass
+    store.append_trace(agent["agent_id"], {"kind": "web_search", "phase": "revision",
+                                           "round": round_no, "query": query,
+                                           "provider": out.get("provider"),
+                                           "configured": out.get("configured"),
+                                           "error": out.get("error"),
+                                           "count": len(out.get("results") or [])})
+    return out
+
+
 def _plan(facts: dict, diagnosis: dict, memory: dict, policy: dict, chat, agent: dict, rule: dict,
           external: dict | None = None, deep_think: bool = False) -> dict:
     version = policy["prompts"]["planner"]
@@ -442,7 +493,10 @@ def _plan(facts: dict, diagnosis: dict, memory: dict, policy: dict, chat, agent:
     if critique:
         store.write_round(agent["agent_id"], int(agent.get("current_round") or 0), "plan_critique", critique)
     revised = False
+    revision_external = None
     if critique and critique.get("verdict") == "revise":
+        if agent.get("web_search") and critique.get("needs_external_search"):
+            revision_external = _revision_search(agent, critique)
         revision_prompt = (
             prompt
             + "\n\n## Your draft plan (JSON)\n" + json.dumps(plan, ensure_ascii=False)
@@ -450,13 +504,19 @@ def _plan(facts: dict, diagnosis: dict, memory: dict, policy: dict, chat, agent:
             + "\n\nRevise the plan using the critique. Keep the same JSON schema and tool allowlist. "
               "Output the full plan JSON only; do not include the critique."
         )
+        if revision_external:
+            start = len((external or {}).get("results") or []) + 1
+            revision_prompt += (
+                "\n\n## Additional external evidence found after critique "
+                "(untrusted; optional; cite as [W#])\n" + _external_text(revision_external, start=start)
+            )
         try:
             plan = _plan_call(revision_prompt, fact_ids, available, rule, chat, agent,
                               "planner_revise", "研究迭代计划修订", version)
             revised = True
         except store.AgentError:
             revised = False
-    plan["deep_think"] = {"critique": critique, "revised": revised}
+    plan["deep_think"] = {"critique": critique, "revised": revised, "revision_external": revision_external}
     return plan
 
 
@@ -504,9 +564,15 @@ def _critique_plan(prompt: str, plan: dict, facts: dict, diagnosis: dict, extern
                 issues.append({"severity": "block" if x.get("severity") == "block" else "warn",
                                "text": str(x["text"])[:1000],
                                "cites": [str(c) for c in (x.get("cites") or [])][:6]})
+            needs_search = verdict == "revise" and str(
+                data.get("needs_external_search")).lower() in ("1", "true", "yes")
+            search_query = data.get("search_query")
+            search_query = str(search_query).strip()[:300] if isinstance(search_query, str) else ""
             return {"verdict": verdict, "issues": issues,
                     "required_changes": [str(x)[:500] for x in (data.get("required_changes") or [])][:6],
                     "alternative_action": data.get("alternative_action"),
+                    "needs_external_search": needs_search,
+                    "search_query": search_query if needs_search else "",
                     "model": model, "prompt_version": version, "usage": usage, "at": store.now()}
         except (llm.LLMError, AgentStateError):
             break

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Badge, ErrorBox, Loading, Notice, Panel, Seg, Toast } from "../components/ui";
-import { api, visibleMarkets, type Idea, type IdeaChannel, type IdeaCombo, type IdeaDetail, type IdeaInput, type IdeaList, type IdeaSearch, type IdeaSuggestion, type IdeaUpdateInput, type Market } from "../api";
+import { api, visibleMarkets, type BriefTool, type Idea, type IdeaBrief, type IdeaChannel, type IdeaCombo, type IdeaDetail, type IdeaInput, type IdeaList, type IdeaSearch, type IdeaSuggestion, type IdeaUpdateInput, type Market } from "../api";
 import { useDraft } from "../draft";
 import { MARKET_LABEL, useAsync } from "../lib";
 import SuggestionBasis from "../components/SuggestionBasis";
@@ -22,9 +22,15 @@ const BODY_LABEL: Record<string, [string, string]> = {
 const STATUS_TONE = { new: "accent", converted: "good", duplicate: "muted", dismissed: "muted" } as const;
 const AUTO = new Set<IdeaChannel>(["monitor", "paper_trading", "portfolio", "approval", "agent"]);
 const ACTOR_KEY = "factopia-idea-actor";
+const RESEARCHING_KEY = "factopia-researching-idea";
 
 function readActor() { try { return localStorage.getItem(ACTOR_KEY) ?? ""; } catch { return ""; } }
 function saveActor(v: string) { try { localStorage.setItem(ACTOR_KEY, v); } catch { /* 忽略 */ } }
+function readResearching() { try { return sessionStorage.getItem(RESEARCHING_KEY); } catch { return null; } }
+function saveResearching(id: string | null) {
+  try { if (id) sessionStorage.setItem(RESEARCHING_KEY, id); else sessionStorage.removeItem(RESEARCHING_KEY); }
+  catch { /* 忽略 */ }
+}
 
 function fileToBase64(f: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -257,9 +263,9 @@ function Submit({ meta, actor, setActor, onCreated, onUpdated, onCancelEdit, edi
   );
 }
 
-function Card({ i, active, flash = false, locked = false, editing = false, onEdit, onCancelEdit, onClick, checked, onCheck }: {
-  i: Idea; active: boolean; flash?: boolean; locked?: boolean; editing?: boolean;
-  onEdit: () => void; onCancelEdit: () => void;
+function Card({ i, active, flash = false, locked = false, editing = false, researching = false, stopping = false, onEdit, onCancelEdit, onResearch, onStopResearch, onClick, checked, onCheck }: {
+  i: Idea; active: boolean; flash?: boolean; locked?: boolean; editing?: boolean; researching?: boolean; stopping?: boolean;
+  onEdit: () => void; onCancelEdit: () => void; onResearch: () => void; onStopResearch: () => void;
   onClick: () => void; checked: boolean; onCheck?: () => void;
 }) {
   const dup = (i.similar?.ideas.length ?? 0) > 0;
@@ -284,11 +290,28 @@ function Card({ i, active, flash = false, locked = false, editing = false, onEdi
       <div className={`flex items-center gap-2 mt-1 ${locked ? "cursor-not-allowed" : "cursor-pointer"}`}
         onClick={(e) => { if (!locked && !(e.target as HTMLElement).closest("button")) onClick(); }}>
         <span className="text-xs text-faint">{i.submitted_by} · {i.markets.length ? i.markets.map((m) => MARKET_LABEL[m]).join(" / ") : t("不限市场")}</span>
-        {active && editable && (
-          <button type="button" className="btn h-6 px-2 text-[11px] ml-auto" onClick={editing ? onCancelEdit : onEdit}>
-            {editing ? t("取消修改") : t("修改线索")}
-          </button>
-        )}
+        <div className="ml-auto flex items-center gap-1">
+          {active && editable && (
+            <button type="button" className="btn h-6 px-2 text-[11px]" disabled={!editing && locked}
+              title={!editing && locked ? t("当前有 AI 调研或修改正在进行") : undefined}
+              onClick={editing ? onCancelEdit : onEdit}>
+              {editing ? t("取消修改") : t("修改线索")}
+            </button>
+          )}
+          {active && (researching ? (
+            <button type="button" className="btn h-6 px-2 text-[11px]" disabled={stopping}
+              title={stopping ? undefined : t("终止当前 AI 调研")}
+              onClick={(e) => { e.stopPropagation(); onStopResearch(); }}>
+              {stopping ? t("终止中…") : t("终止AI 调研")}
+            </button>
+          ) : (
+            <button type="button" className="btn h-6 px-2 text-[11px]" disabled={locked}
+              title={locked ? t("当前有 AI 调研或修改正在进行") : t("对这条线索启动 AI 调研")}
+              onClick={(e) => { e.stopPropagation(); onResearch(); }}>
+              {t("AI 调研")}
+            </button>
+          ))}
+        </div>
       </div>
     </div>
     </div>
@@ -388,6 +411,110 @@ function CombineResult({ c, onClose }: { c: IdeaCombo; onClose: () => void }) {
         </div>
       </div>
     </Panel>
+  );
+}
+
+const BRIEF_TOOL_ZH: Record<BriefTool, string> = { search_internal: "内部检索", search_external: "联网检索", evidence: "证据包", draft: "起草规格", give_up: "放弃" };
+const BRIEF_RUNNING = new Set(["queued", "planning", "acting", "closing"]);
+const BRIEF_SOURCE_ZH: Record<string, string> = { internal: "内部", external: "联网", evidence: "证据包" };
+
+function BriefPanel({ id }: { id: string }) {
+  const { data, error, loading, reload } = useAsync(() => api.ideaBrief(id), [id]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const { update } = useDraft();
+  const navigate = useNavigate();
+  useEffect(() => {                                       // 运行中每 5 秒刷新（与 Agent 页一致）
+    if (!data || !BRIEF_RUNNING.has(data.brief.state)) return;
+    const timer = setInterval(() => { void reload(); }, 5000);
+    return () => clearInterval(timer);
+  }, [data, reload]); // eslint-disable-line react-hooks/exhaustive-deps
+  const cancel = async () => {
+    if (!data?.brief.job_id) return;
+    setBusy(true); setErr(null);
+    try { await api.cancelJob(data.brief.job_id); } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
+  };
+  const goDraft = () => {
+    const b = data?.brief;
+    const d = b?.draft?.draft;
+    if (!b || !d) return;
+    update({ hypothesis: d.hypothesis ?? b.idea.hypothesis ?? "", direction: (d.directions ?? []).join("；") || b.idea.direction,
+      markets: b.idea.markets, ideaId: id, ideaTitle: `${t(b.idea.channel_zh ?? "")} · ${b.idea.title}`,
+      ideaIds: [], comboId: null, basedOn: null });
+    navigate("/research");
+  };
+  const b = data?.brief;
+  const state = b?.state ?? "";
+  const tone = state === "done" ? "good" : state === "not_researchable" ? "warn" : state === "failed" ? "bad" : state === "stopped" ? "muted" : "accent";
+  const stateText = state === "done" ? t("已完成") : state === "not_researchable" ? t("暂不可立项") : state === "failed" ? t("失败") : state === "stopped" ? t("已停止") : t("进行中");
+  return (
+    <div id="idea-brief" className="scroll-mt-20 flex flex-col gap-2 border border-line rounded p-3">
+      <div className="flex items-center gap-2">
+        <div className="label">{t("AI 调研")}</div>
+        {b && <Badge tone={tone}>{stateText}</Badge>}
+        {b && <span className="num text-xs text-faint">{tf("第 {n}/{m} 轮", { n: b.round, m: b.max_rounds })} · ${b.cost_usd.toFixed(4)}</span>}
+        {BRIEF_RUNNING.has(state) && <button type="button" className="btn h-7 px-2 text-xs ml-auto" disabled={busy || !b?.job_id} onClick={cancel}>{t("取消调研")}</button>}
+      </div>
+      {loading && !data && <p className="text-sm text-muted">{t("加载调研记录…")}</p>}
+      {!b && !loading && !error && <p className="text-sm text-muted">{t("点击选中线索卡片上的「AI 调研」开始。")}</p>}
+      {error && <p className="text-sm text-muted">{t("还没有 AI 调研记录。点击选中线索卡片上的「AI 调研」开始。")}</p>}
+      {err && <p className="text-xs text-bad">{err}</p>}
+      {b && <p className="text-xs text-muted">{tf("有界调研循环：最多 {n} 轮，AI 自行决定检索什么证据、何时起草或放弃；人工闸门在研究立项审核页。", { n: b.max_rounds })}</p>}
+      {b && b.last_error && <p className="text-xs text-bad">{b.last_error}</p>}
+      {data && data.rounds.length > 0 && (
+        <ul className="flex flex-col gap-1.5 text-sm">
+          {data.rounds.map((r) => (
+            <li key={r.round} className="flex flex-col gap-0.5 border-l-2 border-line pl-2">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="num text-xs text-faint">{tf("第 {n} 轮", { n: r.round })}</span>
+                {r.plan?.action && <Badge tone="muted">{t(BRIEF_TOOL_ZH[r.plan.action])}</Badge>}
+                {r.plan?.model && <span className="text-xs text-faint">{r.plan.model}</span>}
+                {r.action?.added_facts.length ? <span className="text-xs text-muted">{tf("新增 {n} 条事实", { n: r.action.added_facts.length })}</span> : null}
+              </div>
+              {r.plan?.error && <span className="text-xs text-bad">{r.plan.error}</span>}
+              {r.plan?.args?.query != null && <span className="text-xs text-muted">{tf("查询：{q}", { q: String(r.plan.args.query) })}</span>}
+              {r.plan?.rationale?.text && <span className="text-xs text-muted">{r.plan.rationale.text}</span>}
+              {r.action?.error && <span className="text-xs text-warn">{r.action.error}</span>}
+              {r.action?.summary?.error != null && <span className="text-xs text-warn">{tf("检索不可用：{e}", { e: String(r.action.summary.error) })}</span>}
+            </li>
+          ))}
+        </ul>
+      )}
+      {b && b.facts.length > 0 && (
+        <details className="text-sm"><summary className="cursor-pointer text-accent">{tf("事实清单（{n} 条）", { n: b.facts.length })}</summary>
+          <ul className="mt-1.5 flex flex-col gap-1">
+            {b.facts.map((f) => (
+              <li key={f.id} className="text-xs flex flex-col gap-0.5 border-b border-line pb-1">
+                <span><span className="num text-faint mr-1">{f.id}</span>
+                  <Badge tone="muted">{t(BRIEF_SOURCE_ZH[f.source] ?? f.source)}</Badge> <span className="font-medium">{f.title}</span>
+                  {f.published && <span className="text-faint ml-1">{f.published}</span>}</span>
+                <span className="text-muted">{f.text}</span>
+                {f.url && <a className="text-accent break-all" href={f.url} target="_blank" rel="noreferrer">{f.url}</a>}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+      {b && b.state === "done" && b.draft?.draft && (
+        <div className="flex flex-col gap-1.5 border border-accent/40 bg-accent/5 rounded p-2.5 text-sm">
+          <div className="flex items-center gap-2"><Badge tone="accent">{t("研究规格草稿")}</Badge>
+            {b.draft.meta?.model != null && <span className="text-xs text-faint">{String(b.draft.meta.model)} · {t(b.draft.draft.title_zh ?? "")}</span>}</div>
+          <div className="font-medium">{b.draft.draft.hypothesis}</div>
+          {(b.draft.draft.directions ?? []).length > 0 && <p className="text-xs text-muted">{tf("方向：{list}", { list: b.draft.draft.directions.join("；") })}</p>}
+          {((b.draft.draft.system_questions ?? []).length > 0) && <p className="text-xs text-muted">{tf("待确认事项 {n} 项（审核页显示）", { n: (b.draft.draft.system_questions ?? []).length })}</p>}
+          <button type="button" className="btn btn-primary h-7 px-2 text-xs self-start" onClick={goDraft}>{t("到研究立项页")}</button>
+        </div>
+      )}
+      {b && b.state === "not_researchable" && b.conclusion && (
+        <div className="flex flex-col gap-1.5 border border-warn/40 bg-warn/5 rounded p-2.5 text-sm">
+          <div className="flex items-center gap-2"><Badge tone="warn">{t("暂不可立项")}</Badge>
+            {b.conclusion.model && <span className="text-xs text-faint">{b.conclusion.model}</span>}</div>
+          <p>{b.conclusion.reason}</p>
+          {b.conclusion.evidence_gaps.length > 0 && <p className="text-xs text-muted">{tf("证据缺口：{list}", { list: b.conclusion.evidence_gaps.join("；") })}</p>}
+          {b.conclusion.suggestion && <p className="text-xs text-muted">{tf("建议：{s}", { s: b.conclusion.suggestion })}</p>}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -515,6 +642,7 @@ function Detail({ id, actor, onChanged, flash = false }: { id: string; actor: st
           </div>
           {d.links.research?.length ? <div className="text-sm">{t("已转立项：")}{d.links.research.map((r) => <span key={r} className="num text-xs mr-2">{r}</span>)}<Link className="text-accent" to="/projects">{t("研究项目")}</Link></div> : null}
           {d.links.duplicate_of && <div className="text-sm text-muted">{t("重复，指向：")}<span className="num text-xs">{d.links.duplicate_of}</span></div>}
+          <BriefPanel id={d.id} />
           <div className="flex flex-col gap-2 border border-line rounded p-3">
             <div className="label">{tf("处理（处理人：{who}）", { who: who || t("请先在左侧填写提交人 / 处理人") })}</div>
             {open && <button className="btn btn-primary self-start" disabled={busy || (d.channel === "paper" && picked.length === 0) || (AUTO.has(d.channel) && !d.ai_hypothesis)} onClick={convert}>
@@ -559,15 +687,118 @@ export default function IdeasPage() {
   const [sugShown, setSugShown] = useState<IdeaSuggestion | null>(null);
   const [editing, setEditing] = useState<IdeaDetail | null>(null);
   const [editError, setEditError] = useState<string | null>(null);
+  const [researchingId, setResearchingId] = useState<string | null>(null);
+  const [researchError, setResearchError] = useState<string | null>(null);
+  const [stoppingResearch, setStoppingResearch] = useState(false);
   const [detailTick, setDetailTick] = useState(0);
-  const locked = !!editing;
+  const locked = !!editing || !!researchingId;
   const pick = (id: string) => setPicked((xs) => xs.includes(id) ? xs.filter((x) => x !== id) : xs.length >= 8 ? xs : [...xs, id]);
   async function startEdit(id: string) {
-    if (editing) return;
+    if (editing || researchingId) return;
     setEditError(null);
     try { const d = await api.idea(id); setEditing(d); setPicked([]); }
     catch (e) { setEditError((e as Error).message); }
   }
+  async function startResearch(id: string) {
+    if (editing || researchingId) return;
+    setResearchError(null);
+    setStoppingResearch(false);
+    setResearchingId(id);
+    saveResearching(id);
+    set("id", id);
+    try {
+      let current: IdeaBrief | null = null;
+      try { current = await api.ideaBrief(id); } catch { /* 还没有调研记录 */ }
+      if (current && BRIEF_RUNNING.has(current.brief.state)) {
+        setDetailTick((x) => x + 1);
+        return;
+      }
+      await api.ideaBriefCreate(id);
+      setDetailTick((x) => x + 1);
+    } catch (e) {
+      setResearchingId(null);
+      saveResearching(null);
+      setResearchError((e as Error).message);
+    }
+  }
+  async function stopResearch() {
+    if (!researchingId || stoppingResearch) return;
+    setStoppingResearch(true);
+    setResearchError(null);
+    try {
+      const data = await api.ideaBrief(researchingId);
+      if (!data.brief.job_id) {
+        setResearchingId(null);
+        saveResearching(null);
+        setStoppingResearch(false);
+        setDetailTick((x) => x + 1);
+        return;
+      }
+      await api.cancelJob(data.brief.job_id);
+      window.setTimeout(() => setStoppingResearch(false), 15000);   // 若任务未及时停止，允许再次终止
+      setDetailTick((x) => x + 1);
+    } catch (e) {
+      setStoppingResearch(false);
+      setResearchError((e as Error).message);
+    }
+  }
+  useEffect(() => {
+    const stored = readResearching();
+    if (!stored) return;
+    let alive = true;
+    api.ideaBrief(stored).then((data) => {
+      if (!alive) return;
+      if (BRIEF_RUNNING.has(data.brief.state)) {
+        setResearchingId(stored);
+        set("id", stored);
+      } else {
+        saveResearching(null);
+      }
+    }).catch(() => { if (alive) saveResearching(null); });
+    return () => { alive = false; };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!researchingId) return;
+    let alive = true;
+    let missing = 0;
+    const check = async () => {
+      try {
+        const data = await api.ideaBrief(researchingId);
+        missing = 0;
+        if (alive && !BRIEF_RUNNING.has(data.brief.state)) {
+          setResearchingId(null);
+          saveResearching(null);
+          setStoppingResearch(false);
+          setDetailTick((x) => x + 1);
+        }
+      } catch (e) {
+        if (!alive) return;
+        // 创建记录/任务启动有短暂空窗；连续失败约 30 秒才解锁并报错。
+        missing += 1;
+        if (missing >= 6) {
+          setResearchingId(null);
+          saveResearching(null);
+          setStoppingResearch(false);
+          setResearchError((e as Error).message);
+        }
+      }
+    };
+    const timer = window.setInterval(check, 5000);
+    void check();
+    return () => { alive = false; window.clearInterval(timer); };
+  }, [researchingId]);
+  useEffect(() => {
+    if (!researchingId) return;
+    let tries = 0;
+    let timer = 0;
+    const scroll = () => {
+      const el = document.getElementById("idea-brief");
+      if (el) { el.scrollIntoView({ behavior: "smooth", block: "start" }); return; }
+      if (++tries < 20) timer = window.setTimeout(scroll, 100);
+    };
+    timer = window.setTimeout(scroll, 100);
+    return () => window.clearTimeout(timer);
+  }, [researchingId, detailTick]);
   // 线索列表查询：回车按标题/概述关键词，AI 查询走后端 embedding
   const [query, setQuery] = useState("");
   const [searched, setSearched] = useState("");
@@ -634,6 +865,7 @@ export default function IdeasPage() {
       </div>
       {list.error && <ErrorBox error={list.error} />}
       {editError && <ErrorBox error={editError} />}
+      {researchError && <ErrorBox error={researchError} />}
       {meta && (
         <div className="panel p-4 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
           <div><span className="label mr-2">{t("待处理")}</span><span className="font-display text-xl text-accent num">{meta.counts.status.new ?? 0}</span></div>
@@ -696,7 +928,10 @@ export default function IdeasPage() {
             : (
             <div className="flex flex-col gap-2 max-h-[40rem] overflow-y-auto pr-1">
               {shownItems.map((i) => <Card key={i.id} i={i} active={i.id === sel} flash={i.id === flashId}
-                locked={locked} editing={editing?.id === i.id} onEdit={() => startEdit(i.id)} onCancelEdit={() => setEditing(null)}
+                locked={locked} editing={editing?.id === i.id} researching={researchingId === i.id}
+                stopping={stoppingResearch && researchingId === i.id}
+                onEdit={() => startEdit(i.id)} onCancelEdit={() => setEditing(null)}
+                onResearch={() => void startResearch(i.id)} onStopResearch={() => void stopResearch()}
                 onClick={() => set("id", i.id)} checked={picked.includes(i.id)}
                 onCheck={i.status === "new" || i.status === "converted" ? () => pick(i.id) : undefined} />)}
             </div>
@@ -706,7 +941,11 @@ export default function IdeasPage() {
       {sugShown && <SuggestionBasis key={sugShown.id} s={sugShown} />}
       {picked.length > 0 && <CombineBar picked={picked} items={meta?.items ?? []} actor={actor} onClear={() => setPicked([])} onDone={setCombo} />}
       {combo && <CombineResult key={combo.id} c={combo} onClose={() => setCombo(null)} />}
-      {sel && <Detail key={`${sel}-${detailTick}`} id={sel} actor={actor} onChanged={list.reload} flash={sel === createdIdeaId} />}
+      {sel && (
+        <div id="idea-detail" className="scroll-mt-20">
+          <Detail key={`${sel}-${detailTick}`} id={sel} actor={actor} onChanged={list.reload} flash={sel === createdIdeaId} />
+        </div>
+      )}
       <Toast open={createdToast} onClose={() => setCreatedToast(false)} tone="accent"
         title={createdExisting ? t("该发现已在线索池中") : t("新线索已存入")}>
         <span>{createdExisting

@@ -7,18 +7,22 @@ Check:
 4. Redundancy with previous attempts and excluded directions.
 5. Citation support: the rationale must cite at least one valid fact id [F#]; external [W#] may be additional only.
 6. Exactly one action, from the allowed tools.
+7. If (and only if) the verdict is "revise" and the required changes genuinely depend on missing external literature or public evidence, set `needs_external_search` to true and give one short English search query in `search_query`. Do not request search for leakage, overfitting or internal data-availability issues that web search cannot resolve. Never put test-period years (2022 or later) in the query.
 
 Rules:
 - Cite valid F# facts where possible; do not invent facts or citations.
 - At most 5 issues. If the draft is sound, return verdict "accept" with an empty issues list.
 - Do not rewrite the full plan; only list required changes.
+- At most one supplementary search can be requested per round; keep the query short and specific.
 
 Return a single JSON object:
 {
   "verdict": "accept | revise",
   "issues": [{"severity": "block | warn", "text": "...", "cites": ["F1"]}],
   "required_changes": ["..."],
-  "alternative_action": null
+  "alternative_action": null,
+  "needs_external_search": false,
+  "search_query": ""
 }
 
 Draft plan (JSON):

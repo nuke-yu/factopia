@@ -46,7 +46,7 @@ def log(msg: str) -> None:
 
 
 def recover() -> None:
-    """运行器重启：普通任务标记中断；Agent 任务从检查点重新排队，waiting_children 保持。"""
+    """运行器重启：普通任务标记中断；Agent / AI 调研任务从检查点重新排队。"""
     for job in store.list_jobs():
         if job["state"] != "running":
             continue
@@ -54,6 +54,16 @@ def recover() -> None:
             job.update(state="queued", error=None, ended_at=None, agent_state=job.get("agent_state"))
             store.write_job(job)
             log(f"{job['job_id']}: Agent 重新排队（检查点续跑）")
+            continue
+        if job.get("kind") == "brief":
+            job.update(state="queued", error=None, ended_at=None, brief_state=job.get("brief_state"))
+            store.write_job(job)
+            log(f"{job['job_id']}: AI 调研重新排队（检查点续跑）")
+            continue
+        if job.get("kind") == "dig":
+            job.update(state="queued", error=None, ended_at=None, dig_state=job.get("dig_state"))
+            store.write_job(job)
+            log(f"{job['job_id']}: 公告深挖重新排队（检查点续跑）")
             continue
         job.update(state="failed", ended_at=store.now(), error="运行器重启，运行中断")
         store.write_job(job)
@@ -354,7 +364,7 @@ def init_dirs() -> None:
     for d in (store.RESEARCH_DIR, store.JOBS_DIR, store.RUNTIME / "portfolio", store.RUNTIME / "reports",
               store.RUNTIME / "approvals", store.RUNTIME / "signals", store.RUNTIME / "acceptance",
               store.RUNTIME / "access", store.RUNTIME / "ideas", store.RUNTIME / "paper",
-              store.RUNTIME / "agents"):
+              store.RUNTIME / "agents", store.RUNTIME / "briefs", store.RUNTIME / "digs"):
         d.mkdir(parents=True, exist_ok=True)
         os.chown(d, API_UID, API_UID)
         d.chmod(0o775)
@@ -426,10 +436,83 @@ def run_agent(job: dict) -> None:
     log(f"{job['job_id']}: {job['state']}（Agent {agent['state']}）")
 
 
+def run_brief(job: dict) -> None:
+    """AI 调研（kind=brief）：推进调研循环直到终态；每步已写检查点，中断后重新排队续跑。"""
+    from factopia.agents import brief
+    if store.cancel_requested(job["job_id"]):
+        job.update(state="cancelled", ended_at=store.now(), error="AI 调研已取消")
+        store.write_job(job)
+        return
+    job.update(state="running", started_at=job.get("started_at") or store.now())
+    store.write_job(job)
+    try:
+        rec = brief.advance_by_id(job["brief_id"], should_stop=lambda: store.cancel_requested(job["job_id"]))
+    except Exception as e:
+        try:
+            rec = brief.load(job["brief_id"])
+            rec.update(state="failed", last_error=str(e)[:2000])
+            brief.save(rec)
+        except Exception:
+            rec = None
+        job.update(state="failed", ended_at=store.now(), error=str(e)[:1200])
+        store.write_job(job)
+        log(f"{job['job_id']}: AI 调研失败：{job['error']}")
+        return
+    job.update(brief_state=rec["state"], cost_usd=float(rec.get("cost_usd") or 0.0),
+               rounds=int(rec.get("round") or 0))
+    if rec["state"] == "stopped":
+        job.update(state="cancelled", ended_at=store.now(), error=rec.get("stop_reason") or "AI 调研已停止")
+    elif rec["state"] == "failed":
+        job.update(state="failed", ended_at=store.now(), error=rec.get("last_error"))
+    elif rec["state"] in ("done", "not_researchable"):
+        job.update(state="done", ended_at=store.now(), summary=rec.get("stop_reason"))
+    else:
+        job["state"] = "queued"
+    store.write_job(job)
+    log(f"{job['job_id']}: {job['state']}（AI 调研 {rec['state']}）")
+
+
+def run_dig(job: dict) -> None:
+    """公告深挖（kind=dig）：推进检索-提取-决策循环直到终态；每步已写检查点，中断后重新排队续跑。"""
+    from factopia.agents import dig
+    if store.cancel_requested(job["job_id"]):
+        job.update(state="cancelled", ended_at=store.now(), error="公告深挖已取消")
+        store.write_job(job)
+        return
+    job.update(state="running", started_at=job.get("started_at") or store.now())
+    store.write_job(job)
+    try:
+        rec = dig.advance_by_id(job["dig_id"], should_stop=lambda: store.cancel_requested(job["job_id"]))
+    except Exception as e:
+        try:
+            rec = dig.load(job["dig_id"])
+            rec.update(state="failed", last_error=str(e)[:2000])
+            dig.save(rec)
+        except Exception:
+            rec = None
+        job.update(state="failed", ended_at=store.now(), error=str(e)[:1200])
+        store.write_job(job)
+        log(f"{job['job_id']}: 公告深挖失败：{job['error']}")
+        return
+    job.update(dig_state=rec["state"], cost_usd=float(rec.get("cost_usd") or 0.0),
+               rounds=int(rec.get("round") or 0))
+    if rec["state"] == "stopped":
+        job.update(state="cancelled", ended_at=store.now(), error=rec.get("stop_reason") or "公告深挖已停止")
+    elif rec["state"] == "failed":
+        job.update(state="failed", ended_at=store.now(), error=rec.get("last_error"))
+    elif rec["state"] in ("done", "insufficient"):
+        job.update(state="done", ended_at=store.now(), summary=rec.get("stop_reason"))
+    else:
+        job["state"] = "queued"
+    store.write_job(job)
+    log(f"{job['job_id']}: {job['state']}（公告深挖 {rec['state']}）")
+
+
 def execute(job: dict) -> None:
     try:
         {"validate": run_validation, "monitor": run_monitor, "text": run_text,
-         "paper": run_paper, "agent": run_agent}.get(job.get("kind"), run_job)(job)
+         "paper": run_paper, "agent": run_agent, "brief": run_brief,
+         "dig": run_dig}.get(job.get("kind"), run_job)(job)
     except Exception:
         job.update(state="failed", ended_at=store.now(), error=traceback.format_exc()[-1200:])
         store.write_job(job)
