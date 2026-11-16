@@ -15,7 +15,8 @@ from pathlib import Path
 
 import yaml
 
-from factopia import approval, sources
+from factopia import approval, db, sources
+from factopia.repo import signals as _repo_signals
 
 RUNTIME = Path(os.environ.get("FACTOPIA_RUNTIME", "/workspace/runtime"))
 CONFIGS = Path(os.environ.get("FACTOPIA_CONFIGS_DIR", "/workspace/configs"))
@@ -34,13 +35,13 @@ def now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def events() -> list[dict]:
+def _file_events() -> list[dict]:
     p = DIR / "events.jsonl"
     return [json.loads(x) for x in p.read_text(encoding="utf-8").splitlines() if x.strip()] if p.exists() else []
 
 
-def _append(ev: dict) -> dict:
-    prev = (events() or [{"hash": "0" * 64}])[-1]["hash"]
+def _file_append(ev: dict) -> dict:
+    prev = (_file_events() or [{"hash": "0" * 64}])[-1]["hash"]
     ev = {**ev, "at": now(), "prev": prev}
     ev["hash"] = hashlib.sha256(json.dumps({k: v for k, v in ev.items() if k != "hash"}, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
     DIR.mkdir(parents=True, exist_ok=True)
@@ -49,7 +50,7 @@ def _append(ev: dict) -> dict:
     return ev
 
 
-def monitor_result(signal_id: str) -> dict | None:
+def _file_monitor_result(signal_id: str) -> dict | None:
     p = DIR / signal_id / "monitor.json"
     return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
 
@@ -77,6 +78,7 @@ def catalog() -> list[dict]:
     for s in approval.list_all():                              # list_all 按时间倒序
         by_ver.setdefault((s["research_id"], s["version"]), []).append(s)
     evs = events()
+    mons = _all_monitors()
     out = []
     for (rid, ver), subs in by_ver.items():
         approved = [x for x in subs if x["status"] in ("approved", "approved_restricted")]
@@ -116,7 +118,7 @@ def catalog() -> list[dict]:
                 if state in ("active", "paused"):
                     state = {"pause": "paused", "resume": "active", "retire": "retired"}[e["action"]]
                     reason = f"{ACTION_ZH[e['action']]}（{e['role']}）：{e['note']}"
-            mon = monitor_result(sid)
+            mon = mons.get(sid)
             validated = (mon or {}).get("computed_at") or (lock or {}).get("locked_at")
             due = None
             if lock:
@@ -168,7 +170,8 @@ def act(signal_id: str, action: str, role: str, note: str) -> dict:
     allowed = {"pause": ("active",), "resume": ("paused",), "retire": ("active", "paused")}[action]
     if e["state"] not in allowed:
         raise CatalogError(f"当前状态为「{e['state_zh']}」，不能{ACTION_ZH[action]}")
-    _append({"signal_id": signal_id, "market": e["market"], "action": action, "role": role, "by": f"模拟用户（{role}）", "note": note})
+    append({"signal_id": signal_id, "market": e["market"], "action": action, "role": role,
+            "by": f"模拟用户（{role}）", "note": note})
     return entry(signal_id)
 
 
@@ -188,3 +191,85 @@ def monitor_entry(signal_id: str) -> dict:
             "base_currency": (sub["materials"].get("portfolio") or {}).get("base_currency"), "mandate": sub["materials"].get("mandate"),
             "mandate_name": _mandate(sub["materials"].get("mandate")).get("name"),
             "ref_start": periods.get("test_start"), "ref_end": periods.get("test_end"), "thresholds": e["thresholds"]}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 存储分发：files / dual / db
+#
+# 信号目录本身仍是派生视图（审批 + 事件 + 最新监控现算），不建表；
+# 进数据库的只有两样东西：全局哈希链 `signal_event` 与按次留档的 `signal_monitor`。
+# ══════════════════════════════════════════════════════════════════════════════
+
+DOMAIN = _repo_signals.DOMAIN
+
+
+def _file_save_monitor(result: dict) -> None:
+    d = DIR / result["signal_id"]
+    d.mkdir(parents=True, exist_ok=True)
+    tmp = d / "monitor.json.tmp"
+    tmp.write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
+    tmp.replace(d / "monitor.json")
+
+
+def events() -> list[dict]:
+    if db.is_primary(DOMAIN):
+        return _repo_signals.events()
+    return _file_events()
+
+
+def append(ev: dict) -> dict:
+    """追加一条状态变更事件。dual 模式把文件算好的事件原样补写，两条链同源。"""
+    mode = db.mode(DOMAIN)
+    if mode == "files":
+        return _file_append(ev)
+    if mode == "dual":
+        stamped = _file_append(ev)
+        db.mirror(lambda: _repo_signals.append(stamped, exact=stamped), "signals.append")
+        return stamped
+    return _repo_signals.append(ev)
+
+
+def verify_chain() -> dict:
+    if db.is_primary(DOMAIN):
+        return _repo_signals.verify_chain()
+    prev = "0" * 64
+    evs = _file_events()
+    for i, ev in enumerate(evs):
+        if ev["prev"] != prev or hashlib.sha256(
+                json.dumps({k: v for k, v in ev.items() if k != "hash"},
+                           ensure_ascii=False, sort_keys=True).encode()).hexdigest() != ev["hash"]:
+            return {"ok": False, "broken_at": i}
+        prev = ev["hash"]
+    return {"ok": True, "events": len(evs), "head": prev}
+
+
+def monitor_result(signal_id: str) -> dict | None:
+    if db.is_primary(DOMAIN):
+        return _repo_signals.monitor_result(signal_id)
+    return _file_monitor_result(signal_id)
+
+
+def save_monitor(result: dict) -> None:
+    """落一次监控结果。db 模式一行，dual 模式两处都写，files 模式写 json。"""
+    mode = db.mode(DOMAIN)
+    if mode == "dual":
+        _file_save_monitor(result)
+        db.mirror(lambda: _repo_signals.save_monitor(result), "signals.save_monitor")
+        return
+    if mode == "db":
+        _repo_signals.save_monitor(result)
+        return
+    _file_save_monitor(result)
+
+
+def _all_monitors() -> dict[str, dict]:
+    """全部信号的最新监控。db 模式一条 DISTINCT ON，files 模式扫目录（与原实现等价）。"""
+    if db.is_primary(DOMAIN):
+        return _repo_signals.latest_monitors()
+    out = {}
+    for p in DIR.glob("*/monitor.json"):
+        try:
+            out[p.parent.name] = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+    return out

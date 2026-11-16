@@ -46,32 +46,24 @@ def log(msg: str) -> None:
 
 
 def recover() -> None:
-    """运行器重启：普通任务标记中断；Agent 任务从检查点重新排队，waiting_children 保持。"""
-    for job in store.list_jobs():
-        if job["state"] != "running":
-            continue
+    """运行器重启：普通任务标记中断；Agent 任务从检查点重新排队，waiting_children 保持。
+
+    善后逻辑下沉到 store.recover_running()：db 模式下是一条 UPDATE … RETURNING，
+    不再"读全部任务再逐个写回"——那正是文件时代重启慢、且可能覆盖别人写入的原因。
+    """
+    for job in store.recover_running():
         if job.get("kind") == "agent":
-            job.update(state="queued", error=None, ended_at=None, agent_state=job.get("agent_state"))
-            store.write_job(job)
             log(f"{job['job_id']}: Agent 重新排队（检查点续跑）")
-            continue
-        job.update(state="failed", ended_at=store.now(), error="运行器重启，运行中断")
-        store.write_job(job)
-        log(f"{job['job_id']}: 标记为中断")
+        else:
+            log(f"{job['job_id']}: 标记为中断")
 
 
 def next_job(active: set[str] | None = None) -> dict | None:
+    """取下一个任务。db 模式下这一步是原子的（SELECT … FOR UPDATE SKIP LOCKED），
+    多个 runner 实例不会再抢到同一个任务；files/dual 模式仍是扫描目录的老行为。"""
     if store.paused():
         return None
-    for job in store.list_jobs():
-        if job["state"] != "queued" or job["job_id"] in (active or set()):
-            continue
-        if store.cancel_requested(job["job_id"]):
-            job.update(state="cancelled", ended_at=store.now())
-            store.write_job(job)
-            continue
-        return job
-    return None
+    return store.claim_job(active)
 
 
 def resume_agents() -> None:
@@ -206,7 +198,8 @@ def run_job(job: dict) -> None:
     src = SRC_ROOT / job["job_id"]
     wd = rdagent_workdir(job["market"], job["horizon"], job["job_id"])
     env = {**os.environ,
-           "FACTOPIA_RESEARCH": str(store.version_path(job["research_id"], job["version"])),
+           # db 模式下规格只在库里，这里按需物化成文件交给子进程（派生物，可重建）
+           "FACTOPIA_RESEARCH": str(store.ensure_version_file(job["research_id"], job["version"])),
            "FACTOPIA_MARKET": job["market"], "FACTOPIA_JOB_ID": job["job_id"], "LOG_TRACE_PATH": str(log_dir),
            "FACTOPIA_SRC_DIR": str(src), **({"FACTOPIA_RESUME": "1"} if resume and resume["ok"] else {})}
     live = LiveParser()

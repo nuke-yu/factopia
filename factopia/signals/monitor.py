@@ -399,7 +399,7 @@ def run(entry: dict, log=print) -> dict:
         "price_source": sources.describe(ds), "currency": ccy,
     }
     score.stack().rename("score").reset_index().rename(columns={"level_0": "date", "level_1": "symbol"}).to_parquet(out_dir / "score.parquet", index=False)
-    tmp = out_dir / "monitor.json.tmp"
-    tmp.write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
-    tmp.replace(out_dir / "monitor.json")
+    # 逐股打分留在文件侧（派生数据，只被整份读一次），监控结论按当前存储模式落库或落盘
+    from factopia.signals import save_monitor
+    save_monitor(result)
     return result

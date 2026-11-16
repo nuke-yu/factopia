@@ -15,7 +15,9 @@ from pathlib import Path
 
 import yaml
 
+from factopia import db
 from factopia.lang import role_label, t
+from factopia.repo import ops as _repo_ops
 
 CONFIGS = Path(os.environ.get("FACTOPIA_CONFIGS_DIR", "/workspace/configs"))
 RUNTIME = Path(os.environ.get("FACTOPIA_RUNTIME", "/workspace/runtime"))
@@ -61,13 +63,26 @@ def cross_region() -> bool:
     return bool(role().get("cross_region"))
 
 
-def events() -> list[dict]:
+def _file_events() -> list[dict]:
     return [json.loads(x) for x in LOG.read_text(encoding="utf-8").splitlines() if x.strip()] if LOG.exists() else []
 
 
+def events() -> list[dict]:
+    """访问留痕（只追加、哈希链）。"""
+    if db.is_primary(_repo_ops.ACCESS_DOMAIN):
+        return _repo_ops.access_events()
+    return _file_events()
+
+
 def _log(ev: dict) -> None:
+    if db.is_primary(_repo_ops.ACCESS_DOMAIN):
+        try:
+            _repo_ops.append_access(ev)
+        except Exception:                       # 留痕失败不影响拒绝本身（与文件版的 OSError 同一态度）
+            pass
+        return
     try:
-        prev = (events() or [{"hash": "0" * 64}])[-1]["hash"]
+        prev = (_file_events() or [{"hash": "0" * 64}])[-1]["hash"]
         ev = {**ev, "at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "prev": prev}
         ev["hash"] = hashlib.sha256(json.dumps({k: v for k, v in ev.items() if k != "hash"}, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
         LOG.parent.mkdir(parents=True, exist_ok=True)

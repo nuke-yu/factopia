@@ -11,14 +11,12 @@
     score/<轮次>.parquet      日期、股票、模型打分（供诊断：中性化、冗余、稳定性，factopia.diagnostics）
 """
 import json
-import os
 import pickle
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-RUNS_DIR = Path(os.environ.get("FACTOPIA_RESULTS_DIR", "/workspace/runtime/results")) / "runs"
 GROUPS = 5
 
 
@@ -98,14 +96,20 @@ def export_round(art: Path, out: Path, key: str, horizon: int) -> None:
     pred = _load(art / "pred.pkl")["score"]
     _to_parquet(pred.rename("score").rename_axis(["date", "instrument"]).reset_index(), out / "score" / f"{key}.parquet")
     q = quantile_returns(pred, _load(art / "label.pkl").iloc[:, 0], horizon)
+    # 分组收益是结构化结果：文件与库都写（db 模式下页面从 run_quantile 取）
     tmp = out / "quantile" / f"{key}.json.tmp"
     tmp.write_text(json.dumps(q, ensure_ascii=False), encoding="utf-8")
     tmp.replace(out / "quantile" / f"{key}.json")
+    from factopia import runstore
+    runstore.save_quantile(out.name, key, q)
 
 
 def export_run(run_dir: Path) -> int:
-    run = json.loads((run_dir / "run.json").read_text())
-    rounds = json.loads((run_dir / "rounds.json").read_text())
+    from factopia import runstore
+    run = runstore.load(run_dir.name)
+    rounds = runstore.rounds(run_dir.name)
+    if not isinstance(run, dict) or not rounds:
+        raise FileNotFoundError(f"{run_dir.name}: 运行主档或轮次缺失（runstore 未取到）")
     for sub in ("backtest", "positions", "signal", "quantile", "score"):
         (run_dir / sub).mkdir(exist_ok=True)
     targets = [("baseline", run["baseline"]["workspace"] if run.get("baseline") else None)]
@@ -121,7 +125,10 @@ def export_run(run_dir: Path) -> int:
 
 
 def main() -> None:
-    for run_dir in sorted(p for p in RUNS_DIR.glob("*") if (p / "run.json").exists()):
+    from factopia import runstore
+    # 运行清单以 runstore 为准（db 模式下 run.json 可能不在文件里，但 parquet 仍在结果卷）
+    for run in runstore.all_runs():
+        run_dir = runstore.run_dir(str(run["run_id"]))
         print(f"{run_dir.name}: 导出 {export_run(run_dir)} 组回测结果")
 
 

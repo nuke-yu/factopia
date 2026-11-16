@@ -167,6 +167,15 @@ class LiteLLMAPIBackend(APIBackend):
         complete_kwargs = self.get_complete_kwargs()
         model = complete_kwargs["model"]
 
+        # 推理模型（DeepSeek-v4.1 / Qwen3 等）默认先输出一大段思考，正文被挤到后面：
+        # 实测复杂因子题 83% 的 token 花在 reasoning 上，单次调用从 20 秒变成 2-13 分钟。
+        # 关闭思考后同一请求的正文反而更完整、总 token 更少。该字段由 DashScope 兼容接口消费，
+        # 不支持的服务会忽略未知字段，因此可作为通用开关。
+        if LITELLM_SETTINGS.chat_disable_thinking:
+            extra_body = dict(kwargs.get("extra_body") or {})
+            extra_body.setdefault("enable_thinking", False)
+            kwargs["extra_body"] = extra_body
+
         response = completion(
             messages=messages,
             stream=LITELLM_SETTINGS.chat_stream,

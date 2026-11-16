@@ -7,7 +7,10 @@ FROM python:3.12-slim
 ARG UV_DEFAULT_INDEX
 ENV UV_DEFAULT_INDEX=${UV_DEFAULT_INDEX}
 
-COPY --from=ghcr.io/astral-sh/uv:0.6.11 /uv /uvx /bin/
+# uv 从 PyPI 装，而不是 COPY --from=ghcr.io/astral-sh/uv：后者要访问 GitHub 容器仓库，
+# 在只放行 PyPI 镜像的网络里会直接 DNS 失败，导致整个镜像无法构建（连缓存都建立不起来）。
+# 版本与 uv.lock 的格式绑定，升级这里要同时重跑 `uv lock`。
+RUN pip install --no-cache-dir -i "$UV_DEFAULT_INDEX" uv==0.6.11
 
 ENV UV_PROJECT_ENVIRONMENT=/opt/venv \
     UV_LINK_MODE=copy \

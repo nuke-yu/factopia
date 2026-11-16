@@ -55,7 +55,8 @@ def _write_instrument(features_dir: Path, code: str, df: pd.DataFrame, calendar:
 
 
 def convert_market(market: str, cfg: dict, root: Path, end: str | None = None) -> dict:
-    std = pd.read_parquet(DATA_DIR / "standardized" / f"{market}.parquet")
+    from factopia import barstore
+    std = barstore.bars(market)
     std = std[std["dq_flag"] != "excluded"].copy()
     std["date"] = pd.to_datetime(std["date"])
     if end:

@@ -3,6 +3,8 @@
 # 字体与图表库全部打包进镜像，运行时不访问任何境外 CDN（第 14.4 节 #17 的教训）。
 FROM node:22-slim AS build
 WORKDIR /app
+# 国内网络直连 npmjs.org 会超时（npm error Exit handler never called!），走 npmmirror
+ENV NPM_CONFIG_REGISTRY=https://registry.npmmirror.com
 COPY web/package.json web/package-lock.json ./
 RUN npm ci
 COPY web/ ./

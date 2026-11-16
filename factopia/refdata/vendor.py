@@ -20,6 +20,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from factopia import blobstore
 from factopia.refdata import membership
 
 CONFIGS = Path(os.environ.get("FACTOPIA_CONFIGS_DIR", "/workspace/configs"))
@@ -88,8 +89,9 @@ def import_membership(market: str, path: str | Path, vendor: str, dry_run: bool 
     out = pd.DataFrame({"symbol": df["symbol"].str.strip(), "start": df["start"].str.strip(), "end": df["end"].str.strip(),
                         "source": vendor.strip(), "note": df["note"] if "note" in df.columns else ""}, columns=membership.COLUMNS)
     current = set(pd.read_csv(CONFIGS / "universe" / f"{market}.csv")["symbol"])
-    std = RUNTIME / "data" / "standardized" / f"{market}.parquet"
-    have = set(pd.read_parquet(std, columns=["symbol"])["symbol"]) if std.exists() else set()
+    from factopia import barstore
+    have = (set(barstore.bars(market, columns=["symbol"])["symbol"])
+            if barstore.has_bars(market) else set())
     syms = set(out["symbol"])
     report = {"market": market, "vendor": vendor, "rows": len(out), "symbols": len(syms),
               "still_in_index": int((out["end"] == "").sum()), "former_constituents": sorted(syms - set(out.loc[out["end"] == "", "symbol"])),
@@ -156,6 +158,7 @@ def _log(ev: dict) -> None:
     REF.mkdir(parents=True, exist_ok=True)
     with (REF / "vendor_imports.jsonl").open("a", encoding="utf-8") as f:
         f.write(json.dumps({**ev, "at": _now()}, ensure_ascii=False) + "\n")
+    blobstore.save_vendor_imports(imports())      # 整份快照入库；jsonl 仍按行追加
 
 
 def imports() -> list[dict]:

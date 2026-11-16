@@ -52,8 +52,17 @@ ENV CONDA_DEFAULT_ENV=rdagent \
     PATH=/opt/conda/envs/rdagent/bin:$PATH
 
 # 依赖单独成层：rdagents/ 代码变更时无需重新下载依赖（含 paper trading 所需 longport/yfinance 等）
+# psycopg 是 factopia.repo / runstore 的硬依赖（runner、exporter 与 api 共用同一套仓储层）
 COPY rdagents/requirements.txt /tmp/rdagent-requirements.txt
-RUN pip install --no-cache-dir -i "$PIP_INDEX_URL" -r /tmp/rdagent-requirements.txt tables longport yfinance exchange_calendars
+RUN pip install --no-cache-dir -i "$PIP_INDEX_URL" -r /tmp/rdagent-requirements.txt \
+    tables longport yfinance exchange_calendars "psycopg[binary,pool]>=3.2"
+
+# pandas 必须压在 2.x：pandarallel（最后一个版本 1.6.5，已停更）在导入期写死
+# `from pandas.core.window.expanding import ExpandingGroupby`，而 pandas 3.0 删掉了这个名字，
+# 结果 RD-Agent 的因子执行器（scenarios/qlib/developer/factor_runner.py）一 import 就崩溃。
+# requirements.txt 里 pandas 未锁版本，pip 会装到 3.x，所以此处显式回退（与 api / qlib 镜像保持一致）。
+RUN pip install --no-cache-dir -i "$PIP_INDEX_URL" "pandas>=2.2.3,<3" \
+    && python -c "import pandas, pandarallel; print('pandas', pandas.__version__, '| pandarallel ok')"
 
 # 源码目录即安装目录：RD-Agent 会把自身目录下的模板文件夹挂载给回测容器，
 COPY rdagents /opt/rdagent-src

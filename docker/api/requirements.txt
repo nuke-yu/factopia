@@ -4,3 +4,5 @@ pandas==2.3.3
 pyarrow==21.0.0
 pyyaml==6.0.2
 pypdf==5.1.0
+# 数据库迁移（factopia.db / repo_* / runstore）：api 镜像不带 pyproject，必须在这里显式列
+psycopg[binary,pool]>=3.2

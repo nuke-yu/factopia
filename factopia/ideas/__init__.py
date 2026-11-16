@@ -23,7 +23,8 @@ from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
-from factopia import lang
+from factopia import db, lang
+from factopia.repo import ideas as _repo_ideas
 
 RUNTIME = Path(os.environ.get("FACTOPIA_RUNTIME", "/workspace/runtime"))
 DIR = RUNTIME / "ideas"
@@ -116,14 +117,14 @@ def pii_hits(*texts: str) -> list[dict]:
 
 # ---------------------------------------------------------------- 存储与留痕
 
-def load(iid: str) -> dict:
+def _file_load(iid: str) -> dict:
     p = _dir(iid) / "idea.json"
     if not p.exists():
         raise IdeaError("线索不存在")
     return json.loads(p.read_text(encoding="utf-8"))
 
 
-def _save(idea: dict) -> None:
+def _file_save(idea: dict) -> None:
     d = _dir(idea["id"])
     d.mkdir(parents=True, exist_ok=True)
     tmp = d / "idea.json.tmp"
@@ -131,13 +132,13 @@ def _save(idea: dict) -> None:
     tmp.replace(d / "idea.json")
 
 
-def events(iid: str) -> list[dict]:
+def _file_events(iid: str) -> list[dict]:
     p = _dir(iid) / "events.jsonl"
     return [json.loads(x) for x in p.read_text(encoding="utf-8").splitlines() if x.strip()] if p.exists() else []
 
 
-def _append(iid: str, ev: dict) -> dict:
-    prev = (events(iid) or [{"hash": "0" * 64}])[-1]["hash"]
+def _file_append(iid: str, ev: dict) -> dict:
+    prev = (_file_events(iid) or [{"hash": "0" * 64}])[-1]["hash"]
     ev = {**ev, "at": now(), "prev": prev}
     ev["hash"] = _sha(_dump({k: v for k, v in ev.items() if k != "hash"}))
     with (_dir(iid) / "events.jsonl").open("a", encoding="utf-8") as f:
@@ -145,9 +146,9 @@ def _append(iid: str, ev: dict) -> dict:
     return ev
 
 
-def verify_chain(iid: str) -> dict:
+def _file_verify_chain(iid: str) -> dict:
     prev = "0" * 64
-    evs = events(iid)
+    evs = _file_events(iid)
     for i, ev in enumerate(evs):
         if ev["prev"] != prev or _sha(_dump({k: v for k, v in ev.items() if k != "hash"})) != ev["hash"]:
             return {"ok": False, "broken_at": i}
@@ -155,7 +156,7 @@ def verify_chain(iid: str) -> dict:
     return {"ok": True, "events": len(evs)}
 
 
-def all_ideas() -> list[dict]:
+def _file_all_ideas() -> list[dict]:
     if not DIR.exists():
         return []
     return sorted((json.loads(p.read_text(encoding="utf-8")) for p in DIR.glob("idea_*/idea.json")),
@@ -212,9 +213,9 @@ def _source_dedupe_key(channel, title, text, markets, ref) -> str | None:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-def find_by_source(research: str) -> list[dict]:
+def _file_find_by_source(research: str) -> list[dict]:
     """该研究版本来源、仍在处理或已转立项的线索（结果页据此禁用重复存入）。"""
-    return [i for i in all_ideas()
+    return [i for i in _file_all_ideas()
             if (i.get("source_ref") or {}).get("research") == research
             and i.get("status") in ("new", "converted") and visible(i)]
 
@@ -328,9 +329,16 @@ def create(body: dict) -> dict:
         idea["ai_suggested"] = {k: sg.get(k) for k in ("id", "title", "body", "model", "prompt_version", "angle", "why_zh", "grounds", "selection", "seed", "focus_market", "candidates", "evidence", "dimensions", "table", "inputs", "prompt")} | {
             "edited": str(sg.get("title") or "").strip() != title or str(sg.get("body") or "").strip() != text}
     idea["similar"] = similar(idea)
-    _save(idea)
-    _append(iid, {"action": "create", "by": by, "channel": ch, "sha256": idea.get("document", {}).get("sha256") if ch == "paper" else None,
-                  "ai_suggestion": (idea.get("ai_suggested") or {}).get("id"), "ai_edited": (idea.get("ai_suggested") or {}).get("edited")})
+    try:
+        _persist(idea, {"action": "create", "by": by, "channel": ch,
+                        "sha256": idea.get("document", {}).get("sha256") if ch == "paper" else None,
+                        "ai_suggestion": (idea.get("ai_suggested") or {}).get("id"),
+                        "ai_edited": (idea.get("ai_suggested") or {}).get("edited")})
+    except _repo_ideas.DuplicateIdea as exc:
+        # 并发下同源线索已被别人建好：读回那一张，语义与前面的"已存在则直接返回"一致
+        if not exc.idea_id:
+            raise
+        return {**load(exc.idea_id), "deduped": True}
     return idea
 
 
@@ -396,8 +404,7 @@ def update(iid: str, body: dict) -> dict:
     if new_key and new_key != idea.get("dedupe_key"):
         idea["dedupe_key"] = new_key
     idea["similar"] = similar(idea)
-    _save(idea)
-    _append(iid, {"action": "update", "by": by, "fields": changes})
+    _persist(idea, {"action": "update", "by": by, "fields": changes})
     return {**idea, "events": events(iid), "chain": verify_chain(iid), "action_zh": ACTION_ZH,
             "status_zh": STATUS_ZH, "paragraph_count": len(paragraphs(iid))}
 
@@ -478,8 +485,8 @@ def extract(iid: str, by: str = SYSTEM_BY) -> dict:
     idea["extraction"] = {"factors": cands, "dropped_no_cite": dropped, "paragraphs_used": n, "paragraphs_total": len(paras),
                           "summary_zh": str(raw.get("summary_zh") or "")[:800], "model": model_used, "prompt_version": PROMPT_VERSION,
                           "usage": {k: usage.get(k) for k in ("prompt_tokens", "completion_tokens")}, "at": now()}
-    _save(idea)
-    _append(iid, {"action": "extract", "by": by, "factors": len(cands), "dropped": dropped, "model": model_used, "prompt_version": PROMPT_VERSION})
+    _persist(idea, {"action": "extract", "by": by, "factors": len(cands), "dropped": dropped,
+                    "model": model_used, "prompt_version": PROMPT_VERSION})
     return idea
 
 
@@ -507,8 +514,7 @@ def act(iid: str, action: str, by: str, note: str = "", target: str | None = Non
         idea["status"] = "new"
     else:
         raise IdeaError(f"操作无效：{action}")
-    _save(idea)
-    _append(iid, {"action": action, "by": by, "note": note[:1000], "target": target})
+    _persist(idea, {"action": action, "by": by, "note": note[:1000], "target": target})
     return idea
 
 
@@ -563,8 +569,8 @@ def mark_converted(iid: str, research_id: str, version: int, by: str, combo: str
     ref = f"{research_id}.v{version}"
     if ref not in idea["links"]["research"]:
         idea["links"]["research"].append(ref)
-    _save(idea)
-    _append(iid, {"action": "convert", "by": by, "research": ref, **({"note": f"合并转立项 {combo}", "combo": combo} if combo else {})})
+    _persist(idea, {"action": "convert", "by": by, "research": ref,
+                    **({"note": f"合并转立项 {combo}", "combo": combo} if combo else {})})
 
 
 def lineage(iid: str) -> dict | None:
@@ -579,7 +585,7 @@ def lineage(iid: str) -> dict | None:
 
 # ---------------------------------------------------------------- 自动回流
 
-def _sources() -> dict:
+def _file_sources() -> dict:
     p = DIR / "sources.json"
     return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
 
@@ -594,9 +600,15 @@ def _auto(key: str, idx: dict, channel: str, title: str, body: str, markets: lis
             "language": "zh", "markets": _clean_markets(markets), "submitted_by": SYSTEM_BY, "role": None, "source_ref": ref,
             "created_at": now(), "status": "new", "links": {}, "pii_checked": True, "fields": {}}
     idea["similar"] = {"research": [], "ideas": [], "note": "自动线索来自平台内部记录"}
-    _save(idea)
-    _append(iid, {"action": "create", "by": SYSTEM_BY, "channel": channel, "source": key})
-    idx[key] = iid
+    try:
+        # source_key 落 idea_source 主键：并发的第二个回流请求会拿到 DuplicateIdea，
+        # 直接沿用先到者的线索，不会出现两张同源卡片
+        _persist(idea, {"action": "create", "by": SYSTEM_BY, "channel": channel, "source": key},
+                 source_key=key)
+        idx[key] = iid
+    except _repo_ideas.DuplicateIdea as exc:
+        if exc.idea_id:
+            idx[key] = exc.idea_id
 
 
 def agent_feedback(agent_id: str, research_id: str, version: int, round_no: int, verdict: str,
@@ -619,9 +631,7 @@ def agent_feedback(agent_id: str, research_id: str, version: int, round_no: int,
     if run_id:
         ref["run"] = run_id
     _auto(key, idx, "agent", title, body, markets, ref)
-    tmp = DIR / "sources.json.tmp"
-    tmp.write_text(json.dumps(idx, ensure_ascii=False, indent=0), encoding="utf-8")
-    tmp.replace(DIR / "sources.json")
+    _persist_sources(idx)
     return load(idx[key])
 
 
@@ -716,9 +726,7 @@ def sync() -> int:
     except Exception:                                   # 模拟盘模块不可用时跳过
         pass
     if len(idx) != original:
-        tmp = DIR / "sources.json.tmp"
-        tmp.write_text(json.dumps(idx, ensure_ascii=False, indent=0), encoding="utf-8")
-        tmp.replace(DIR / "sources.json")
+        _persist_sources(idx)
     return len(idx) - before
 
 
@@ -741,3 +749,95 @@ def detail(iid: str) -> dict:
         access.deny(f"研究线索 {iid}", (idea.get("markets") or [None])[0])
     return {**idea, "events": events(iid), "chain": verify_chain(iid), "action_zh": ACTION_ZH, "status_zh": STATUS_ZH,
             "paragraph_count": len(paragraphs(iid))}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 存储分发：files / dual / db
+#
+# 线索卡、留痕、去重索引进数据库；文档原件与抽取段落（files/ 下的 PDF 与
+# paragraphs.json）留在文件侧——它们是不可变归档字节，抽因子时整份读，进库没有收益。
+# ══════════════════════════════════════════════════════════════════════════════
+
+DOMAIN = _repo_ideas.DOMAIN
+
+
+def _persist(idea: dict, ev: dict | None = None, source_key: str | None = None) -> None:
+    """写入线索（可带留痕与去重键）。db 模式下三件事在同一事务里。"""
+    mode = db.mode(DOMAIN)
+    if mode == "files":
+        _file_save(idea)
+        if ev is not None:
+            _file_append(idea["id"], ev)
+        return
+    if mode == "dual":
+        _file_save(idea)
+        stamped = _file_append(idea["id"], ev) if ev is not None else None
+        db.mirror(lambda: _repo_ideas.save(idea, exact_event=stamped, source_key=source_key),
+                  "ideas.persist")
+        return
+    _repo_ideas.save(idea, event=ev, source_key=source_key)
+
+
+def _persist_sources(idx: dict) -> None:
+    """去重索引落盘 / 落库。db 模式靠主键，重复键自动忽略。"""
+    mode = db.mode(DOMAIN)
+    if mode == "files":
+        tmp = DIR / "sources.json.tmp"
+        tmp.write_text(json.dumps(idx, ensure_ascii=False, indent=0), encoding="utf-8")
+        tmp.replace(DIR / "sources.json")
+        return
+    if mode == "dual":
+        tmp = DIR / "sources.json.tmp"
+        tmp.write_text(json.dumps(idx, ensure_ascii=False, indent=0), encoding="utf-8")
+        tmp.replace(DIR / "sources.json")
+        db.mirror(lambda: _repo_ideas.upsert_sources(idx), "ideas.sources")
+        return
+    _repo_ideas.upsert_sources(idx)
+
+
+def load(iid: str) -> dict:
+    _dir(iid)                       # 保持"线索编号无效"的校验时机
+    if db.is_primary(DOMAIN):
+        try:
+            return _repo_ideas.load(iid)
+        except FileNotFoundError as exc:
+            raise IdeaError("线索不存在") from exc
+    return _file_load(iid)
+
+
+def events(iid: str) -> list[dict]:
+    _dir(iid)
+    if db.is_primary(DOMAIN):
+        return _repo_ideas.events(iid)
+    return _file_events(iid)
+
+
+def append_event(iid: str, ev: dict) -> dict:
+    if db.is_primary(DOMAIN):
+        return _repo_ideas.append_event(iid, ev)
+    return _file_append(iid, ev)
+
+
+def verify_chain(iid: str) -> dict:
+    if db.is_primary(DOMAIN):
+        return _repo_ideas.verify_chain(iid)
+    return _file_verify_chain(iid)
+
+
+def all_ideas() -> list[dict]:
+    if db.is_primary(DOMAIN):
+        return _repo_ideas.all_ideas()
+    return _file_all_ideas()
+
+
+def find_by_source(research: str) -> list[dict]:
+    """该研究版本来源、仍在处理或已转立项的线索（结果页据此禁用重复存入）。"""
+    if db.is_primary(DOMAIN):
+        return [i for i in _repo_ideas.by_source_ref(research) if visible(i)]
+    return _file_find_by_source(research)
+
+
+def _sources() -> dict:
+    if db.is_primary(DOMAIN):
+        return _repo_ideas.sources()
+    return _file_sources()

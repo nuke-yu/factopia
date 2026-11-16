@@ -8,7 +8,8 @@ AI 驱动的跨境量化股票策略研究平台（香港 / 英国 / 法国）�
 
 ## 快速开始
 
-所有运行都在 Docker 中进行，**配置中只使用容器内路径**，数据放在 Docker 命名卷中（挂载点 `/workspace/runtime`）。
+所有运行都在 Docker 中进行，**配置中只使用容器内路径**，业务数据放在宿主的 `./runtime` 目录（绑定挂载到 `/workspace/runtime`），宿主机可直接查看、校验与运行脚本；
+只有 RD-Agent 工作区与 Qlib 二进制数据留在命名卷中（见下表）。
 Windows 同事请在 WSL2（Ubuntu）中操作。
 
 ```bash
@@ -74,8 +75,10 @@ $DC run --rm app python -m unittest tests.test_agents tests.test_agents_p1 -v
 # RD-Agent 日志界面 → http://localhost:19899（RDAGENT_UI_MARKET 选择市场，默认 hk）
 RDAGENT_UI_MARKET=hk docker compose -f docker-compose.yml -f compose.local.yml --profile ui up -d rdagent-ui
 
-# 查看命名卷中的文件
-docker compose run --rm rdagent ls /workspace/runtime
+# 查看运行数据：宿主 ./runtime 目录就是容器的 /workspace/runtime（绑定挂载）
+ls runtime/results/runs
+# 只有 RD-Agent 工作区与 Qlib 数据仍在命名卷里，需要进容器看
+docker compose run --rm rdagent ls /workspace/runtime/rdagent
 
 # 模拟盘：每日推进（结算挂单 → 重算信号 → 月度调仓 → 出报告），加参数 report 只重算报告（详见下文「模拟盘」一节）
 docker compose -f docker-compose.yml -f compose.local.yml exec runner python -m factopia.paper
@@ -187,9 +190,12 @@ $DC run --rm app python -m factopia.export.alpha158
 | `web` | Factopia 前端（nginx，profile `platform`），转发 `/api` 到 `api` |
 | `web-dev` | 前端开发服务器（仅 compose.local.yml，profile `dev`） |
 
-| 命名卷 | 内容 |
+| 挂载 | 内容 |
 |---|---|
-| `runtime` → `/workspace/runtime` | Qlib 数据（`qlib_home/`）、RD-Agent 工作目录 / 日志 / 签名密钥（`rdagent/`）、运行日志（`logs/`） |
+| 宿主 `./runtime` → `/workspace/runtime` | **业务数据全部在这里**：`results/`（运行产物）、`jobs/`、`ideas/`、`research/`、`approvals/`、`signals/`、`paper/`、`data/`（Qlib 标准化行情）、`llm_costs.jsonl`。宿主机可直接读写，迁移校验（`tools/migrate_files.py`）在宿主跑即可 |
+| `runtime_rdagent` → `/workspace/runtime/rdagent` | RD-Agent 按市场工作区与日志、签名密钥（hk/uk/fr 数百 MB，IO 密集，留在卷里避免 Windows 挂载开销） |
+| `runtime_qlib_data` / `runtime_qlib_home` | Qlib 二进制数据与配置（mmap 读取，且要被 dind 内回测容器二次 bind） |
+| `runtime_rdagent_markets` | RD-Agent 生成的市场数据副本 |
 | `rdagent_src` → `/opt/rdagent-src` | RD-Agent 源码，rdagent 与 dind 共享（RD-Agent 会把自身目录下的模板挂载给回测容器） |
 | `dind_data` | dind 中的镜像 |
 

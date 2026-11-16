@@ -22,6 +22,7 @@
 幂等：行情 / 研究产物总是重生成（确定性）；线索与审批只在不存在时走；enroll 重复接入 = 重置从头开始。
 """
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -31,11 +32,14 @@ from factopia import seed_e2e as seed
 
 RUNTIME = approval.RUNTIME
 BY = "端到端演示脚本"
-RESEARCH_ID, VERSION, MARKET = "demo_e2e", 1, "hk"
+# FACTOPIA_DEMO_SUFFIX：给编号加后缀，生成一套独立的演示数据集（不覆盖既有 demo_e2e 的
+# 线索/审批/信号/模拟盘），用于灰度期验证写入链路。留空 = 默认演示数据集。
+_SUFFIX = os.environ.get("FACTOPIA_DEMO_SUFFIX", "").strip()
+RESEARCH_ID, VERSION, MARKET = f"demo_e2e{_SUFFIX}", 1, "hk"
 SIGNAL_ID = f"{RESEARCH_ID}.v{VERSION}.{MARKET}"
-RUN_ID = "demo_e2e_run"
+RUN_ID = f"demo_e2e_run{_SUFFIX}"
 CAPITAL = 1_000_000.0
-IDEA_TITLE = "演示线索：港股动量延续性假设"
+IDEA_TITLE = f"演示线索：港股动量延续性假设{_SUFFIX}"
 REF_START, REF_END = "2026-04-01", "2026-08-31"          # 参照期 = run.json 的测试期
 PAPER_DIR = RUNTIME / "paper" / SIGNAL_ID
 
@@ -92,6 +96,12 @@ def stage_run() -> None:
         f"证伪：参照期（{REF_START} ~ {REF_END}）rank IC 显著为负或截面覆盖不足。\n\n"
         f"市场：香港（演示子集 20 只）· 因子：mom20、reversal5 · 月度调仓、前 20% 等权、只做多\n",
         encoding="utf-8")
+    # 与生产导出器（export/rdagent_run.py）同路径：files 空操作 / dual 补写库 / db 直写，
+    # 让这轮演示同时验证 runs 域的写入链路（否则 demo 只写文件，dual 观测不到）
+    from factopia import runstore
+    runstore.save(json.loads((d / "run.json").read_text(encoding="utf-8")),
+                  rounds=json.loads((d / "rounds.json").read_text(encoding="utf-8")),
+                  events=[])
     print(f"[demo] ③ 研究产物：{d}")
 
 

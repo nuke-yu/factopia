@@ -29,9 +29,10 @@ from pathlib import Path
 
 import pandas as pd
 
-from factopia import rules, sources
+from factopia import db, rules, sources
 from factopia.lang import t
 from factopia.paper import broker
+from factopia.repo import paper as _repo_paper
 
 RUNTIME = Path(os.environ.get("FACTOPIA_RUNTIME", "/workspace/runtime"))
 PAPER = RUNTIME / "paper"
@@ -74,11 +75,21 @@ def _write_json(path: Path, data: dict) -> None:
 
 
 def _append_event(sid: str, ev: dict) -> None:
-    """订单事件流（orders.jsonl，只追加，全部留痕）。"""
+    """订单事件：文件模式追加到 orders.jsonl，数据库模式落到 paper_order（一单一行）。
+
+    两个模式语义一致：placed 建单、filled 成交、cancelled 撤销；只是后者靠状态字段
+    而不是"再追加一行"来表达，所以重新接入时不用扫历史找末态。
+    """
+    mode = db.mode(DOMAIN)
+    if mode == "db":
+        _repo_paper.order_event(sid, ev)
+        return
     p = _dir(sid) / "orders.jsonl"
     p.parent.mkdir(parents=True, exist_ok=True)
     with p.open("a", encoding="utf-8") as f:
         f.write(json.dumps({"signal_id": sid, "at": now(), **ev}, ensure_ascii=False) + "\n")
+    if mode == "dual":
+        db.mirror(lambda: _repo_paper.order_event(sid, ev), "paper.order")
 
 
 # ---------------------------------------------------------------- 接入 / 停用 / 清单
@@ -109,9 +120,8 @@ def enroll(signal_id: str, capital: float | None = None) -> dict:
     if not 0 < cap <= 1e12:
         raise PaperError(t("初始资金必须为 (0, 1e12] 中的正数"))
     d = _dir(signal_id)
-    if d.exists():
-        shutil.rmtree(d)                    # 重复接入 = 重置
-    (d / "work").mkdir(parents=True)
+    reset(signal_id)                        # 重复接入 = 重置（db 模式级联删状态与流水）
+    (d / "work").mkdir(parents=True, exist_ok=True)
     rec = {
         "signal_id": signal_id, "market": m, "price_dataset": entry.get("price_dataset"),
         "mode": mode, "capital": cap, "horizon": entry["horizon"],
@@ -119,8 +129,8 @@ def enroll(signal_id: str, capital: float | None = None) -> dict:
         "base_currency": entry.get("base_currency"), "enrolled_at": now(),
         "active": True, "stopped_at": None, "stop_reason": None,
     }
-    _write_json(d / "enrolled.json", rec)
-    _write_json(d / "state.json", {
+    save_enrollment(rec)
+    save_state(signal_id, {
         "last_cycle": None, "last_rebalance": None, "positions": {}, "cash": cap,
         "pending": [], "nav": cap, "positions_value": 0.0, "updated_at": now(),
     })
@@ -129,11 +139,10 @@ def enroll(signal_id: str, capital: float | None = None) -> dict:
 
 def unenroll(signal_id: str, reason: str = "") -> dict:
     """停用模拟盘：撤销未结挂单（长桥模式下真实撤单），登记与流水保留供报告回看。"""
-    d = _dir(signal_id)
-    rec = _read(d / "enrolled.json")
+    rec = load_enrollment(signal_id)
     if rec is None:
         raise PaperError(t("信号 {signal_id} 没有接入模拟盘", signal_id=signal_id))
-    state = _read(d / "state.json") or {}
+    state = load_state(signal_id) or {}
     pending = state.get("pending") or []
     if pending and rec.get("mode") == "longport":
         try:
@@ -148,14 +157,16 @@ def unenroll(signal_id: str, reason: str = "") -> dict:
                                   "side": o.get("side"), "qty": o.get("qty"), "reason": why})
     state["pending"] = []
     state["updated_at"] = now()
-    _write_json(d / "state.json", state)
+    save_state(signal_id, state)
     rec.update(active=False, stopped_at=now(), stop_reason=reason or None)
-    _write_json(d / "enrolled.json", rec)
+    save_enrollment(rec)
     return rec
 
 
 def enrolled() -> list[dict]:
     """全部模拟盘登记（含已停用），按接入时间倒序。"""
+    if db.is_primary(DOMAIN):
+        return _repo_paper.enrollments()
     out = [rec for rec in (_read(p) for p in sorted(PAPER.glob("*/enrolled.json"))) if rec]
     return sorted(out, key=lambda r: r.get("enrolled_at") or "", reverse=True)
 
@@ -168,10 +179,10 @@ def cycle(signal_id: str, log=print) -> dict:
     from factopia.paper.report import report as _report  # 直接导入函数（report.py 单向依赖 engine，无循环）
 
     d = _dir(signal_id)
-    rec = _read(d / "enrolled.json")
+    rec = load_enrollment(signal_id)
     if rec is None or not rec.get("active"):
         raise PaperError(t("信号 {signal_id} 没有接入中的模拟盘", signal_id=signal_id))
-    state = _read(d / "state.json") or {}
+    state = load_state(signal_id) or {}
     entry = signals.monitor_entry(signal_id)          # 每轮重取：审批材料与阈值可能变化
     m = entry["market"]
     if entry.get("price_dataset") in sources.SIMULATED:
@@ -189,12 +200,12 @@ def cycle(signal_id: str, log=print) -> dict:
             _settle_longport(signal_id, state, costs, log)
         else:
             _settle_shadow(signal_id, state, close, _open(m), last, costs, log)
-        _write_json(d / "state.json", state)
+        save_state(signal_id, state)
     # 2) 幂等守卫：行情没有新日期时只重算报告，不重复调仓
     if state.get("last_cycle") and pd.Timestamp(state["last_cycle"]) >= pd.Timestamp(last):
         log(f"{signal_id}：行情没有更新（最新 {pd.Timestamp(last).date()}），只重算报告")
         _snapshot(signal_id, state, close, last)   # 结算可能已改变持仓/现金：刷新估值（同日覆盖旧行，幂等）
-        _write_json(d / "state.json", state)
+        save_state(signal_id, state)
         return _report(signal_id, log=log)
     # 3) 重算信号（与监控同一口径；每个有新数据的 cycle 都跑，让报告的 rank IC 逐日新鲜）
     score = _signal(signal_id, entry, m, close, d, log)
@@ -204,10 +215,10 @@ def cycle(signal_id: str, log=print) -> dict:
             _rebalance(signal_id, score, state, close, last, costs, rec["mode"], log)
         except PaperError as e:
             log(f"{signal_id}：{e}")
-        _write_json(d / "state.json", state)
+        save_state(signal_id, state)
     # 5) 估值快照 + 报告
     _snapshot(signal_id, state, close, last)
-    _write_json(d / "state.json", state)
+    save_state(signal_id, state)
     return _report(signal_id, log=log)
 
 
@@ -235,7 +246,8 @@ def _signal(sid: str, entry: dict, m: str, close: pd.DataFrame, d: Path, log) ->
 
 def _open(market: str) -> pd.DataFrame:
     """日期 × 股票 开盘价（影子撮合的成交价；与 sources.close 同口径）。"""
-    df = pd.read_parquet(RUNTIME / "data" / "standardized" / f"{market}.parquet", columns=["symbol", "date", "open"])
+    from factopia import barstore
+    df = barstore.bars(market, columns=["symbol", "date", "open"])
     df["date"] = pd.to_datetime(df["date"])
     return df.pivot(index="date", columns="symbol", values="open").sort_index()
 
@@ -473,6 +485,11 @@ def _snapshot(sid: str, state: dict, close: pd.DataFrame, last) -> None:
     nav = cash + pos_val
     dstr = str(pd.Timestamp(last).date())
     state.update(last_cycle=dstr, nav=_r(nav, 2), positions_value=_r(pos_val, 2), updated_at=now())
+    mode = db.mode(DOMAIN)
+    if mode == "db":
+        _repo_paper.save_nav(sid, dstr, round(nav, 2), round(cash, 2), round(pos_val, 2))
+        _repo_paper.save_position_daily(sid, dstr, [(s, q, pr, v) for s, q, pr, v in rows])
+        return
     d = _dir(sid)
     p = d / "nav.csv"
     df = pd.read_csv(p) if p.exists() else pd.DataFrame(columns=["date", "nav", "cash", "positions_value"])
@@ -487,3 +504,116 @@ def _snapshot(sid: str, state: dict, close: pd.DataFrame, last) -> None:
         df2 = pd.concat([df2, pd.DataFrame([{"date": dstr, "symbol": s, "qty": round(q, 4), "price": _r(pr),
                                              "value": round(v, 2)} for s, q, pr, v in rows])], ignore_index=True)
     df2.to_csv(p2, index=False)
+    if mode == "dual":
+        pos_rows = [(s, q, pr, v) for s, q, pr, v in rows]
+        db.mirror(lambda: _repo_paper.save_nav(sid, dstr, round(nav, 2), round(cash, 2), round(pos_val, 2)),
+                  "paper.nav")
+        db.mirror(lambda: _repo_paper.save_position_daily(sid, dstr, pos_rows), "paper.position_daily")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 存储分发：files / dual / db
+#
+# 引擎与报告只通过下面这组访问器读写状态，不再自己拼路径。db 模式下：
+#   enrolled.json → paper_enrollment      state.json → paper_state + paper_position
+#   orders.jsonl  → paper_order（一单一行）  nav.csv / positions.csv → paper_nav / paper_position_daily
+#   paper.json    → paper_report
+# ══════════════════════════════════════════════════════════════════════════════
+
+DOMAIN = _repo_paper.DOMAIN
+
+
+def load_enrollment(signal_id: str) -> dict | None:
+    if db.is_primary(DOMAIN):
+        return _repo_paper.load_enrollment(signal_id)
+    return _read(_dir(signal_id) / "enrolled.json")
+
+
+def save_enrollment(rec: dict) -> None:
+    mode = db.mode(DOMAIN)
+    if mode in ("files", "dual"):
+        _write_json(_dir(rec["signal_id"]) / "enrolled.json", rec)
+        if mode == "dual":
+            db.mirror(lambda: _repo_paper.save_enrollment(rec), "paper.enrollment")
+        return
+    _repo_paper.save_enrollment(rec)
+
+
+def load_state(signal_id: str) -> dict | None:
+    if db.is_primary(DOMAIN):
+        return _repo_paper.load_state(signal_id)
+    return _read(_dir(signal_id) / "state.json")
+
+
+def save_state(signal_id: str, state: dict) -> None:
+    mode = db.mode(DOMAIN)
+    if mode in ("files", "dual"):
+        _write_json(_dir(signal_id) / "state.json", state)
+        if mode == "dual":
+            db.mirror(lambda: _repo_paper.save_state(signal_id, state), "paper.state")
+        return
+    _repo_paper.save_state(signal_id, state)
+
+
+def reset(signal_id: str) -> None:
+    """重复接入 = 重置。db 模式删登记行，级联清掉状态 / 持仓 / 挂单 / 净值 / 报告。"""
+    if db.is_primary(DOMAIN):
+        _repo_paper.reset(signal_id)
+        return
+    d = _dir(signal_id)
+    if d.exists():
+        shutil.rmtree(d)
+
+
+def order_events(signal_id: str) -> list[dict]:
+    """订单事件流（报告与组合视图按事件语义统计）。 """
+    if db.is_primary(DOMAIN):
+        return _repo_paper.order_events(signal_id)
+    p = _dir(signal_id) / "orders.jsonl"
+    if not p.exists():
+        return []
+    out = []
+    for line in p.read_text(encoding="utf-8").splitlines():
+        try:
+            out.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return out
+
+
+def nav(signal_id: str) -> pd.DataFrame:
+    """净值序列（date/nav/cash/positions_value）。"""
+    if db.is_primary(DOMAIN):
+        return _repo_paper.nav(signal_id)
+    p = _dir(signal_id) / "nav.csv"
+    try:
+        return pd.read_csv(p)
+    except (FileNotFoundError, OSError):
+        return pd.DataFrame()
+
+
+def positions_daily(signal_id: str) -> pd.DataFrame:
+    if db.is_primary(DOMAIN):
+        return _repo_paper.positions_daily(signal_id)
+    p = _dir(signal_id) / "positions.csv"
+    try:
+        return pd.read_csv(p)
+    except (FileNotFoundError, OSError):
+        return pd.DataFrame()
+
+
+def save_report(signal_id: str, report: dict) -> None:
+    """运行报告。db 模式按 (signal_id, computed_at) 留档，同一次计算重跑覆盖。"""
+    mode = db.mode(DOMAIN)
+    if mode in ("files", "dual"):
+        _write_json(SIGNALS / signal_id / "paper.json", report)
+        if mode == "dual":
+            db.mirror(lambda: _repo_paper.save_report(signal_id, report), "paper.report")
+        return
+    _repo_paper.save_report(signal_id, report)
+
+
+def report_result(signal_id: str) -> dict | None:
+    if db.is_primary(DOMAIN):
+        return _repo_paper.report_result(signal_id)
+    return _read(SIGNALS / signal_id / "paper.json")

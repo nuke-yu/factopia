@@ -82,7 +82,11 @@ def export_surface(folder: Path) -> dict:
 
 
 def export_overview() -> dict:
-    quality = json.loads((RUNTIME / "data/standardized/quality_report.json").read_text())
+    # 质量报告已有第二份真相（app_state），db 模式下必须读库，否则会拿旧文件算概况
+    from factopia import blobstore
+    quality = blobstore.quality()
+    if quality is None:
+        raise FileNotFoundError("数据质量报告尚未生成（先运行 factopia.data.standardize）")
     fx = pd.read_parquet(RUNTIME / "data/raw/fx.parquet")
     markets = {}
     for m, info in MARKET_INFO.items():

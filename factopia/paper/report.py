@@ -38,7 +38,7 @@ SUGGESTION_ZH = {
 
 def result(signal_id: str) -> dict | None:
     """读取已生成的模拟盘报告（未推进过则为 None）。"""
-    return engine._read(SIGNALS / signal_id / "paper.json")
+    return engine.report_result(signal_id)
 
 
 def _read_csv(path: Path) -> pd.DataFrame:
@@ -49,7 +49,7 @@ def _read_csv(path: Path) -> pd.DataFrame:
 
 
 def _nav_series(signal_id: str) -> pd.Series:
-    df = _read_csv(PAPER / signal_id / "nav.csv")
+    df = engine.nav(signal_id)
     if df.empty or not {"date", "nav"}.issubset(df.columns):
         return pd.Series(dtype=float)
     s = pd.Series(df["nav"].to_numpy(dtype=float), index=pd.to_datetime(df["date"]))
@@ -151,18 +151,7 @@ def _rank_ic_block(signal_id: str, close, start, horizon: int) -> dict:
 def _trades(signal_id: str) -> dict:
     """成交流水统计（orders.jsonl 只追加，全部留痕）。"""
     out = {"fills": 0, "buy_value": 0.0, "sell_value": 0.0, "costs": 0.0}
-    p = PAPER / signal_id / "orders.jsonl"
-    if not p.exists():
-        return out
-    try:
-        lines = p.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return out
-    for line in lines:
-        try:
-            ev = json.loads(line)
-        except (json.JSONDecodeError, ValueError):
-            continue
+    for ev in engine.order_events(signal_id):
         if ev.get("event") != "filled":
             continue
         out["fills"] += 1
@@ -237,16 +226,7 @@ def _portfolio(signal_id: str, rec: dict, state: dict, close) -> dict:
     agg: dict[str, dict] = {}
     first_fill: tuple[str, int, float] | None = None          # (建仓日, 当日买入笔数, 当日买入金额)
     placed_days: set[str] = set()                             # 每轮调仓下单的 distinct 日期
-    p = PAPER / signal_id / "orders.jsonl"
-    try:
-        lines = p.read_text(encoding="utf-8").splitlines() if p.exists() else []
-    except OSError:
-        lines = []
-    for line in lines:
-        try:
-            ev = json.loads(line)
-        except (json.JSONDecodeError, ValueError):
-            continue
+    for ev in engine.order_events(signal_id):
         if ev.get("event") == "placed":
             d = str(ev.get("placed_on") or "")[:10]
             if d:
@@ -322,10 +302,10 @@ def _portfolio(signal_id: str, rec: dict, state: dict, close) -> dict:
 
 def report(signal_id: str, log=print) -> dict:
     """汇总模拟盘运行报告，原子写入 SIGNALS/<signal_id>/paper.json 并返回。"""
-    rec = engine._read(PAPER / signal_id / "enrolled.json")
+    rec = engine.load_enrollment(signal_id)
     if rec is None:
         raise engine.PaperError(t("模拟盘未接入：{signal_id}", signal_id=signal_id))
-    state = engine._read(PAPER / signal_id / "state.json")
+    state = engine.load_state(signal_id)
     if state is None:
         raise engine.PaperError(t("没有模拟盘状态（先接入并推进一轮）"))
 
@@ -414,6 +394,6 @@ def report(signal_id: str, log=print) -> dict:
         "thresholds": thresholds,
         "note": mode_note.get(rec.get("mode"), "") + " " + t("基准为股票池等权（未扣成本）；rank IC 含最后 {horizon} 日的未来收益。", horizon=horizon),
     }
-    engine._write_json(SIGNALS / signal_id / "paper.json", out)
+    engine.save_report(signal_id, out)
     log(f"[paper] {signal_id} 模拟盘报告已更新")
     return out

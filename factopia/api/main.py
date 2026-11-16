@@ -16,11 +16,13 @@ from functools import lru_cache
 from pathlib import Path
 
 import pandas as pd
-import yaml
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from factopia import access
+from factopia import blobstore
+from factopia import db
+from factopia import runstore
 from factopia.agents import approve as agent_approve
 from factopia.agents import policy as agent_policy
 from factopia.agents import store as agent_store
@@ -36,7 +38,6 @@ from factopia.research.periods import HORIZONS, split_dates
 from factopia.validate import metrics as vmetrics
 
 RESULTS = Path(os.environ.get("FACTOPIA_RESULTS_DIR", "/workspace/runtime/results"))
-CONFIGS = Path(os.environ.get("FACTOPIA_CONFIGS_DIR", "/workspace/configs"))
 RUN_ID = re.compile(r"^[a-z]{2}_h\d{1,2}_\d{14}$")
 ROUND_KEY = re.compile(r"^(baseline|\d{1,3})$")
 MARKETS = ("hk", "uk", "fr")
@@ -73,17 +74,6 @@ def _storage_not_ready(request, exc: PermissionError):
     return JSONResponse(status_code=503, content={"detail": t("研究存储目录尚未初始化：请先启动后台运行器（runner 服务）")})
 
 
-def _json(path: Path):
-    if not path.exists():
-        raise HTTPException(404, t("结果文件不存在：{name}（先运行 factopia.export）", name=path.name))
-    return _cached_json(path, path.stat().st_mtime)
-
-
-@lru_cache(maxsize=64)
-def _cached_json(path: Path, mtime: float):  # 文件更新后 mtime 变化，缓存自动失效
-    return _json_safe(json.loads(path.read_text(encoding="utf-8")))
-
-
 def _json_safe(obj):
     """递归把 NaN/Inf 换成 None：历史 run.json/rounds.json 里的 NaN 字面量会让响应序列化 500。"""
     if isinstance(obj, dict):
@@ -96,10 +86,10 @@ def _json_safe(obj):
 
 
 def _run_dir(run_id: str) -> Path:
-    if not RUN_ID.match(run_id) or not (RESULTS / "runs" / run_id / "run.json").exists():
+    if not RUN_ID.match(run_id) or not runstore.exists(run_id):
         raise HTTPException(404, t("运行不存在：{run_id}", run_id=run_id))
     access.require(run_id.split("_", 1)[0], t("运行 {run_id}", run_id=run_id))       # 地区视角：运行编号以市场开头
-    return RESULTS / "runs" / run_id
+    return runstore.run_dir(run_id)
 
 
 def _columns(df: pd.DataFrame) -> dict:
@@ -119,14 +109,35 @@ def health():
     return {"status": "ok", "results": RESULTS.exists()}
 
 
+@app.get("/api/health/db")
+def health_db():
+    """数据库体检（单独一个端点）。
+
+    不并进 `/api/health`：连不上时 `db.health()` 会阻塞到连接池超时（10 秒），
+    把它塞进存活探针会让整个页面像是挂了。这个端点失败就是失败，调用方自己决定怎么显示。
+    """
+    got = db.health()
+    got["modes"] = {d: db.mode(d) for d in
+                    ("research", "jobs", "runs", "app", "refdata", "bars", "llm_cost",
+                     "approval", "signals", "ideas", "agents", "portfolio", "paper", "access")}
+    # app 域就是过去说的 misc（app_state 快照），这里保持两个键便于老看板对照
+    got["modes"]["misc"] = got["modes"]["app"]
+    return got
+
+
 @app.get("/api/overview")
 def overview():
-    return _json(RESULTS / "overview.json")
+    got = blobstore.overview()
+    if got is None:
+        raise HTTPException(404, t("总览尚未生成（先运行 factopia.export）"))
+    return got
 
 
 @app.get("/api/alpha158/{horizon}/cube")
 def cube(horizon: int):
-    data = _json(RESULTS / "alpha158" / f"h{horizon}" / "cube.json")
+    data = blobstore.alpha_cube(horizon)
+    if data is None:
+        raise HTTPException(404, t("结果文件不存在：cube.json（先运行 factopia.export）"))
     if access.cross_region():
         return data
     ms = set(access.markets())                                     # 地区视角：只保留本地区市场的统计
@@ -137,7 +148,9 @@ def cube(horizon: int):
 
 @app.get("/api/alpha158/{horizon}/surface")
 def surface(horizon: int, market: str | None = Query(None, pattern="^(hk|uk|fr)$")):
-    data = _json(RESULTS / "alpha158" / f"h{horizon}" / "surface.json")
+    data = blobstore.alpha_surface(horizon)
+    if data is None:
+        raise HTTPException(404, t("结果文件不存在：surface.json（先运行 factopia.export）"))
     if market:
         access.require(market, t("{market} 市场的因子评估", market=market_label(market)))
         return {**data, "markets": {market: data["markets"][market]}}
@@ -147,8 +160,7 @@ def surface(horizon: int, market: str | None = Query(None, pattern="^(hk|uk|fr)$
 @app.get("/api/runs")
 def runs():
     items = []
-    for p in (RESULTS / "runs").glob("*/run.json"):
-        run = _json(p)
+    for run in runstore.all_runs():
         if access.can(run["market"]):                              # 地区视角
             items.append({k: v for k, v in run.items() if k not in ("context", "log_dir")})
     # 按真实开始时间倒序；不能按目录名排序：香港/英国/法国的 run_id 前缀不同，
@@ -159,11 +171,11 @@ def runs():
 
 @app.get("/api/runs/{run_id}")
 def run_detail(run_id: str):
-    d = _run_dir(run_id)
-    run = _json(d / "run.json")
+    _run_dir(run_id)
+    run = runstore.load(run_id)
     job = _job_of_run(run_id)
     batch = [_job_public(j) for j in store.list_jobs() if job and j["batch_id"] == job["batch_id"]]
-    rounds = _json(d / "rounds.json")
+    rounds = runstore.rounds(run_id)
     spec = _run_spec(run)
     rule = verdict.rules(spec) if spec else None
     return {"run": {**run, "state": _run_state(run, job)}, "rounds": rounds,
@@ -183,14 +195,14 @@ def _run_spec(run: dict) -> dict | None:
 
 @app.get("/api/runs/{run_id}/backtest")
 def backtest(run_id: str):
-    d = _run_dir(run_id) / "backtest"
-    return {p.stem: _columns(pd.read_parquet(p)) for p in sorted(d.glob("*.parquet"))}
+    _run_dir(run_id)
+    return {key: _columns(runstore.backtest(run_id, key)) for key in runstore.backtest_keys(run_id)}
 
 
 @app.get("/api/runs/{run_id}/signal")
 def signal(run_id: str):
-    d = _run_dir(run_id) / "signal"
-    return {p.stem: _columns(pd.read_parquet(p)) for p in sorted(d.glob("*.parquet"))}
+    _run_dir(run_id)
+    return {key: _columns(runstore.signal(run_id, key)) for key in runstore.signal_keys(run_id)}
 
 
 def _compound(s: pd.Series) -> float:
@@ -200,9 +212,12 @@ def _compound(s: pd.Series) -> float:
 @app.get("/api/runs/{run_id}/monthly")
 def monthly(run_id: str):
     """各轮的月度与年度收益（扣成本后超额收益、基准指数，按日复利，与净值图一致）。"""
+    _run_dir(run_id)
     out = {}
-    for p in sorted((_run_dir(run_id) / "backtest").glob("*.parquet")):
-        df = pd.read_parquet(p, columns=["date", "excess_with_cost", "bench"])
+    for key in runstore.backtest_keys(run_id):
+        df = runstore.backtest(run_id, key)
+        if df.empty or "excess_with_cost" not in df:
+            continue
         idx = pd.to_datetime(df["date"])
         rows = []
         for keys, g in df.groupby([idx.dt.year, idx.dt.month]):
@@ -210,15 +225,15 @@ def monthly(run_id: str):
                          "excess": round(_compound(g["excess_with_cost"]), 6), "bench": round(_compound(g["bench"]), 6)})
         years = [{"year": int(y), "days": len(g), "excess": round(_compound(g["excess_with_cost"]), 6),
                   "bench": round(_compound(g["bench"]), 6)} for y, g in df.groupby(idx.dt.year)]
-        out[p.stem] = {"months": rows, "years": years}
+        out[key] = {"months": rows, "years": years}
     return out
 
 
 @app.get("/api/runs/{run_id}/quantiles")
 def quantiles(run_id: str):
     """各轮的分组收益（按模型打分分 5 组）。"""
-    d = _run_dir(run_id) / "quantile"
-    return {p.stem: _json(p) for p in sorted(d.glob("*.json"))}
+    _run_dir(run_id)
+    return runstore.quantiles(run_id)
 
 
 @app.get("/api/runs/{run_id}/positions/{key}")
@@ -226,10 +241,10 @@ def positions(run_id: str, key: str, step: int = Query(5, ge=1, le=60)):
     """持仓矩阵：每隔 step 个交易日取一次，股票按持有天数排序。"""
     if not ROUND_KEY.match(key):
         raise HTTPException(404, t("轮次不存在"))
-    path = _run_dir(run_id) / "positions" / f"{key}.parquet"
-    if not path.exists():
+    _run_dir(run_id)
+    if not runstore.has_positions(run_id, key):
         raise HTTPException(404, t("该轮没有持仓记录"))
-    df = pd.read_parquet(path)
+    df = runstore.positions(run_id, key)
     dates = sorted(df["date"].unique())[::step]
     df = df[df["date"].isin(dates)]
     order = df.groupby("instrument").size().sort_values(ascending=False).index.tolist()
@@ -244,17 +259,18 @@ def positions(run_id: str, key: str, step: int = Query(5, ge=1, le=60)):
 @app.get("/api/runs/{run_id}/events")
 def run_events(run_id: str):
     """过程事件（供运行中页面显示或回放）。完整提示词较长，按需从 /prompt 接口读取。"""
-    events = _json(_run_dir(run_id) / "events.json")
+    _run_dir(run_id)
+    events = runstore.events(run_id)
     return [{**{k: v for k, v in e.items() if k not in ("system", "user")}, "index": i, "has_prompt": bool(e.get("user"))}
             for i, e in enumerate(events)]
 
 
 @app.get("/api/runs/{run_id}/events/{index}/prompt")
 def run_event_prompt(run_id: str, index: int):
-    events = _json(_run_dir(run_id) / "events.json")
-    if not 0 <= index < len(events) or not events[index].get("user"):
+    _run_dir(run_id)
+    e = runstore.event(run_id, index)                # 按 (run_id, seq) 直取，不解析整份时间线
+    if not e or not e.get("user"):
         raise HTTPException(404, t("该事件没有保存提示词"))
-    e = events[index]
     return {"system": e["system"], "user": e["user"], "response": e.get("response")}
 
 
@@ -322,11 +338,10 @@ def projects():
         vs = store.versions(rid)
         specs.append({**store.load_version(rid, vs[-1]), "versions": vs, "example": False})
     known = {s["id"] for s in specs}
-    for p in sorted((CONFIGS / "research").glob("*.yaml")):
-        ex = yaml.safe_load(p.read_text(encoding="utf-8"))
-        if ex["id"] not in known:
+    for ex in blobstore.config_examples("research"):          # 配置模板，静态，不入库
+        if ex.get("id") and ex["id"] not in known:
             specs.append({**ex, "markets": [ex["market"]], "versions": [], "example": True})
-    all_runs = [r for r in (_json(p) for p in sorted((RESULTS / "runs").glob("*/run.json"), reverse=True)) if access.can(r["market"])]
+    all_runs = [r for r in runstore.all_runs() if access.can(r["market"])]
     all_jobs = [j for j in store.list_jobs() if access.can(j["market"])]            # 地区视角
     specs = [sp for sp in specs if any(access.can(m) for m in (sp.get("markets") or [sp.get("market")]))]
     jobs_by_run = {j["run_id"]: j for j in all_jobs if j.get("run_id")}
@@ -362,7 +377,7 @@ def project_search(q: str = Query(..., min_length=1, max_length=300)):
 
 
 def _best_return(run_id: str) -> float | None:
-    rounds = _json(RESULTS / "runs" / run_id / "rounds.json")
+    rounds = runstore.rounds(run_id)
     adopted = [r["metrics"]["annual_return_with_cost"] for r in rounds if r.get("decision") and r.get("metrics")]
     return adopted[-1] if adopted else None
 
@@ -855,9 +870,8 @@ def _study_market(m: str, runs: list[dict], jobs: list[dict], rule: dict) -> dic
         return entry | {"state": active["state"] if active else "none", "run_id": None, "focus": None, "rounds": []}
     job = jobs_by_run.get(run["run_id"])
     state = job["state"] if job else ("done" if run.get("status") == "done" else "incomplete")
-    rounds = _json(RESULTS / "runs" / run["run_id"] / "rounds.json")
+    rounds = runstore.rounds(run["run_id"])
     judged = {v["loop"]: v for v in verdict.judge_rounds(run, rounds, rule)}
-    qdir = RESULTS / "runs" / run["run_id"] / "quantile"
     rows = []
     for r in rounds:
         mt = r.get("metrics") or {}
@@ -869,8 +883,7 @@ def _study_market(m: str, runs: list[dict], jobs: list[dict], rule: dict) -> dic
     focus = verdict.focus_round(rounds)
     fo = None
     if focus:
-        q = qdir / f"{focus['loop']}.json"
-        qd = _json(q) if q.exists() else None
+        qd = runstore.quantile(run["run_id"], focus["loop"])
         fo = {"loop": focus["loop"], "metrics": focus["metrics"], "checks": judged[focus["loop"]]["checks"],
               "passed": judged[focus["loop"]]["passed"], "hypothesis": focus.get("hypothesis"),
               "factors": [f["name"] for f in focus.get("factors") or []],
@@ -878,10 +891,8 @@ def _study_market(m: str, runs: list[dict], jobs: list[dict], rule: dict) -> dic
         sig = _signal_sig(run["run_id"], focus["loop"], run["horizon"])
         val = _validation(run["run_id"], focus["loop"])
         vjob = _validate_job(run["run_id"], focus["loop"])
-        diag = RESULTS / "runs" / run["run_id"] / "diagnostics" / f"{focus['loop']}.json"
-        bdiag = RESULTS / "runs" / run["run_id"] / "diagnostics" / "baseline.json"
-        fo |= {"diagnostics": _json(diag) if diag.exists() else None,
-               "baseline_diagnostics": _json(bdiag) if bdiag.exists() else None}
+        fo |= {"diagnostics": runstore.diagnostic(run["run_id"], focus["loop"]),
+               "baseline_diagnostics": runstore.diagnostic(run["run_id"], "baseline")}
         ties = _score_ties(run["run_id"], focus["loop"])
         fo |= {"significance": sig, "ties": ties, "credibility": verdict.credibility(val, sig, rule, ties),
                "validation": _validation_summary(val), "validation_job": _job_public(vjob) if vjob else None}
@@ -893,35 +904,34 @@ def _study_market(m: str, runs: list[dict], jobs: list[dict], rule: dict) -> dic
 
 def _signal_sig(run_id: str, loop, horizon: int) -> dict | None:
     """测试期逐日 rank IC 的显著性（导出的 signal 文件；Newey-West t 值）。"""
-    p = RESULTS / "runs" / run_id / "signal" / f"{loop}.parquet"
-    if not p.exists():
+    mt = runstore.mtime(run_id, "signal", loop)
+    if not mt:
         return None
-    return _cached_sig(p, p.stat().st_mtime, horizon)
+    return _cached_sig(run_id, str(loop), mt, horizon)
 
 
 @lru_cache(maxsize=256)
-def _cached_sig(p: Path, mtime: float, horizon: int) -> dict:
-    df = pd.read_parquet(p)
+def _cached_sig(run_id: str, key: str, mtime: float, horizon: int) -> dict:
+    df = runstore.signal(run_id, key)
     return vmetrics.significance(df.set_index("date")["rank_ic"], horizon)
 
 
 def _score_ties(run_id: str, loop) -> dict | None:
     """测试期打分的并列情况（导出的 score 文件；持股分数线上并列的股票数，第 14.7 节）。"""
-    p = RESULTS / "runs" / run_id / "score" / f"{loop}.parquet"
-    if not p.exists():
+    mt = runstore.mtime(run_id, "score", loop)
+    if not mt:
         return None
-    return _cached_ties(p, p.stat().st_mtime)
+    return _cached_ties(run_id, str(loop), mt)
 
 
 @lru_cache(maxsize=256)
-def _cached_ties(p: Path, mtime: float) -> dict | None:
-    df = pd.read_parquet(p)
+def _cached_ties(run_id: str, key: str, mtime: float) -> dict | None:
+    df = runstore.score(run_id, key)
     return vmetrics.ties(df.set_index(["date", "instrument"])["score"])
 
 
 def _validation(run_id: str, loop) -> dict | None:
-    p = RESULTS / "runs" / run_id / "validation" / f"{loop}.json"
-    return _json(p) if p.exists() else None
+    return runstore.validation(run_id, loop)
 
 
 def _validation_summary(v: dict | None) -> dict | None:
@@ -941,8 +951,8 @@ def _validate_job(run_id: str, loop) -> dict | None:
 @app.get("/api/runs/{run_id}/validation")
 def run_validation(run_id: str):
     """可信度检查结果（factopia/validate）：各轮的完整结果（含逐日曲线与安慰剂明细）及相关任务。"""
-    d = _run_dir(run_id) / "validation"
-    items = {p.stem: _json(p) for p in sorted(d.glob("*.json"))} if d.exists() else {}
+    _run_dir(run_id)
+    items = runstore.validations(run_id)
     jobs = [_job_public(j) for j in store.list_jobs() if j.get("kind") == "validate" and j.get("target_run") == run_id]
     return {"items": items, "jobs": jobs}
 
@@ -955,8 +965,8 @@ class ValidateIn(BaseModel):
 @app.post("/api/runs/{run_id}/validate")
 def start_validation(run_id: str, body: ValidateIn):
     """对某一轮（默认 RD-Agent 最终采纳的轮次）排入可信度检查；已有排队或运行中的同一检查时直接返回该任务。"""
-    d = _run_dir(run_id)
-    run, rounds = _json(d / "run.json"), _json(d / "rounds.json")
+    _run_dir(run_id)
+    run, rounds = runstore.load(run_id), runstore.rounds(run_id)
     loop = body.loop
     if loop is None:
         focus = verdict.focus_round(rounds)
@@ -1061,9 +1071,10 @@ def _cross_market(markets: dict) -> dict | None:
     monthly = {}
     for m, e in markets.items():
         f = e.get("focus")
-        p = RESULTS / "runs" / str(e.get("run_id")) / "signal" / f"{(f or {}).get('loop')}.parquet"
-        if f and p.exists():
-            sig = pd.read_parquet(p)
+        if not f or not e.get("run_id"):
+            continue
+        if runstore.has_signal(str(e["run_id"]), f["loop"]):
+            sig = runstore.signal(str(e["run_id"]), f["loop"])
             monthly[m] = sig.set_index(pd.to_datetime(sig["date"]))["rank_ic"].resample("ME").mean()
     if len(monthly) < 2:
         return None
@@ -1135,12 +1146,11 @@ def study(research_id: str, version: int):
     """研究结论（Spec 第 14.5 节）：同一锁定版本在各市场的结果，按可证伪测试判定。"""
     spec = get_version(research_id, version)
     rule = verdict.rules(spec)
-    runs = [r for r in (_json(p) for p in sorted((RESULTS / "runs").glob("*/run.json"), reverse=True))
+    runs = [r for r in runstore.all_runs()
             if (r.get("research") or {}).get("id") == research_id and (r.get("research") or {}).get("version") == version]
     jobs = [j for j in store.list_jobs() if j["research_id"] == research_id and j["version"] == version and j.get("kind") not in ("monitor", "paper")]
     markets = {m: _study_market(m, runs, jobs, rule) for m in rule["markets"]}
     diags = {m: (e.get("focus") or {}).get("diagnostics") for m, e in markets.items()}
-    exp = store.RESEARCH_DIR / research_id / f"explain_v{version}.json"
     from factopia import ideas as ideas_mod
     saved_ideas = [{"id": i["id"], "title": i["title"], "run": (i.get("source_ref") or {}).get("run")}
                    for i in ideas_mod.find_by_source(f"{research_id}.v{version}")]
@@ -1150,7 +1160,7 @@ def study(research_id: str, version: int):
             "overall": verdict.overall(markets, rule), "transfer": verdict.transfer(markets, rule, diags),
             "cross_market": _cross_market(markets),
             "markets": markets, "findings": _study_findings(markets, rule),
-            "explanation": json.loads(exp.read_text(encoding="utf-8")) if exp.exists() else None,
+            "explanation": store.explain(research_id, version),
             "terminated": store.termination(research_id), "saved_ideas": saved_ideas}
 
 
@@ -1165,8 +1175,7 @@ def explain_study(research_id: str, version: int):
         out = explaining.explain(st, diags)
     except drafting.DraftError as e:
         raise HTTPException(503, str(e))
-    path = store.RESEARCH_DIR / research_id / f"explain_v{version}.json"
-    path.write_text(json.dumps(out, ensure_ascii=False, indent=1), encoding="utf-8")
+    store.save_explain(research_id, version, out)
     return out
 
 
@@ -1204,10 +1213,10 @@ def portfolio_series(research_id: str, version: int):
     """净值序列（基础币种）与各市场权重，供组合台画图。"""
     access.require_cross_region(t("多市场授权组合"))
     get_version(research_id, version)
-    p = _portfolio_mod().out_dir(research_id, version) / "daily.parquet"
-    if not p.exists():
+    P = _portfolio_mod()
+    if not P.has_series(research_id, version):
         raise HTTPException(404, t("尚未构建组合"))
-    d = pd.read_parquet(p)
+    d = P.daily(research_id, version)
     ms = [c[:-2] for c in d.columns if c.endswith("_w")]
     return {"dates": d["date"].dt.strftime("%Y-%m-%d").tolist(),
             "port": [round(float(x), 6) for x in (1 + d["port"]).cumprod()],
@@ -1222,10 +1231,9 @@ def portfolio_rebalances(research_id: str, version: int):
     access.require_cross_region(t("多市场授权组合"))
     get_version(research_id, version)
     P = _portfolio_mod()
-    wpath = P.out_dir(research_id, version) / "weights.parquet"
-    if not wpath.exists():
+    if not P.has_series(research_id, version):
         raise HTTPException(404, t("尚未构建组合"))
-    w = pd.read_parquet(wpath)
+    w = P.weights(research_id, version)
     w["date"] = w["date"].astype(str)
     execs = {r["date"]: r["markets"] for r in ((P.load(research_id, version) or {}).get("rebalances") or [])}
     out: list[dict] = []
@@ -1291,7 +1299,6 @@ def complement(market: str, keys: str | None = None):
     return combine.analyse(market, cands, [k for k in (keys or "").split(",") if k] or None)
 
 
-REPORTS = Path(os.environ.get("FACTOPIA_RUNTIME", "/workspace/runtime")) / "reports"
 REPORT_NAME = re.compile(r"^[a-z][a-z0-9_]{2,39}_v\d+_\d{14}\.html$")
 
 
@@ -1304,36 +1311,37 @@ def make_report(research_id: str, version: int):
     spec = get_version(research_id, version)
     st = study(research_id, version)
     pf = P.load(research_id, version)
-    dp = P.out_dir(research_id, version) / "daily.parquet"
-    exp = store.RESEARCH_DIR / research_id / f"explain_v{version}.json"
-    qp = Path(os.environ.get("FACTOPIA_RUNTIME", "/workspace/runtime")) / "data" / "standardized" / "quality_report.json"
-    pit = RESULTS / "pit_status.json"
+    daily = P.daily(research_id, version) if pf else pd.DataFrame()
     data = {"spec": spec, "study": st, "rules": _version_rules(research_id, version, {}), "portfolio": pf,
-            "daily": pd.read_parquet(dp).set_index("date") if dp.exists() and pf else None,
-            "pit": _json(pit) if pit.exists() else None, "quality": _json(qp) if qp.exists() else None,
-            "explanation": json.loads(exp.read_text(encoding="utf-8")) if exp.exists() else None,
+            "daily": daily.set_index("date") if len(daily) else None,
+            "pit": blobstore.pit(), "quality": blobstore.quality(),
+            "explanation": store.explain(research_id, version),
             "feedback": P.feedback(research_id, version), "mandate": rule_ctx.mandate(spec.get("mandate"))}
     page = report.render(data)
-    REPORTS.mkdir(parents=True, exist_ok=True)
     name = f"{research_id}_v{version}_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}.html"
-    (REPORTS / name).write_text(page, encoding="utf-8")
+    blobstore.save_report(name, page, research_id, version)      # files 落盘 / dual 两边 / db 只入列
     return {"name": name, "url": f"/api/reports/{name}", "bytes": len(page.encode("utf-8")), "has_portfolio": pf is not None}
 
 
 @app.get("/api/research/{research_id}/versions/{version}/reports")
 def list_reports(research_id: str, version: int):
     access.require_cross_region(t("研究报告"))
-    return [{"name": p.name, "url": f"/api/reports/{p.name}", "bytes": p.stat().st_size}
-            for p in sorted(REPORTS.glob(f"{research_id}_v{version}_*.html"), reverse=True)] if REPORTS.exists() else []
+    return [{"name": r["name"], "url": f"/api/reports/{r['name']}", "bytes": r.get("bytes") or 0}
+            for r in blobstore.reports(research_id, version)]
+
+
+def _all_reports() -> list[str]:
+    """全部报告名（体检页只数份数，不需要正文）。"""
+    return blobstore.all_report_names()
 
 
 @app.get("/api/reports/{name}")
 def get_report(name: str):
     from fastapi.responses import HTMLResponse
     access.require_cross_region(t("研究报告"))
-    if not REPORT_NAME.match(name) or not (REPORTS / name).exists():
+    if not REPORT_NAME.match(name) or not blobstore.has_report(name):
         raise HTTPException(404, t("报告不存在"))
-    return HTMLResponse((REPORTS / name).read_text(encoding="utf-8"))
+    return HTMLResponse(blobstore.report(name) or "")
 
 
 # ---------------------------------------------------------------- 跨地区审批与审计（第 14.14 节）
@@ -1350,9 +1358,7 @@ def _materials(research_id: str, version: int) -> dict:
     """提交材料：研究规格、结论、两次预检、授权组合、最新报告、数据质量、AI 解释、待复核翻译数。"""
     P = _portfolio_mod()
     spec = get_version(research_id, version)
-    reps = sorted(REPORTS.glob(f"{research_id}_v{version}_*.html"), reverse=True) if REPORTS.exists() else []
-    exp = store.RESEARCH_DIR / research_id / f"explain_v{version}.json"
-    qp = Path(os.environ.get("FACTOPIA_RUNTIME", "/workspace/runtime")) / "data" / "standardized" / "quality_report.json"
+    reps = blobstore.reports(research_id, version)
     uses_text = any(d.get("category") == "text" for d in spec.get("data_needs") or [])
     # 待复核数只统计本研究各市场使用的真实文本数据集；模拟数据集（词典法标注、虚构公司）的复核要求不适用，记录在审批材料中
     used = [srcs.TEXT_DATASETS[m] for m in spec["markets"]] if uses_text else []
@@ -1361,9 +1367,10 @@ def _materials(research_id: str, version: int) -> dict:
     pending = sum(treview.pending_must(d) for d in real)
     waived = {d: treview.pending_must(d) for d in used if d in srcs.SIMULATED}
     return {"spec": spec, "study": study(research_id, version), "rules": _version_rules(research_id, version, {}),
-            "portfolio": P.load(research_id, version), "report": {"name": reps[0].name, "path": reps[0]} if reps else None,
-            "quality": _json(qp) if qp.exists() else None, "text_pending": pending,
-            "explanation": json.loads(exp.read_text(encoding="utf-8")) if exp.exists() else None,
+            "portfolio": P.load(research_id, version),
+            "report": {"name": reps[0]["name"], "html": blobstore.report(reps[0]["name"])} if reps else None,
+            "quality": blobstore.quality(), "text_pending": pending,
+            "explanation": store.explain(research_id, version),
             "translations": {"uses_text": uses_text, "pending_reviews": pending, "datasets": used,
                              "waived_simulated": waived, "waived_note": "模拟数据集的复核要求不适用（仅用于流程演示，不得用于生产）" if waived else None}}
 
@@ -1505,7 +1512,7 @@ def paper_demo(research_id: str, version: int, body: PaperDemoIn | None = None):
             log.append("已自动构建授权组合（组合台）")
         except P.PortfolioError as e:
             raise HTTPException(422, str(e))
-    if not (list(REPORTS.glob(f"{research_id}_v{version}_*.html")) if REPORTS.exists() else []):
+    if not blobstore.reports(research_id, version):
         make_report(research_id, version)
         log.append("已自动生成研究报告")
     m = _materials(research_id, version)
@@ -1737,7 +1744,7 @@ def management_overview():
     from factopia import approval as A
     S = _signals_mod()
     jobs = store.list_jobs()
-    runs = [_json(p) for p in (RESULTS / "runs").glob("*/run.json")]
+    runs = runstore.all_runs()
     research = [j for j in jobs if j.get("kind") not in ("validate", "monitor", "paper")]
     regions = {}
     for m in access.markets():                  # 地区视角
@@ -1797,7 +1804,7 @@ def _criteria() -> list[dict]:
     S = _signals_mod()
     P = _portfolio_mod()
     out = []
-    runs = [_json(p) for p in (RESULTS / "runs").glob("*/run.json")]
+    runs = runstore.all_runs()
     by_ver: dict = {}
     for r in runs:
         k = ((r.get("research") or {}).get("id"), (r.get("research") or {}).get("version"))
@@ -1806,18 +1813,18 @@ def _criteria() -> list[dict]:
     three = [f"{k[0]} v{k[1]}" for k, v in by_ver.items() if len(v) == 3]
     out.append({"no": 1, "text": "同一投资假设能够在香港、英国和法国按统一方法独立验证", "ok": bool(three),
                 "evidence": f"三个市场都完成运行的锁定版本：{'、'.join(three) or '无'}（结果页研究结论）", "link": "/results"})
-    ds = {d: bool(tcommon.read_json(tcommon.ds_dir(d) / "summary.json")) for d in tcommon.DATASETS}
+    ds = {d: bool(blobstore.text_json(d, "summary.json")) for d in tcommon.DATASETS}
     out.append({"no": 2, "text": "中文、英文和法文资料均可检索，关键结论可以回到原文段落及时间戳", "ok": all(ds.values()),
                 "evidence": "数据集：" + "、".join(f"{k}{'✓' if v else '✗'}" for k, v in ds.items()) + "；检索与摘要逐句引用段落与时间（情报台）", "link": "/intel"})
-    rs = _json(REFDATA / "master_summary.json") if (REFDATA / "master_summary.json").exists() else None
-    acts = (REFDATA / "corporate_actions.parquet").exists()
-    pit = _json(RESULTS / "pit_status.json") if (RESULTS / "pit_status.json").exists() else None
+    rs = blobstore.refdata_summary("master_summary")
+    acts = blobstore.has_refdata("corporate_actions")
+    pit = blobstore.pit()
     out.append({"no": 3, "text": "发行人、证券、币种、时区、交易日历和公司行动能够正确标准化", "ok": bool(rs and acts and pit),
                 "evidence": (f"证券 {rs.get('securities')}、LEI {rs.get('with_lei')}、多市场发行人 {rs.get('multi_market_issuers')}；" if rs else "证券主数据未生成；")
                 + ("公司行动已生成；" if acts else "公司行动未生成；") + (f"时间点一致性：{pit['label']}" if pit else "时间点状态未生成") + "（数据台）", "link": "/data"})
-    pfs = [json.loads(p.read_text(encoding="utf-8")) for p in (P.OUT_DIR.glob("*/summary.json") if P.OUT_DIR.exists() else [])]
+    pfs = P.list_summaries()
     good = [x for x in pfs if all(v["identity_max_error"] < 1e-10 for v in x["fx_split"].values()) and abs(x["attribution"]["linking_error"]) < 1e-4]
-    reps = list(REPORTS.glob("*.html")) if REPORTS.exists() else []
+    reps = _all_reports()
     out.append({"no": 4, "text": "报告能够区分本地币种收益、基础币种收益和汇率贡献", "ok": bool(good and reps),
                 "evidence": f"授权组合 {len(pfs)} 个，恒等误差 < 1e-10 且归因误差 < 1bp 的 {len(good)} 个；报告 {len(reps)} 份（组合台）", "link": "/portfolio"})
     subs = [A.load(x["id"]) for x in A.list_all()]
@@ -1851,7 +1858,7 @@ def _versions_cycle() -> list[dict]:
     for rid in store.research_ids():
         for v in store.versions(rid):
             spec = store.load_version(rid, v)
-            reps = [p.name for p in REPORTS.glob(f"{rid}_v{v}_*.html")] if REPORTS.exists() else []
+            reps = [x["name"] for x in blobstore.reports(rid, v)]
             subs = [A.load(x["id"]) for x in A.list_all(rid) if x["version"] == v]
             out.append(AC.cycle(rid, v, spec, jobs, P.load(rid, v), reps, subs))
     return out
@@ -1901,7 +1908,7 @@ def run_redteam():
 
     def region_isolated():
         fr_sig = next((e["signal_id"] for e in _signals_mod().catalog() if e["market"] == "fr"), None)
-        fr_run = next((p.parent.name for p in sorted((RESULTS / "runs").glob("fr_*/run.json"))), None)
+        fr_run = next((r["run_id"] for r in runstore.all_runs() if r["market"] == "fr"), None)
         r1 = _as("hk", lambda: get_signal(fr_sig)) if fr_sig else "无法国信号"
         r2 = _as("hk", lambda: run_detail(fr_run)) if fr_run else "无法国运行"
         r3 = _as("hk", lambda: list_signals())
@@ -1928,7 +1935,7 @@ def run_redteam():
         for ds, cfg in tcommon.DATASETS.items():
             if not cfg["simulated"]:
                 continue
-            fil = pd.read_parquet(tcommon.ds_dir(ds) / "filings.parquet")
+            fil = blobstore.text_filings(ds)
             flagged = int(((fil["simulated"] == True) & (fil["source"] == tcommon.SIMULATED_LABEL)).sum())  # noqa: E712
             named = int(fil["company"].astype(str).str.contains("模拟|simulated").sum()) if "company" in fil else 0
             clash = sorted(set(fil["instrument"]) & real)
@@ -2003,8 +2010,9 @@ def get_job(job_id: str):
     """任务状态与 RD-Agent 控制台输出的最后 40 行（准备数据阶段尚无进度事件时显示）。"""
     job = _load_job(job_id)
     path = store.log_path(job_id)
-    tail = path.read_text(errors="replace").splitlines()[-40:] if path.exists() else []
-    return {**_job_public(job), "log_tail": tail, "exported": bool(job.get("run_id")) and (RESULTS / "runs" / job["run_id"] / "run.json").exists()}
+    tail = blobstore.job_log_tail(job_id)
+    return {**_job_public(job), "log_tail": tail,
+            "exported": bool(job.get("run_id")) and runstore.exists(str(job["run_id"]))}
 
 
 @app.get("/api/jobs/{job_id}/live")
@@ -2115,26 +2123,22 @@ def _agent_job(agent_id: str) -> dict | None:
     return jobs[-1] if jobs else None
 
 
+ROUND_FILES = ("facts", "diagnosis", "external", "plan", "draft_action",
+               "next_version_draft", "approval", "action", "evaluation")
+
+
 def _agent_rounds(agent: dict) -> list[dict]:
+    """一次取全部轮次再按序拼：文件时代是 9 次 read_round/轮，数据库模式一条查询。"""
+    recorded = {r.get("n"): r for r in agent_store.rounds(agent["agent_id"])}
     out = []
     for n in range(1, int(agent.get("current_round") or 0) + 1):
-        out.append({"n": n, **{name: agent_store.read_round(agent["agent_id"], n, name)
-                               for name in ("facts", "diagnosis", "external", "plan", "draft_action", "next_version_draft",
-                                            "approval", "action", "evaluation")}})
+        rec = recorded.get(n) or {}
+        out.append({"n": n, **{name: rec.get(name) for name in ROUND_FILES}})
     return out
 
 
 def _agent_trace(agent_id: str, limit: int = 200) -> list[dict]:
-    path = agent_store.dir_path(agent_id) / "trace.jsonl"
-    if not path.exists():
-        return []
-    items = []
-    for line in path.read_text(encoding="utf-8").splitlines()[-limit:]:
-        try:
-            items.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
-    return items
+    return agent_store.trace(agent_id, limit)
 
 
 @app.get("/api/agents")
@@ -2191,11 +2195,10 @@ def get_agent(agent_id: str):
             children.append(_job_public(store.load_job(cid)))
         except (FileNotFoundError, OSError):
             continue
-    report_path = agent_store.dir_path(agent_id) / "report.md"
     root = agent.get("root") or {}
     return {"agent": agent, "rounds": _agent_rounds(agent), "children": children,
             "job": _job_public(job) if job else None,
-            "report": report_path.read_text(encoding="utf-8") if report_path.exists() else None,
+            "report": agent_store.report(agent_id),
             "terminated": store.termination(root.get("research_id"))}
 
 
@@ -2208,8 +2211,7 @@ def get_agent_trace(agent_id: str, limit: int = Query(200, ge=1, le=1000)):
 @app.get("/api/agents/{agent_id}/report")
 def get_agent_report(agent_id: str):
     _agent_load(agent_id)
-    path = agent_store.dir_path(agent_id) / "report.md"
-    return {"markdown": path.read_text(encoding="utf-8") if path.exists() else ""}
+    return {"markdown": agent_store.report(agent_id) or ""}
 
 
 @app.post("/api/agents/{agent_id}/approve")
@@ -2307,8 +2309,7 @@ def agent_overlap(agent_id: str):
 def research_examples():
     """研究规格示例（configs/research），供研究立项与审核页面预填。"""
     items = []
-    for p in sorted((CONFIGS / "research").glob("*.yaml")):
-        items.append(yaml.safe_load(p.read_text(encoding="utf-8")))
+    items.extend(blobstore.config_examples("research"))
     return items
 
 
@@ -2318,8 +2319,8 @@ def market_context(market: str, lang: str = Query("zh", pattern="^(zh|en)$")):
     if market not in MARKETS:
         raise HTTPException(404, t("市场不存在"))
     access.require(market, t("{market} 市场介绍", market=market_label(market)))
-    path = CONFIGS / "rdagent" / "context" / f"{market}.{lang}.md"
-    return {"market": market, "lang": lang, "markdown": path.read_text(encoding="utf-8")}
+    return {"market": market, "lang": lang,
+            "markdown": blobstore.config_text("rdagent", "context", f"{market}.{lang}.md")}      # 静态文案，不入库
 
 
 # ---------------------------------------------------------------- 情报台：多语言公告与文本信号（Spec 第 11 章）
@@ -2348,18 +2349,18 @@ def text_overview():
         if not access.can(cfg["market"]):                      # 地区视角
             continue
         d = tcommon.ds_dir(ds)
-        s = tcommon.read_json(d / "summary.json") or {}
+        s = blobstore.text_json(ds, "summary.json") or {}
         out.append({"dataset": ds, "market": cfg["market"], "market_zh": MARKET_ZH[cfg["market"]],
                     "simulated": cfg["simulated"], "source": t(cfg["source"]), "licence": t(cfg["licence"]),
                     "processing_delay_min": cfg["processing_delay_min"], "ready": bool(s),
                     "n_filings": s.get("n_filings", 0), "n_companies": s.get("n_companies", 0),
                     "n_changes": s.get("n_changes", 0), "hold_days": s.get("hold_days"),
-                    "evaluation": s.get("evaluation"), "truth": tcommon.read_json(d / "truth.json"),
-                    "sensitivity": tcommon.read_json(d / "sensitivity.json")})
+                    "evaluation": s.get("evaluation"), "truth": blobstore.text_json(ds, "truth.json"),
+                    "sensitivity": blobstore.text_json(ds, "sensitivity.json")})
     g = tcommon.glossary()
     concepts = [{"concept": c, "zh": v["zh_name"], "en": v["en_name"], "fr": v["fr_name"], "terms": v["terms"]}
                 for c, v in g["concepts"].items()]
-    cmp = tcommon.read_json(tcommon.TEXT / "compare.json")
+    cmp = blobstore.text_json(None, "compare.json")
     if cmp and not access.cross_region():
         cmp = {**cmp, "markets": [r for r in cmp["markets"] if access.can(r["market"])]}
     counts = {"pending": 0, "done": 0, "pending_real": 0, "pending_simulated": 0, "must_real": 0}
@@ -2377,7 +2378,7 @@ def text_overview():
 
 @app.get("/api/text/{dataset}/filings")
 def text_filings(dataset: str, instrument: str | None = None, limit: int = Query(200, le=2000)):
-    s = tcommon.read_json(_text_ds(dataset) / "summary.json")
+    s = blobstore.text_json(dataset, "summary.json")
     if not s:
         raise HTTPException(404, t("该数据集尚未生成文本信号（先运行 python -m factopia.text all）"))
     items = [f for f in s["filings"] if not instrument or f["instrument"] == instrument]
@@ -2392,11 +2393,11 @@ def text_filing(dataset: str, doc_id: str):
     d = _text_ds(dataset)
     if not re.fullmatch(r"[A-Za-z0-9_\-]{3,80}", doc_id):
         raise HTTPException(404, t("公告不存在"))
-    doc = tcommon.read_json(d / "docs" / f"{doc_id}.json")
+    doc = blobstore.text_json(dataset, "docs", f"{doc_id}.json")
     if not doc:
         raise HTTPException(404, t("公告不存在"))
-    lab = tcommon.read_json(d / "labels" / f"{doc_id}.json") or {"labels": []}
-    s = tcommon.read_json(d / "summary.json") or {"filings": []}
+    lab = blobstore.text_json(dataset, "labels", f"{doc_id}.json") or {"labels": []}
+    s = blobstore.text_json(dataset, "summary.json") or {"filings": []}
     meta = next((f for f in s["filings"] if f["id"] == doc_id), None)
     dec = treview.decisions()
     names = tcommon.concept_names()
@@ -2510,36 +2511,33 @@ def text_review_decide(body: ReviewIn):
 
 
 # ---------------------------------------------------------------- 数据台：证券主数据、公司行动、口径与规则、时间点一致性（Spec 第 14.10 节）
-REFDATA = Path(os.environ.get("FACTOPIA_RUNTIME", "/workspace/runtime")) / "refdata"
-
-
 def _records(df: pd.DataFrame) -> list[dict]:
     return json.loads(df.to_json(orient="records", force_ascii=False))
 
 
 def _ref_parquet(name: str) -> pd.DataFrame:
-    p = REFDATA / f"{name}.parquet"
-    if not p.exists():
+    """参考数据表。已接进 `security_master` / `security_relation` / `corporate_action`，
+    由 `blobstore.refdata_table()` 按 refdata 域模式分派，这里只管 404 与列名。"""
+    if not blobstore.has_refdata(name):
         raise HTTPException(404, t("参考数据尚未生成（先运行 python -m factopia.refdata all）"))
-    return pd.read_parquet(p)
+    return blobstore.refdata_table(name)
 
 
 @app.get("/api/pit")
 def pit_status():
     """各数据域的时间点一致性状态；所有结果页面据此标注（BR-18）。"""
-    return _json(RESULTS / "pit_status.json")
+    got = blobstore.pit()
+    if got is None:
+        raise HTTPException(404, t("时间点状态尚未生成（先运行 python -m factopia.refdata pit）"))
+    return got
 
 
 @app.get("/api/refdata/summary")
 def refdata_summary():
-    def rd(name):
-        p = REFDATA / name
-        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
-    pit = RESULTS / "pit_status.json"
-    vi = REFDATA / "vendor_imports.jsonl"         # 数据商导入记录（第 14.21 节）
-    return {"master": rd("master_summary.json"), "actions": rd("actions_summary.json"),
-            "pit": json.loads(pit.read_text(encoding="utf-8")) if pit.exists() else None,
-            "vendor_imports": [json.loads(x) for x in vi.read_text(encoding="utf-8").splitlines() if x.strip()] if vi.exists() else [],
+    return {"master": blobstore.refdata_summary("master_summary"),
+            "actions": blobstore.refdata_summary("actions_summary"),
+            "pit": blobstore.pit(),
+            "vendor_imports": blobstore.vendor_imports(),       # 数据商导入记录（第 14.21 节）
             "vendor_templates": "configs/refdata/vendor_templates/README.md"}
 
 
@@ -2572,15 +2570,14 @@ def refdata_actions(symbol: str | None = None, type: str | None = None, limit: i
 
 @app.get("/api/refdata/dictionary")
 def refdata_dictionary():
-    f = yaml.safe_load((CONFIGS / "refdata" / "fields.yaml").read_text(encoding="utf-8"))
-    m = yaml.safe_load((CONFIGS / "refdata" / "markets.yaml").read_text(encoding="utf-8"))
+    f = blobstore.config_yaml("refdata", "fields.yaml")        # 字段口径表：静态配置
+    m = blobstore.config_yaml("refdata", "markets.yaml")
     mem = {}
     for mk in MARKETS:
-        p = CONFIGS / "universe" / "membership" / f"{mk}.csv"
-        if p.exists():
-            d = pd.read_csv(p, dtype=str).fillna("")
+        d = blobstore.membership(mk)
+        if len(d):
             mem[mk] = {"rows": len(d), "sources": d["source"].value_counts().to_dict(),
-                       "point_in_time": bool(len(d)) and not (d["source"] == "current_list").any()}
+                       "point_in_time": not (d["source"] == "current_list").any()}
     from factopia.text.common import DATASETS as TDS
     text_delay = {mk: TDS[ds]["processing_delay_min"] for mk, ds in srcs.TEXT_DATASETS.items() if ds in TDS}
     return {"fields": f, "markets": m, "membership": mem, "text_delay_min": text_delay}

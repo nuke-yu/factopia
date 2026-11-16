@@ -18,6 +18,8 @@ import exchange_calendars as xcals
 import numpy as np
 import pandas as pd
 
+from factopia import blobstore
+
 DATA_DIR = Path(os.environ.get("FACTOPIA_DATA_DIR", "/workspace/runtime/data"))
 RAW_DIR = DATA_DIR / "raw"
 OUT_DIR = DATA_DIR / "standardized"
@@ -138,15 +140,18 @@ def _sha256(path: Path) -> str:
 
 def main() -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
+    from factopia import barstore
     fx = pd.read_parquet(RAW_DIR / "fx.parquet")
     fx["date"] = pd.to_datetime(fx["date"]).dt.tz_localize(None).dt.normalize()
+    barstore.save_fx(fx)          # files 只落 parquet；dual/db 同时进 fx_rate
 
     report = {"thresholds": {"max_missing_ratio": MAX_MISSING_RATIO, "max_jump_days": MAX_JUMP_DAYS,
                              "jump_threshold": JUMP_THRESHOLD}, "markets": {}}
     for market, cfg in MARKETS.items():
         df, rep = _standardize_market(market, cfg, fx)
         path = OUT_DIR / f"{market}.parquet"
-        df.to_parquet(path, index=False)
+        # parquet 始终落一份（qlib 等外部工具要文件）；dual/db 再进 daily_bar
+        barstore.save_bars(market, df)
         rep["sha256"] = _sha256(path)
         report["markets"][market] = rep
         print(f"{market}: {rep['symbols']} 只，{rep['rows']} 行，交易日 {rep['sessions'][2]} 天 "
@@ -154,6 +159,7 @@ def main() -> None:
               f"排除 {len(rep['excluded'])} 只 {rep['excluded']}")
 
     (OUT_DIR / "quality_report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2))
+    blobstore.save_quality(report)
     print(f"已写入 {OUT_DIR}")
 
 

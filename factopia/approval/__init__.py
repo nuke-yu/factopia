@@ -30,7 +30,8 @@ from pathlib import Path
 
 import yaml
 
-from factopia import lang
+from factopia import db, lang, runstore
+from factopia.repo import approval as _repo_approval
 
 RUNTIME = Path(os.environ.get("FACTOPIA_RUNTIME", "/workspace/runtime"))
 CONFIGS = Path(os.environ.get("FACTOPIA_CONFIGS_DIR", "/workspace/configs"))
@@ -106,28 +107,28 @@ def _dir(sid: str) -> Path:
     return DIR / sid
 
 
-def load(sid: str) -> dict:
+def _file_load(sid: str) -> dict:
     p = _dir(sid) / "submission.json"
     if not p.exists():
         raise ApprovalError("提交不存在")
     return json.loads(p.read_text(encoding="utf-8"))
 
 
-def _save(sub: dict) -> None:
+def _file_save(sub: dict) -> None:
     d = _dir(sub["id"])
     tmp = d / "submission.json.tmp"
     tmp.write_text(json.dumps(sub, ensure_ascii=False, indent=1), encoding="utf-8")
     tmp.replace(d / "submission.json")
 
 
-def events(sid: str) -> list[dict]:
+def _file_events(sid: str) -> list[dict]:
     p = _dir(sid) / "events.jsonl"
     return [json.loads(x) for x in p.read_text(encoding="utf-8").splitlines() if x.strip()] if p.exists() else []
 
 
-def _append(sid: str, ev: dict) -> dict:
+def _file_append(sid: str, ev: dict) -> dict:
     """哈希链：每条事件记录上一条的哈希，事件本身的哈希覆盖除 hash 以外的全部字段。"""
-    prev = (events(sid) or [{"hash": "0" * 64}])[-1]["hash"]
+    prev = (_file_events(sid) or [{"hash": "0" * 64}])[-1]["hash"]
     ev = {**ev, "at": now(), "prev": prev}
     ev["hash"] = _sha(_dump({k: v for k, v in ev.items() if k != "hash"}))
     with (_dir(sid) / "events.jsonl").open("a", encoding="utf-8") as f:
@@ -135,16 +136,17 @@ def _append(sid: str, ev: dict) -> dict:
     return ev
 
 
-def verify_chain(sid: str) -> dict:
+def _file_verify_chain(sid: str) -> dict:
     prev = "0" * 64
-    for i, ev in enumerate(events(sid)):
+    evs = _file_events(sid)
+    for i, ev in enumerate(evs):
         if ev["prev"] != prev or _sha(_dump({k: v for k, v in ev.items() if k != "hash"})) != ev["hash"]:
             return {"ok": False, "broken_at": i}
         prev = ev["hash"]
-    return {"ok": True, "events": len(events(sid)), "head": prev}
+    return {"ok": True, "events": len(evs), "head": prev}
 
 
-def list_all(research_id: str | None = None) -> list[dict]:
+def _file_list_all(research_id: str | None = None) -> list[dict]:
     if not DIR.exists():
         return []
     out = []
@@ -224,13 +226,13 @@ def submit(m: dict, by: str, note: str = "") -> dict:
     hits = m["rules"]["setup"]["hits"] + m["rules"]["portfolio"]["hits"]
     model_exc = [mk for mk, e in st["markets"].items()
                  if ((e.get("focus") or {}).get("credibility") or {}).get("state") not in (None, "credible")]
-    report_bytes = m["report"]["path"].read_bytes()
+    report_bytes = (m["report"].get("html") or "").encode("utf-8")
     packs = {p.name: p.read_bytes() for p in sorted((CONFIGS / "rules").glob("*.yaml"))}
     factors = {}
     for mk, e in st["markets"].items():
         f = e.get("focus")
         if f:
-            rounds = json.loads((RUNTIME / "results" / "runs" / e["run_id"] / "rounds.json").read_text(encoding="utf-8"))
+            rounds = runstore.rounds(str(e["run_id"]))
             r = next((x for x in rounds if x["loop"] == f["loop"]), {})
             factors[mk] = [{k: x[k] for k in FACTOR_KEYS if k in x} for x in r.get("factors") or []]
     q = m.get("quality") or {}
@@ -295,8 +297,8 @@ def submit(m: dict, by: str, note: str = "") -> dict:
     sub = {"id": sid, "research_id": spec["id"], "version": spec["version"], "markets": ms, "status": "in_review", "current": 0,
            "steps": [s | {"state": "pending"} for s in steps], "created_at": now(), "created_by": by, "fingerprint": fp,
            "materials": materials, "rule_decisions": {}, "approved_markets": None, "conditions": [], "lock": None}
-    _save(sub)
-    _append(sid, {"action": "submit", "role": "发起研究员", "by": by, "note": note, "fingerprint": fp})
+    # 提交与留痕必须同时成立：数据库模式下一次事务完成，文件模式仍是两步（受限于文件系统）
+    _persist(sub, {"action": "submit", "role": "发起研究员", "by": by, "note": note, "fingerprint": fp})
     return sub
 
 
@@ -417,8 +419,7 @@ def act(sid: str, role: str, by: str, action: str, note: str = "", rule: str | N
         s["lock"] |= {"applicability": {m: v["label"] for m, v in lab["markets"].items()}, "labels": lab}
         ev |= {"markets": s["approved_markets"], "thresholds": thresholds, "labels": lab["display"]}
     s["updated_at"] = now()
-    _save(s)
-    _append(sid, ev)
+    _persist(s, ev)
     return s
 
 
@@ -431,7 +432,7 @@ def evidence_zip(sid: str) -> tuple[str, bytes]:
     chain = verify_chain(sid)
     files: dict[str, bytes] = {
         "submission.json": json.dumps(s, ensure_ascii=False, indent=1).encode("utf-8"),
-        "events.jsonl": (d / "events.jsonl").read_bytes(),
+        "events.jsonl": ("\n".join(json.dumps(e, ensure_ascii=False) for e in evs) + "\n").encode("utf-8"),
         "chain_verification.json": json.dumps(chain, ensure_ascii=False, indent=1).encode("utf-8"),
     }
     for p in sorted((d / "materials").rglob("*")):
@@ -489,3 +490,87 @@ def current_fingerprint(sid: str, m: dict) -> str:
     if {p.name: _sha(p.read_bytes()) for p in sorted((CONFIGS / "rules").glob("*.yaml"))} != mt["rule_packs"]:
         changed.append("规则包")
     return s["fingerprint"] if not changed else "changed:" + "、".join(changed)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 存储分发：files / dual / db
+#
+# 上面是原文件实现（_file_*），下面是公开接口。签名与返回形状保持不变，
+# API / 信号目录 / 线索池都不需要改动。模式由环境变量决定：
+#
+#     FACTOPIA_STORAGE=files        老路径（缺省，用于回滚）
+#     FACTOPIA_STORAGE=dual         写双份：文件为准，数据库补写并记日志；读走文件
+#     FACTOPIA_STORAGE=db           读写都走数据库
+#     FACTOPIA_STORAGE_APPROVAL=db  只切审批域
+#
+# 冻结材料（materials/ 下的报告原件、因子代码、规则包、翻译）**两种模式都留在文件侧**：
+# 它们是不可变归档字节，进数据库换不到任何查询能力，却会吃掉 8 GB 配额。
+# 数据库存的是 materials 元数据与各自的 sha256。
+# ══════════════════════════════════════════════════════════════════════════════
+
+DOMAIN = _repo_approval.DOMAIN
+
+
+def _persist(sub: dict, ev: dict | None = None) -> None:
+    """写入提交（可选带一条留痕）。
+
+    db 模式：一个事务内 upsert 提交 + 重写步骤与规则决定 + 追加事件，
+            中途失败整体回滚，不会留下"提交在、留痕缺"的脏状态。
+    dual 模式：先写文件（读仍以文件为准），再把**文件算好的那条事件**原样补写进数据库，
+            两边 hash 因此逐字相同，切流时链不会断。
+    """
+    mode = db.mode(DOMAIN)
+    if mode == "files":
+        _file_save(sub)
+        if ev is not None:
+            _file_append(sub["id"], ev)
+        return
+    if mode == "dual":
+        _file_save(sub)
+        stamped = _file_append(sub["id"], ev) if ev is not None else None
+        db.mirror(lambda: _repo_approval.save(sub, exact_event=stamped), "approval.persist")
+        return
+    # db 模式：自己算 at/prev/hash，保证与文件版同一口径
+    _repo_approval.save(sub, event=ev)
+
+
+def load(sid: str) -> dict:
+    _dir(sid)                       # 保持"提交编号无效"的校验时机与原实现一致
+    if db.is_primary(DOMAIN):
+        try:
+            return _repo_approval.load(sid)
+        except FileNotFoundError as exc:
+            raise ApprovalError("提交不存在") from exc
+    return _file_load(sid)
+
+
+def save(sub: dict) -> None:
+    """整条写入（公开接口，供迁移与维护脚本用）。"""
+    _persist(sub)
+
+
+def events(sid: str) -> list[dict]:
+    _dir(sid)
+    if db.is_primary(DOMAIN):
+        return _repo_approval.events(sid)
+    return _file_events(sid)
+
+
+def append(sid: str, ev: dict) -> dict:
+    """追加一条留痕（公开接口；内部由 `_persist` 使用）。"""
+    if db.is_primary(DOMAIN):
+        with db.tx() as conn:
+            return _repo_approval.append_event(conn, sid, ev)
+    return _file_append(sid, ev)
+
+
+def verify_chain(sid: str) -> dict:
+    if db.is_primary(DOMAIN):
+        return _repo_approval.verify_chain(sid)
+    return _file_verify_chain(sid)
+
+
+def list_all(research_id: str | None = None) -> list[dict]:
+    if db.is_primary(DOMAIN):
+        return [summary(load(sid)) for sid in _repo_approval.ids(research_id)]
+    return _file_list_all(research_id)

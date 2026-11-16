@@ -12,11 +12,10 @@
 拆股日前后未复权价应出现与比例一致的跳变，复权价不应有该跳变（check_adjustment）。
 """
 import json
-import os
-from pathlib import Path
 
 import pandas as pd
 
+from factopia import blobstore, db
 from factopia.refdata.master import REF, RUNTIME, _cache, _save, now, universe
 
 SUSPEND_MIN = 3
@@ -68,10 +67,10 @@ def suspensions(market: str) -> list[dict]:
 
     from factopia.data.standardize import MARKETS as STD
 
-    path = RUNTIME / "data" / "standardized" / f"{market}.parquet"
-    if not path.exists():
+    from factopia import barstore
+    if not barstore.has_bars(market):
         return []
-    df = pd.read_parquet(path, columns=["symbol", "date", "volume"])
+    df = barstore.bars(market, columns=["symbol", "date", "volume"])
     cal = xcals.get_calendar(STD[market]["calendar"])
     out = []
     for sym, g in df.groupby("symbol"):
@@ -97,10 +96,10 @@ MIN_JUMP = 0.15     # 只检查未复权跳变 ≥ 15% 的拆股 / 合股
 
 def check_adjustment(market: str, splits: pd.DataFrame) -> list[dict]:
     """复权检查：拆股日复权收盘价的日收益应正常（|收益| < 1 - 1/比例 的一半），否则说明复权缺失。"""
-    path = RUNTIME / "data" / "standardized" / f"{market}.parquet"
-    if splits.empty or not path.exists():
+    from factopia import barstore
+    if splits.empty or not barstore.has_bars(market):
         return []
-    px = pd.read_parquet(path, columns=["symbol", "date", "close"]).sort_values(["symbol", "date"])
+    px = barstore.bars(market, columns=["symbol", "date", "close"]).sort_values(["symbol", "date"])
     px["ret"] = px.groupby("symbol")["close"].pct_change()
     out = []
     first = px.groupby("symbol")["date"].min()
@@ -150,8 +149,13 @@ def build(symbols: list[str] | None = None) -> dict:
         df = pd.concat([df, va[["symbol", "market", "date", "type", "value", "detail", "source"]]], ignore_index=True)
     df["type_zh"] = df["type"].map(lambda t: TYPE_ZH.get(t) or vendor.ACTION_TYPES.get(t, t))
     df = df.sort_values(["symbol", "date"]).reset_index(drop=True)
-    REF.mkdir(parents=True, exist_ok=True)
-    df.to_parquet(REF / "corporate_actions.parquet", index=False)
+    mode = db.mode("refdata")
+    if mode in ("files", "dual"):
+        REF.mkdir(parents=True, exist_ok=True)
+        df.to_parquet(REF / "corporate_actions.parquet", index=False)
+    if mode in ("dual", "db"):
+        from factopia.repo import refdata as repo_refdata
+        repo_refdata.save_corporate_actions(df, prune=symbols is None)
     checks = []
     for m in sorted(set(uni["market"])):
         checks += check_adjustment(m, df[(df["type"] == "split") & (df["market"] == m)])
@@ -162,4 +166,5 @@ def build(symbols: list[str] | None = None) -> dict:
                "not_covered": [zh for t, zh in {"merger": "合并", "rights_issue": "配股", "delisting": "退市",
                                                 "name_change": "名称变更"}.items() if t not in set(df["type"])]}
     (REF / "actions_summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=1))
+    blobstore.save_refdata_summary("actions_summary", summary)
     return summary

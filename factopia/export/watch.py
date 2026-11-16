@@ -7,7 +7,8 @@ import time
 import traceback
 from datetime import datetime
 
-from factopia.export.backtests import RUNS_DIR, export_run
+from factopia import runstore
+from factopia.export.backtests import export_run
 
 POLL_S = 10
 
@@ -15,7 +16,9 @@ POLL_S = 10
 def main() -> None:
     print("[exporter] 等待待导出的运行", flush=True)
     while True:
-        for marker in sorted(RUNS_DIR.glob("*/.backtest_pending")):
+        # 结果卷的路径只从 runstore 取：db 模式下 run.json 可能不在文件里，
+        # 但待导出的标记（.backtest_pending）始终是文件，扫描入口保持唯一。
+        for marker in sorted(runstore.RUNS_DIR.glob("*/.backtest_pending")):
             run_dir = marker.parent
             try:
                 n = export_run(run_dir)

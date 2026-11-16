@@ -10,7 +10,9 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /workspace/factopia
 
 COPY docker/api/requirements.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir -r /tmp/requirements.txt
+# 镜像源可覆盖：国内默认走阿里云（与 rdagent 镜像一致），海外传 --build-arg PIP_INDEX_URL=官方源
+ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple
+RUN pip install --no-cache-dir -i "$PIP_INDEX_URL" -r /tmp/requirements.txt
 
 # 代码与配置随镜像发布，云端部署无需挂载源码（本地开发时由 compose.local.yml 挂载覆盖）
 COPY factopia/__init__.py factopia/__init__.py

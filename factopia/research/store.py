@@ -21,6 +21,10 @@ from pathlib import Path
 
 import yaml
 
+from factopia import db
+from factopia.repo import jobs as _repo_jobs
+from factopia.repo import research as _repo_research
+
 RUNTIME = Path(os.environ.get("FACTOPIA_RUNTIME", "/workspace/runtime"))
 RESEARCH_DIR = RUNTIME / "research"
 JOBS_DIR = RUNTIME / "jobs"
@@ -60,15 +64,15 @@ def version_path(research_id: str, version: int) -> Path:
     return RESEARCH_DIR / research_id / f"v{version}.yaml"
 
 
-def versions(research_id: str) -> list[int]:
+def _file_versions(research_id: str) -> list[int]:
     return sorted(int(p.stem[1:]) for p in (RESEARCH_DIR / research_id).glob("v*.yaml") if p.stem[1:].isdigit())
 
 
-def load_version(research_id: str, version: int) -> dict:
+def _file_load_version(research_id: str, version: int) -> dict:
     return yaml.safe_load(version_path(research_id, version).read_text(encoding="utf-8"))
 
 
-def save_version(spec: dict) -> dict:
+def _file_save_version(spec: dict) -> dict:
     """写入下一个版本号；文件以独占方式创建，已存在的版本不会被覆盖。"""
     existing = versions(spec["id"])
     spec = {**spec, "version": (existing[-1] + 1) if existing else 1, "locked_at": now()}
@@ -79,7 +83,7 @@ def save_version(spec: dict) -> dict:
     return spec
 
 
-def research_ids() -> list[str]:
+def _file_research_ids() -> list[str]:
     return sorted(p.name for p in RESEARCH_DIR.glob("*") if p.is_dir() and versions(p.name))
 
 
@@ -91,7 +95,7 @@ def termination_path(research_id: str) -> Path:
     return RESEARCH_DIR / research_id / "terminated.json"
 
 
-def termination(research_id: str | None) -> dict | None:
+def _file_termination(research_id: str | None) -> dict | None:
     if not research_id:
         return None
     path = termination_path(research_id)
@@ -103,10 +107,10 @@ def termination(research_id: str | None) -> dict | None:
         return None
 
 
-def terminate(research_id: str, version: int | None = None, reason: str = "人工终止当前研究",
+def _file_terminate(research_id: str, version: int | None = None, reason: str = "人工终止当前研究",
               by: str = "研究员（演示，未登录）") -> dict:
     """写入终止标记；重复调用返回第一次的记录（幂等）。"""
-    existing = termination(research_id)
+    existing = _file_termination(research_id)
     if existing:
         return existing
     rec = {"research_id": research_id, "version": version, "at": now(), "by": by, "reason": str(reason)[:1000]}
@@ -186,15 +190,15 @@ def create_agent_job(agent_id: str, research_id: str, version: int, markets: lis
     return job
 
 
-def write_job(job: dict) -> None:
+def _file_write_job(job: dict) -> None:
     _atomic_write(JOBS_DIR / f"{job['job_id']}.json", _dumps(job, indent=2))
 
 
-def load_job(job_id: str) -> dict:
+def _file_load_job(job_id: str) -> dict:
     return json.loads((JOBS_DIR / f"{job_id}.json").read_text(encoding="utf-8"))
 
 
-def list_jobs() -> list[dict]:
+def _file_list_jobs() -> list[dict]:
     jobs = []
     for p in JOBS_DIR.glob("*.json"):
         if p.name.endswith(".live.json"):  # 实时状态文件，不是任务
@@ -206,11 +210,11 @@ def list_jobs() -> list[dict]:
     return sorted(jobs, key=lambda j: j["job_id"])
 
 
-def request_cancel(job_id: str) -> None:
+def _file_request_cancel(job_id: str) -> None:
     (JOBS_DIR / f"{job_id}.cancel").write_text(now(), encoding="utf-8")
 
 
-def cancel_requested(job_id: str) -> bool:
+def _file_cancel_requested(job_id: str) -> bool:
     return (JOBS_DIR / f"{job_id}.cancel").exists()
 
 
@@ -218,11 +222,11 @@ def log_path(job_id: str) -> Path:
     return JOBS_DIR / f"{job_id}.log"
 
 
-def write_live(job_id: str, state: dict) -> None:
+def _file_write_live(job_id: str, state: dict) -> None:
     _atomic_write(JOBS_DIR / f"{job_id}.live.json", _dumps(state))
 
 
-def load_live(job_id: str) -> dict | None:
+def _file_load_live(job_id: str) -> dict | None:
     path = JOBS_DIR / f"{job_id}.live.json"
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
 
@@ -232,15 +236,15 @@ def load_live(job_id: str) -> dict | None:
 PAUSE_FILE = JOBS_DIR / ".paused"
 
 
-def pause(reason: str) -> None:
+def _file_pause(reason: str) -> None:
     _atomic_write(PAUSE_FILE, json.dumps({"reason": reason, "at": now()}, ensure_ascii=False))
 
 
-def paused() -> dict | None:
+def _file_paused() -> dict | None:
     return json.loads(PAUSE_FILE.read_text(encoding="utf-8")) if PAUSE_FILE.exists() else None
 
 
-def resume() -> None:
+def _file_resume() -> None:
     PAUSE_FILE.unlink(missing_ok=True)
 
 
@@ -303,3 +307,229 @@ def retry_job(job: dict) -> dict:
         return {"batch_id": job["batch_id"], "jobs": [job]}
     return create_jobs(job["research_id"], job["version"], [job["market"]], job["horizon"], job["loops"], job["budget_usd"],
                        job.get("kind"))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 存储分发：files / dual / db
+#
+# 上面是原文件实现（_file_*），下面是公开接口。签名、返回值形状、异常类型全部保持不变，
+# 调用方（API / runner / exporter）不需要改动。模式由环境变量决定：
+#
+#     FACTOPIA_STORAGE=files   老路径（缺省，用于回滚）
+#     FACTOPIA_STORAGE=dual    写双份：文件为准，DB 补写并记日志；读走文件
+#     FACTOPIA_STORAGE=db      读写都走数据库
+#     FACTOPIA_STORAGE_RESEARCH / FACTOPIA_STORAGE_JOBS   按域覆盖
+# ══════════════════════════════════════════════════════════════════════════════
+
+RESEARCH_DOMAIN = "research"
+JOBS_DOMAIN = "jobs"
+
+
+# ── 研究规格 ─────────────────────────────────────────────────
+
+def ensure_version_file(research_id: str, version: int) -> Path:
+    """返回规格文件路径，必要时从数据库物化。
+
+    外部进程（RD-Agent、exporter）只认文件路径，不接受"从数据库读"，所以 db 模式下
+    第一次用到某个版本时把它落成只读副本。这份副本是**派生物**，不是事实来源：
+    删掉会自动重建，内容以 `research_version.spec` 为准。
+    """
+    path = version_path(research_id, version)
+    if path.exists() or not db.is_primary(RESEARCH_DOMAIN):
+        return path
+    spec = _repo_research.load_version(research_id, version)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    yaml.safe_dump(spec, path.open("w", encoding="utf-8"), allow_unicode=True, sort_keys=False, width=120)
+    return path
+
+
+def versions(research_id: str) -> list[int]:
+    if db.is_primary(RESEARCH_DOMAIN):
+        return _repo_research.versions(research_id)
+    return _file_versions(research_id)
+
+
+def load_version(research_id: str, version: int) -> dict:
+    if db.is_primary(RESEARCH_DOMAIN):
+        return _repo_research.load_version(research_id, version)
+    return _file_load_version(research_id, version)
+
+
+def save_version(spec: dict) -> dict:
+    mode = db.mode(RESEARCH_DOMAIN)
+    if mode == "db":
+        return _repo_research.save_version(spec)
+    out = _file_save_version(spec)          # 文件为准，版本号由文件决定
+    if mode == "dual":
+        # 显式传版本号，避免两边各算一次导致错位
+        db.mirror(lambda: _repo_research.save_version(out, version=out["version"]), "research.save_version")
+    return out
+
+
+def research_ids() -> list[str]:
+    if db.is_primary(RESEARCH_DOMAIN):
+        return _repo_research.research_ids()
+    return _file_research_ids()
+
+
+def termination(research_id: str | None) -> dict | None:
+    if db.is_primary(RESEARCH_DOMAIN):
+        return _repo_research.termination(research_id)
+    return _file_termination(research_id)
+
+
+def terminate(research_id: str, version: int | None = None, reason: str = "人工终止当前研究",
+              by: str = "研究员（演示，未登录）") -> dict:
+    mode = db.mode(RESEARCH_DOMAIN)
+    if mode == "db":
+        return _repo_research.terminate(research_id, version, reason, by)
+    out = _file_terminate(research_id, version, reason, by)
+    if mode == "dual":
+        db.mirror(lambda: _repo_research.terminate(research_id, version, reason, by), "research.terminate")
+    return out
+
+
+# ── 任务队列 ─────────────────────────────────────────────────
+
+def write_job(job: dict) -> None:
+    mode = db.mode(JOBS_DOMAIN)
+    if mode == "db":
+        _repo_jobs.upsert_job(job)
+        return
+    _file_write_job(job)
+    if mode == "dual":
+        db.mirror(lambda: _repo_jobs.upsert_job(job), "jobs.write_job")
+
+
+def load_job(job_id: str) -> dict:
+    if db.is_primary(JOBS_DOMAIN):
+        return _repo_jobs.load_job(job_id)
+    return _file_load_job(job_id)
+
+
+def list_jobs() -> list[dict]:
+    if db.is_primary(JOBS_DOMAIN):
+        return _repo_jobs.list_jobs()
+    return _file_list_jobs()
+
+
+def request_cancel(job_id: str) -> None:
+    mode = db.mode(JOBS_DOMAIN)
+    if mode in ("db", "dual"):
+        # 取消是"写"，dual 模式下两边都要写：文件给旧 runner 看，DB 给新 runner 看
+        if mode == "dual":
+            _file_request_cancel(job_id)
+        _repo_jobs.request_cancel(job_id)
+        return
+    _file_request_cancel(job_id)
+
+
+def cancel_requested(job_id: str) -> bool:
+    if db.is_primary(JOBS_DOMAIN):
+        return _repo_jobs.cancel_requested(job_id)
+    return _file_cancel_requested(job_id)
+
+
+def claim_job(active: set[str] | None = None) -> dict | None:
+    """取出下一个排队任务（原子）。
+
+    `db` 模式用数据库的 `FOR UPDATE SKIP LOCKED`，多个 runner 不会重复领取；
+    `files` / `dual` 模式仍是扫描目录的老逻辑（读走文件，不做跨进程互斥）。
+    """
+    if db.is_primary(JOBS_DOMAIN):
+        return _repo_jobs.claim_job(active)
+    if _file_paused():
+        return None
+    for job in _file_list_jobs():
+        if job["state"] != "queued" or job["job_id"] in (active or set()):
+            continue
+        if _file_cancel_requested(job["job_id"]):
+            job.update(state="cancelled", ended_at=now())
+            _file_write_job(job)
+            continue
+        return job
+    return None
+
+
+def recover_running() -> list[dict]:
+    """运行器重启的善后：返回被调整过的任务。db 模式一条 SQL 搞定，避免读一遍再写一遍。"""
+    if db.is_primary(JOBS_DOMAIN):
+        return _repo_jobs.recover_running()
+    touched = []
+    for job in _file_list_jobs():
+        if job["state"] != "running":
+            continue
+        if job.get("kind") == "agent":
+            job.update(state="queued", error=None, ended_at=None)
+        else:
+            job.update(state="failed", ended_at=now(), error="运行器重启，运行中断")
+        _file_write_job(job)
+        touched.append(job)
+    return touched
+
+
+# ── 实时状态 ─────────────────────────────────────────────────
+
+def write_live(job_id: str, state: dict) -> None:
+    mode = db.mode(JOBS_DOMAIN)
+    if mode == "db":
+        _repo_jobs.write_live(job_id, state)
+        return
+    _file_write_live(job_id, state)
+    if mode == "dual":
+        db.mirror(lambda: _repo_jobs.write_live(job_id, state), "jobs.write_live")
+
+
+def load_live(job_id: str) -> dict | None:
+    if db.is_primary(JOBS_DOMAIN):
+        return _repo_jobs.load_live(job_id)
+    return _file_load_live(job_id)
+
+
+# ── 排队暂停 ─────────────────────────────────────────────────
+
+def pause(reason: str) -> None:
+    mode = db.mode(JOBS_DOMAIN)
+    if mode == "db":
+        _repo_jobs.pause(reason)
+        return
+    _file_pause(reason)
+    if mode == "dual":
+        db.mirror(lambda: _repo_jobs.pause(reason), "jobs.pause")
+
+
+def paused() -> dict | None:
+    if db.is_primary(JOBS_DOMAIN):
+        return _repo_jobs.paused()
+    return _file_paused()
+
+
+def resume() -> None:
+    mode = db.mode(JOBS_DOMAIN)
+    if mode == "db":
+        _repo_jobs.resume()
+        return
+    _file_resume()
+    if mode == "dual":
+        db.mirror(_repo_jobs.resume, "jobs.resume")
+
+
+# ── AI 解释存档（原 explain_v<k>.json）────────────────────────
+
+def explain(research_id: str, version: int) -> dict | None:
+    if db.is_primary(RESEARCH_DOMAIN):
+        return _repo_research.explain(research_id, version)
+    p = RESEARCH_DIR / research_id / f"explain_v{version}.json"
+    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
+
+
+def save_explain(research_id: str, version: int, obj: dict) -> None:
+    mode = db.mode(RESEARCH_DOMAIN)
+    if mode == "db":
+        _repo_research.save_explain(research_id, version, obj)
+        return
+    p = RESEARCH_DIR / research_id / f"explain_v{version}.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(obj, ensure_ascii=False, indent=1), encoding="utf-8")
+    if mode == "dual":
+        db.mirror(lambda: _repo_research.save_explain(research_id, version, obj), "research.explain")

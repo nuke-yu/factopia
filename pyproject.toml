@@ -17,6 +17,9 @@ dependencies = [
     # 公告 PDF 提取文本（factopia.text）
     "pypdf",
     "pyyaml",
+    # 数据库存储（factopia.db / factopia.repo / tools/migrate_files.py）
+    # search_path 与 statement_timeout 由 DSN 的 options 指定，不用 ORM
+    "psycopg[binary,pool]>=3.2",
 ]
 
 [project.optional-dependencies]

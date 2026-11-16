@@ -25,10 +25,11 @@ import numpy as np
 import pandas as pd
 
 from factopia import rules, sources
-from factopia.export.backtests import RUNS_DIR, quantile_returns
+from factopia.export.backtests import quantile_returns
 from factopia.research import periods as rperiods
 from factopia.research import store, verdict
 from factopia.text import signal as tsignal
+from factopia import runstore
 from factopia.text.common import DATASETS, concept_names, ds_dir, read_json
 from factopia.validate import metrics as vm
 
@@ -199,7 +200,7 @@ def run(job: dict, log=print) -> str:
     rule = verdict.rules(spec)
     direction = rule["ric_sign"]
     run_id = f"{m}_h{h}_{datetime.now(timezone.utc):%Y%m%d%H%M%S}"
-    out = RUNS_DIR / run_id
+    out = runstore.RUNS_DIR / run_id
     out.mkdir(parents=True, exist_ok=True)
     log(f"{run_id}：文本信号研究 {job['research_id']} v{job['version']}，数据集 {ds}（{cfg['source']}）")
 
@@ -366,5 +367,5 @@ def validate(run, raw, oriented, close, bench, label, per, topk, n_drop, cost, s
                          "share_ge_baseline": round(sum(r >= bl_test for r in rets) / len(rets), 4) if rets and bl_test is not None else None,
                          "median": round(float(np.median(rets)), 6) if rets else None}
     result["ended_at"] = _now()
-    _write_json(RUNS_DIR / run["run_id"] / "validation" / "0.json", result | {"status": "done"})
+    _write_json(runstore.RUNS_DIR / run["run_id"] / "validation" / "0.json", result | {"status": "done"})
     log(f"{run['run_id']}：安慰剂 {result['placebo']['share_ge_ai']}")

@@ -5,19 +5,16 @@
 - 决策事实只用验证期及以前的数据；测试期 / holdout 只以状态和定性描述出现，**不含具体数值**；
 - 完整数值留在各运行目录中，由页面按权限展示，不进入 Agent 的提示词。
 
-P0 只读已导出的 run.json / rounds.json / diagnostics / validation / quantile，
+P0 只读已导出的 run / rounds / diagnostics / validation / quantile —— 一律经 `runstore`，
+所以 `FACTOPIA_STORAGE_RUNS=db` 时读到的是库里的那一份，不会是上一次留下的文件。
 不重跑回测、不调用大模型。
 """
-import json
-import os
 import re
-from pathlib import Path
 
+from factopia import runstore
 from factopia.agents import store as astore
 from factopia.research import store as rstore
 from factopia.research import verdict
-
-RESULTS = Path(os.environ.get("FACTOPIA_RESULTS_DIR", str(astore.RUNTIME / "results")))
 
 CHECK_LABELS = {
     "rank_ic": "rank IC direction",
@@ -34,22 +31,10 @@ CRED_LABELS = {
 }
 
 
-def _read_json(path: Path) -> dict | list | None:
-    try:
-        return json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-
-
 def _runs(research_id: str, version: int) -> list[dict]:
-    d = RESULTS / "runs"
-    if not d.exists():
-        return []
+    """同一研究版本的全部运行（新的在前）。走 `runstore`，db 模式下就不会再读旧文件。"""
     out = []
-    for path in sorted(d.glob("*/run.json"), reverse=True):
-        run = _read_json(path)
-        if not isinstance(run, dict):
-            continue
+    for run in sorted(runstore.all_runs(), key=lambda r: str(r.get("run_id")), reverse=True):
         r = run.get("research") or {}
         if r.get("id") == research_id and r.get("version") == version:
             if run.get("context_leak"):
@@ -114,7 +99,7 @@ def _market_facts(add, m: str, runs: list[dict], jobs: list[dict], rule: dict) -
     if state != "done":
         add(f"{m}.state", f"{label}: latest run state is {state}; no conclusion yet.", market=m, period="run state")
         return {"state": state, "focus": None}
-    rounds = _read_json(RESULTS / "runs" / run["run_id"] / "rounds.json") or []
+    rounds = runstore.rounds(run["run_id"])
     if not isinstance(rounds, list):
         rounds = []
     judged = {v["loop"]: v for v in verdict.judge_rounds(run, rounds, rule)}
@@ -143,13 +128,13 @@ def _market_facts(add, m: str, runs: list[dict], jobs: list[dict], rule: dict) -
             f"{label}: credibility check status is {cred['state']}"
             + (f"; failed checks: {', '.join(cred['failed'])}." if cred["failed"] else "."),
             market=m, period="test/holdout (status only)", redacted=True)
-        diag = _read_json(RESULTS / "runs" / run["run_id"] / "diagnostics" / f"{focus['loop']}.json")
+        diag = runstore.diagnostic(run["run_id"], focus["loop"])
         entry["diagnostics"] = diag if isinstance(diag, dict) else None
         observations = _diagnostic_observations(entry["diagnostics"])
         if observations:
             add(f"{m}.diagnostics", f"{label}: " + "; ".join(observations) + ".",
                 market=m, period="test (qualitative)", redacted=True)
-        quantile = _read_json(RESULTS / "runs" / run["run_id"] / "quantile" / f"{focus['loop']}.json")
+        quantile = runstore.quantile(run["run_id"], str(focus["loop"]))
         qobs = _quantile_observations(quantile, rule["ric_sign"])
         if qobs:
             add(f"{m}.quantile", f"{label}: " + "; ".join(qobs) + ".",
@@ -169,7 +154,7 @@ def _baseline_fact(add, m: str, run: dict, focus: dict) -> None:
 
 
 def _credibility(run_id: str, loop, rule: dict) -> dict:
-    val = _read_json(RESULTS / "runs" / run_id / "validation" / f"{loop}.json")
+    val = runstore.validation(run_id, loop)
     if not isinstance(val, dict):
         return {"state": "unchecked", "failed": []}
     try:
@@ -181,13 +166,14 @@ def _credibility(run_id: str, loop, rule: dict) -> dict:
 
 
 def _signal_sig(run_id: str, loop, horizon: int) -> dict | None:
-    path = RESULTS / "runs" / run_id / "signal" / f"{loop}.parquet"
-    if not path.exists():
+    """逐日打分 parquet 仍是文件产物（B 类），但入口统一在 `runstore`。"""
+    if loop is None or not runstore.has_signal(run_id, str(loop)):
         return None
     try:
-        import pandas as pd
         from factopia.validate import metrics as vm
-        df = pd.read_parquet(path)
+        df = runstore.signal(run_id, str(loop))
+        if df.empty:
+            return None
         return vm.significance(df.set_index("date")["rank_ic"], horizon)
     except Exception:
         return None
@@ -312,18 +298,14 @@ def _library_facts(add) -> None:
 
 def _past_facts(add, markets: list[str], horizon: int) -> None:
     """以往轮次只给假设方向与是否采纳（与 factopia.research.evidence 口径一致）。"""
-    d = RESULTS / "runs"
-    if not d.exists():
-        return
     count = 0
-    for path in sorted(d.glob("*/run.json"), reverse=True):
-        run = _read_json(path)
-        if not isinstance(run, dict) or run.get("market") not in markets or run.get("horizon") != horizon:
+    for run in sorted(runstore.all_runs(), key=lambda r: str(r.get("run_id")), reverse=True):
+        if run.get("market") not in markets or run.get("horizon") != horizon:
             continue
         if run.get("context_leak") or run.get("kind") == "text":
             continue
-        rounds = _read_json(path.parent / "rounds.json") or []
-        for r in rounds if isinstance(rounds, list) else []:
+        rounds = runstore.rounds(run["run_id"])
+        for r in rounds:
             if r.get("hypothesis") and r.get("decision") is not None:
                 add("past.run", f"Past RD-Agent round ({run['market']}, "
                                 f"{'adopted' if r['decision'] else 'not adopted'}): {r['hypothesis']}", period="past runs")

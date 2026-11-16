@@ -19,7 +19,7 @@ import pandas as pd
 
 from factopia.factors.stats import newey_west_t
 from factopia.text import review
-from factopia.text.common import DATASETS, PRICES, concept_names, ds_dir, is_table, pipeline, read_json, series_exclusion, write_json
+from factopia.text.common import DATASETS, concept_names, ds_dir, is_table, pipeline, read_json, series_exclusion, write_json
 
 HOLD_DAYS = 63
 MIN_STOCKS = 5
@@ -27,9 +27,12 @@ TOP_CITATIONS = 3
 
 
 def prices(dataset: str) -> pd.DataFrame:
-    path = ds_dir(dataset) / "prices.parquet" if DATASETS[dataset]["simulated"] \
-        else PRICES / f"{DATASETS[dataset]['market']}.parquet"
-    df = pd.read_parquet(path, columns=["symbol", "date", "close"])
+    """收盘价。模拟数据集读自己的 parquet，真实市场走 barstore（db 模式读 daily_bar）。"""
+    if DATASETS[dataset]["simulated"]:
+        df = pd.read_parquet(ds_dir(dataset) / "prices.parquet", columns=["symbol", "date", "close"])
+    else:
+        from factopia import barstore
+        df = barstore.bars(DATASETS[dataset]["market"], columns=["symbol", "date", "close"])
     return df.pivot(index="date", columns="symbol", values="close").sort_index()
 
 

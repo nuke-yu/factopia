@@ -69,6 +69,14 @@ class LLMSettings(ExtendedBaseSettings):
     chat_max_tokens: int | None = None
     chat_temperature: float = 0.5
     chat_stream: bool = True
+    chat_disable_thinking: bool = False
+    """关闭推理模型的思考阶段（DeepSeek / Qwen3 经 DashScope 兼容接口提供时适用）。
+
+    思考 token 不计入正文，但会占用生成时间。实测同一模型、同一端点，复杂因子题上约 83%
+    的 completion token 花在 reasoning 上，正文只剩两百来 token；单次调用从 20 秒膨胀到
+    2-13 分钟。开启后请求体带上 extra_body={"enable_thinking": false}，正文输出反而更完整，
+    总 token 消耗也更低。仅对支持该参数的模型有效，其他模型会忽略未知字段。
+    """
     chat_seed: int | None = None
     chat_frequency_penalty: float = 0.0
     chat_presence_penalty: float = 0.0

@@ -11,6 +11,9 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
+from factopia import db
+from factopia.repo import ops as _repo_ops
+
 RUNTIME = Path(os.environ.get("FACTOPIA_RUNTIME", "/workspace/runtime"))
 LEDGER = RUNTIME / "llm_costs.jsonl"
 
@@ -27,6 +30,14 @@ def usd(prompt_tokens: int, completion_tokens: int) -> float:
 def record(task: str, model: str, usage: dict) -> float:
     pt, ct = int(usage.get("prompt_tokens") or 0), int(usage.get("completion_tokens") or 0)
     cost = usd(pt, ct)
+    mode = db.mode(_repo_ops.COST_DOMAIN)
+    if mode == "db":
+        try:
+            _repo_ops.record_cost(task, model, pt, ct, cost)
+        except Exception:                       # 记录失败不影响调用本身
+            pass
+        return cost
+    # files / dual：jsonl 账本是读端真相（summary 按 dual 读文件）
     try:
         LEDGER.parent.mkdir(parents=True, exist_ok=True)
         with LEDGER.open("a", encoding="utf-8") as f:
@@ -34,10 +45,16 @@ def record(task: str, model: str, usage: dict) -> float:
                                 "prompt_tokens": pt, "completion_tokens": ct, "usd": round(cost, 6)}, ensure_ascii=False) + "\n")
     except OSError:                                    # 记录失败不影响调用本身
         pass
+    if mode == "dual":
+        db.mirror(lambda: _repo_ops.record_cost(task, model, pt, ct, cost), "llm_cost.record")
     return cost
 
 
 def summary(days: int = 30) -> dict:
+    if db.is_primary(_repo_ops.COST_DOMAIN):
+        out = _repo_ops.cost_summary(days)
+        out["price_per_million"] = dict(zip(("in", "out"), prices()))
+        return out
     by = defaultdict(lambda: {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "usd": 0.0})
     if LEDGER.exists():
         for line in LEDGER.read_text(encoding="utf-8").splitlines():

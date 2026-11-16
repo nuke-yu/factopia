@@ -43,7 +43,8 @@ def close(market: str, dataset: str | None = None) -> pd.DataFrame:
     if dataset in SIMULATED:
         df = _demo(dataset)
     else:
-        df = pd.read_parquet(RUNTIME / "data" / "standardized" / f"{market}.parquet", columns=["symbol", "date", "close"])
+        from factopia import barstore
+        df = barstore.bars(market, columns=["symbol", "date", "close"])
         df["date"] = pd.to_datetime(df["date"])
     return df.pivot(index="date", columns="symbol", values="close").sort_index()
 
@@ -52,7 +53,8 @@ def volume(market: str, dataset: str | None = None) -> pd.DataFrame | None:
     """日期 × 股票 成交量；模拟数据没有成交量，返回 None。"""
     if dataset in SIMULATED:
         return None
-    df = pd.read_parquet(RUNTIME / "data" / "standardized" / f"{market}.parquet", columns=["symbol", "date", "volume"])
+    from factopia import barstore
+    df = barstore.bars(market, columns=["symbol", "date", "volume"])
     df["date"] = pd.to_datetime(df["date"])
     return df.pivot(index="date", columns="symbol", values="volume").sort_index()
 

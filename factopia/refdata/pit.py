@@ -9,6 +9,7 @@ from pathlib import Path
 
 import yaml
 
+from factopia import blobstore
 from factopia.refdata import membership
 from factopia.refdata.master import CONFIGS, REF, RUNTIME, now
 
@@ -52,5 +53,6 @@ def build() -> dict:
            "markets_version": mk["version"]}
     RESULTS.mkdir(parents=True, exist_ok=True)
     (RESULTS / "pit_status.json").write_text(json.dumps(out, ensure_ascii=False, indent=1))
+    blobstore.save_pit(out)          # db/dual：结果页不再依赖这份文件
     REF.mkdir(parents=True, exist_ok=True)
     return out

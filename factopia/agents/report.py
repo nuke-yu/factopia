@@ -83,7 +83,6 @@ def build(agent: dict) -> str:
 def write(agent: dict) -> None:
     """写报告；报告失败不掩盖主流程异常。"""
     try:
-        path = store.dir_path(agent["agent_id"]) / "report.md"
-        store._atomic_write(path, build(agent))
+        store.save_report(agent["agent_id"], build(agent))
     except Exception:
         pass

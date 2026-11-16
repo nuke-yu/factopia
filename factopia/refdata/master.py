@@ -21,6 +21,8 @@ import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
+
+from factopia import blobstore, db
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -372,9 +374,17 @@ def build(cross_listings: bool = True, symbols: list[str] | None = None) -> dict
             if k in sec.columns:
                 sec.loc[sec["symbol"] == s, k] = v
         sec.loc[sec["symbol"] == s, "primary_listing_basis"] = "人工确认"
-    REF.mkdir(parents=True, exist_ok=True)
-    sec.to_parquet(REF / "securities.parquet", index=False)
-    rel.to_parquet(REF / "relations.parquet", index=False)
+    # files 落 parquet、dual 两边、db 只入表（parquet 降级为派生物化产物）
+    mode = db.mode("refdata")
+    if mode in ("files", "dual"):
+        REF.mkdir(parents=True, exist_ok=True)
+        sec.to_parquet(REF / "securities.parquet", index=False)
+        rel.to_parquet(REF / "relations.parquet", index=False)
+    if mode in ("dual", "db"):
+        from factopia.repo import refdata as repo_refdata
+        # 局部重建（symbols 非空）时不按缺失删除，否则会把没参与本次重建的标的清掉
+        repo_refdata.save_securities(sec, prune=symbols is None)
+        repo_refdata.save_relations(rel, prune=symbols is None)
     summary = {"built_at": now(), "securities": len(sec), "issuers": int(sec["issuer_id"].nunique()),
                "with_lei": int(sec["lei"].notna().sum()), "with_figi": int(sec["figi"].notna().sum()),
                "with_isin": int(sec["isin"].notna().sum()),
@@ -383,4 +393,5 @@ def build(cross_listings: bool = True, symbols: list[str] | None = None) -> dict
                "primary_unresolved": int(sec["primary_listing"].isna().sum()),
                "cross_listings_searched": bool(listings_raw), "markets_version": cfg["version"]}
     (REF / "master_summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=1))
+    blobstore.save_refdata_summary("master_summary", summary)      # db/dual 模式下同时进 app_state
     return summary

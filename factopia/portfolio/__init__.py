@@ -26,7 +26,8 @@ import numpy as np
 import pandas as pd
 import yaml
 
-from factopia import rules, sources
+from factopia import db, rules, sources
+from factopia.repo import portfolio as _repo_portfolio
 from factopia.rules import context as rctx
 
 RUNTIME = Path(os.environ.get("FACTOPIA_RUNTIME", "/workspace/runtime"))
@@ -296,13 +297,9 @@ def build(spec: dict, study: dict) -> dict:
         "backtest_note": "回测基于 Yahoo Finance 复权收盘价与当前成分股（非时间点一致，见第 14.10 节）；成本按规则包，未模拟冲击随规模变化",
     }
     summary["feedback"] = suggestions(summary)
-    out = OUT_DIR / f"{spec['id']}_v{spec['version']}"
-    out.mkdir(parents=True, exist_ok=True)
-    daily.reset_index().to_parquet(out / "daily.parquet", index=False)
-    weights.to_parquet(out / "weights.parquet", index=False)
-    tmp = out / "summary.json.tmp"
-    tmp.write_text(json.dumps(_clean(summary), ensure_ascii=False, indent=1), encoding="utf-8")
-    tmp.replace(out / "summary.json")
+    # 一份组合的三个产物（summary / 逐日曲线 / 逐股权重）一起落：拆开写会出现
+    # "曲线有了、summary 没有"的半成品，而组合台会把这种状态当成"尚未构建"
+    _save(spec["id"], spec["version"], _clean(summary), daily.reset_index(), weights)
     return summary
 
 
@@ -489,19 +486,112 @@ def out_dir(research_id: str, version: int) -> Path:
     return OUT_DIR / f"{research_id}_v{version}"
 
 
-def load(research_id: str, version: int) -> dict | None:
+def _file_load(research_id: str, version: int) -> dict | None:
     p = out_dir(research_id, version) / "summary.json"
     return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
 
 
-def record_feedback(research_id: str, version: int, entry: dict) -> list[dict]:
+def _file_record_feedback(research_id: str, version: int, entry: dict) -> list[dict]:
     p = out_dir(research_id, version) / "feedback.json"
     items = json.loads(p.read_text(encoding="utf-8")) if p.exists() else []
     items.append({**entry, "at": now()})
-    p.write_text(json.dumps(items, ensure_ascii=False, indent=1), encoding="utf-8")
+    _file_write_feedback(research_id, version, items)
     return items
 
 
-def feedback(research_id: str, version: int) -> list[dict]:
+def _file_feedback(research_id: str, version: int) -> list[dict]:
     p = out_dir(research_id, version) / "feedback.json"
     return json.loads(p.read_text(encoding="utf-8")) if p.exists() else []
+
+
+def _file_write_feedback(research_id: str, version: int, items: list[dict]) -> None:
+    d = out_dir(research_id, version)
+    d.mkdir(parents=True, exist_ok=True)
+    tmp = d / "feedback.json.tmp"
+    tmp.write_text(json.dumps(items, ensure_ascii=False, indent=1), encoding="utf-8")
+    tmp.replace(d / "feedback.json")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 存储分发：files / dual / db
+#
+# summary 整体进 JSONB（冻结件，审批要引用），五列只是查询投影；
+# 逐日曲线与逐股权重进表，看板不必再读 parquet。
+# ══════════════════════════════════════════════════════════════════════════════
+
+DOMAIN = _repo_portfolio.DOMAIN
+
+
+def _save(research_id: str, version: int, summary: dict,
+          daily_df: pd.DataFrame | None = None, weights_df: pd.DataFrame | None = None) -> None:
+    mode = db.mode(DOMAIN)
+    if mode in ("files", "dual"):
+        d = out_dir(research_id, version)
+        d.mkdir(parents=True, exist_ok=True)
+        if daily_df is not None:
+            daily_df.to_parquet(d / "daily.parquet", index=False)
+        if weights_df is not None:
+            weights_df.to_parquet(d / "weights.parquet", index=False)
+        tmp = d / "summary.json.tmp"
+        tmp.write_text(json.dumps(summary, ensure_ascii=False, indent=1), encoding="utf-8")
+        tmp.replace(d / "summary.json")
+        if mode == "dual":
+            db.mirror(lambda: _repo_portfolio.save(research_id, version, summary, daily_df, weights_df),
+                      "portfolio.save")
+        return
+    _repo_portfolio.save(research_id, version, summary, daily_df, weights_df)
+
+
+def load(research_id: str, version: int) -> dict | None:
+    if db.is_primary(DOMAIN):
+        return _repo_portfolio.load(research_id, version)
+    return _file_load(research_id, version)
+
+
+def daily(research_id: str, version: int) -> pd.DataFrame:
+    """逐日曲线（date/port/bench/各市场字段）。没有组合时返回空表。"""
+    if db.is_primary(DOMAIN):
+        return _repo_portfolio.daily(research_id, version)
+    p = out_dir(research_id, version) / "daily.parquet"
+    return pd.read_parquet(p) if p.exists() else pd.DataFrame()
+
+
+def weights(research_id: str, version: int) -> pd.DataFrame:
+    """逐股权重（date/market/symbol/weight_in_market/weight）。"""
+    if db.is_primary(DOMAIN):
+        return _repo_portfolio.weights(research_id, version)
+    p = out_dir(research_id, version) / "weights.parquet"
+    return pd.read_parquet(p) if p.exists() else pd.DataFrame()
+
+
+def has_series(research_id: str, version: int) -> bool:
+    if db.is_primary(DOMAIN):
+        return _repo_portfolio.exists(research_id, version)
+    return (out_dir(research_id, version) / "daily.parquet").exists()
+
+
+def list_summaries() -> list[dict]:
+    """全部已构建组合的 summary（首页体检用）。"""
+    if db.is_primary(DOMAIN):
+        return _repo_portfolio.list_summaries()
+    if not OUT_DIR.exists():
+        return []
+    return [json.loads(p.read_text(encoding="utf-8")) for p in OUT_DIR.glob("*/summary.json")]
+
+
+def record_feedback(research_id: str, version: int, entry: dict) -> list[dict]:
+    mode = db.mode(DOMAIN)
+    if mode == "files":
+        return _file_record_feedback(research_id, version, entry)
+    if mode == "dual":
+        items = _file_record_feedback(research_id, version, entry)
+        db.mirror(lambda: _repo_portfolio.record_feedback(research_id, version, entry),
+                  "portfolio.record_feedback")
+        return items
+    return _repo_portfolio.record_feedback(research_id, version, entry)
+
+
+def feedback(research_id: str, version: int) -> list[dict]:
+    if db.is_primary(DOMAIN):
+        return _repo_portfolio.feedback(research_id, version)
+    return _file_feedback(research_id, version)

@@ -11,6 +11,7 @@ from unittest import mock
 
 import yaml
 
+from factopia import runstore
 from factopia.agents import loop, observe, policy as policy_mod, store as astore, tools
 from factopia.research import store as rstore
 
@@ -106,7 +107,7 @@ class AgentP0Tests(unittest.TestCase):
 
         self.patches = [
             mock.patch.object(astore, "AGENTS_DIR", self.runtime / "agents"),
-            mock.patch.object(observe, "RESULTS", self.runtime / "results"),
+            mock.patch.object(runstore, "RUNS_DIR", self.runtime / "results" / "runs"),
             mock.patch.object(rstore, "RESEARCH_DIR", self.runtime / "research"),
             mock.patch.object(rstore, "JOBS_DIR", self.runtime / "jobs"),
             mock.patch.object(policy_mod, "CONFIGS", self.root / "configs"),

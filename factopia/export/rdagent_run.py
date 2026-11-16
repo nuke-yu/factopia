@@ -218,6 +218,9 @@ def export(log_dir: Path) -> Path:
     t0 = events[0][0] if events else None
     timeline = [{"t": round((t - t0).total_seconds(), 2), **e} for t, e in events]
     (out / "events.json").write_text(json.dumps(_json_safe(timeline), ensure_ascii=False, allow_nan=False))
+    # 入库：files 模式空操作、dual 补写、db 直写。文件仍保留，因为 backtests 要按目录找 parquet
+    from factopia import runstore
+    runstore.save(_json_safe(run), rounds=_json_safe(ordered), events=_json_safe(timeline))
     return out
 
 
@@ -232,7 +235,8 @@ def main() -> None:
         except Exception as e:  # 中止或损坏的运行不影响其他运行的导出
             print(f"[跳过] {d}：{type(e).__name__}: {e}")
             continue
-        run = json.loads((out / "run.json").read_text())
+        from factopia import runstore
+        run = runstore.load(out.name) or json.loads((out / "run.json").read_text())
         print(f"{run['run_id']}: {run['rounds']} 轮，采纳 {run['adopted']}，费用 ${run['cost_usd']}，"
               f"{'受泄漏影响' if run['context_leak'] else '无泄漏标记'} → {out}")
 

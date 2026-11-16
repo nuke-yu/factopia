@@ -11,7 +11,7 @@ from unittest import mock
 
 import yaml
 
-from factopia import ideas
+from factopia import ideas, runstore
 from factopia.agents import approve, children, loop, observe, policy as policy_mod, store as astore, tools
 from factopia.research import store as rstore
 
@@ -84,7 +84,8 @@ class AgentP1Tests(unittest.TestCase):
         (config / "iteration.yaml").write_text(yaml.safe_dump(POLICY, allow_unicode=True), encoding="utf-8")
         self.patches = [
             mock.patch.object(astore, "AGENTS_DIR", self.runtime / "agents"),
-            mock.patch.object(observe, "RESULTS", self.runtime / "results"),
+            # 观察器与 Agent 循环改走 runstore（db 模式读库），结果卷的实际入口在 runstore 上
+            mock.patch.object(runstore, "RUNS_DIR", self.runtime / "results" / "runs"),
             mock.patch.object(children, "RESULTS", self.runtime / "results"),
             mock.patch.object(rstore, "RESEARCH_DIR", self.runtime / "research"),
             mock.patch.object(rstore, "JOBS_DIR", self.runtime / "jobs"),

@@ -12,10 +12,12 @@ from pathlib import Path
 
 import pandas as pd
 
+from factopia import db
+
 CONFIGS = Path(os.environ.get("FACTOPIA_CONFIGS_DIR", "/workspace/configs"))
-RUNTIME = Path(os.environ.get("FACTOPIA_RUNTIME", "/workspace/runtime"))
 MDIR = CONFIGS / "universe" / "membership"
 COLUMNS = ["symbol", "start", "end", "source", "note"]
+DOMAIN = "refdata"
 
 
 def path(market: str) -> Path:
@@ -23,6 +25,14 @@ def path(market: str) -> Path:
 
 
 def load(market: str) -> pd.DataFrame | None:
+    """成分股名单。db 模式读 `index_membership`，**不回落 CSV**（回落就等于读到旧的）。"""
+    if db.is_primary(DOMAIN):
+        from factopia.repo import refdata as repo_refdata
+        got = repo_refdata.load_membership(market)
+        if got is not None:
+            return got.fillna("")
+        if db.mode(DOMAIN) == "db":
+            return None
     p = path(market)
     if not p.exists():
         return None
@@ -35,16 +45,24 @@ def load(market: str) -> pd.DataFrame | None:
 
 def init(market: str, force: bool = False) -> pd.DataFrame:
     """由当前成分股生成（只在文件不存在或 force 时写入，避免覆盖数据商的历史名单）。"""
-    if path(market).exists() and not force:
+    exists = bool(db.query_one("SELECT 1 FROM factopia.index_membership WHERE index_code = %s",
+                               (market,))) if db.is_primary(DOMAIN) else path(market).exists()
+    if exists and not force:
         return load(market)
     uni = pd.read_csv(CONFIGS / "universe" / f"{market}.csv")
-    std = RUNTIME / "data" / "standardized" / f"{market}.parquet"
-    first = pd.read_parquet(std, columns=["symbol", "date"]).groupby("symbol")["date"].min() if std.exists() else {}
+    from factopia import barstore
+    first = (barstore.bars(market, columns=["symbol", "date"]).groupby("symbol")["date"].min()
+             if barstore.has_bars(market) else {})
     rows = [{"symbol": s, "start": pd.Timestamp(first[s]).strftime("%Y-%m-%d") if s in first else "",
              "end": "", "source": "current_list", "note": "当前成分股，非历史名单"} for s in uni["symbol"]]
     df = pd.DataFrame(rows, columns=COLUMNS)
-    MDIR.mkdir(parents=True, exist_ok=True)
-    df.to_csv(path(market), index=False)
+    mode = db.mode(DOMAIN)
+    if mode in ("files", "dual"):
+        MDIR.mkdir(parents=True, exist_ok=True)
+        df.to_csv(path(market), index=False)
+    if mode in ("dual", "db"):
+        from factopia.repo import refdata as repo_refdata
+        repo_refdata.save_membership(market, df)
     return df
 
 

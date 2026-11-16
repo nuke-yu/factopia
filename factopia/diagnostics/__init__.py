@@ -315,19 +315,32 @@ def diagnose_round(run_dir: Path, key: str, md: dict, fx: pd.Series | None, run:
     return out
 
 
-def diagnose_run(run_dir: Path) -> int:
-    run = json.loads((run_dir / "run.json").read_text())
+def diagnose_run(run_dir: Path, run_id: str | None = None) -> int:
+    """为一次运行的每一轮生成诊断明细。
+
+    `run.json` 先问 `runstore`（db 模式下它可能根本不在文件里），拿不到再读文件；
+    诊断结果按 mode 落盘 / 入 `run_diagnostic`，否则 db 模式的页面永远看不到新诊断。
+    """
+    from factopia import db, runstore
+
+    rid = str(run_id or run_dir.name)
+    run = runstore.load(rid)
+    if not isinstance(run, dict):
+        run = json.loads((run_dir / "run.json").read_text())
     md = market_data(run["market"], sources.of_run(run))
     base = base_currency(run)
     fx = fx_rate(LOCAL[run["market"]], base)
-    (run_dir / "diagnostics").mkdir(exist_ok=True)
+    if db.mode("runs") in ("files", "dual"):
+        (run_dir / "diagnostics").mkdir(exist_ok=True)
     keys = sorted(p.stem for p in (run_dir / "backtest").glob("*.parquet"))
     n = 0
     for key in keys:
         d = diagnose_round(run_dir, key, md, fx, run, base)
         if d:
-            tmp = run_dir / "diagnostics" / f"{key}.json.tmp"
-            tmp.write_text(json.dumps(d, ensure_ascii=False, allow_nan=False), encoding="utf-8")
-            tmp.replace(run_dir / "diagnostics" / f"{key}.json")
+            if db.mode("runs") in ("files", "dual"):
+                tmp = run_dir / "diagnostics" / f"{key}.json.tmp"
+                tmp.write_text(json.dumps(d, ensure_ascii=False, allow_nan=False), encoding="utf-8")
+                tmp.replace(run_dir / "diagnostics" / f"{key}.json")
+            runstore.save_diagnostic(rid, key, d)
             n += 1
     return n

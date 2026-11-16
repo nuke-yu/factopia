@@ -279,14 +279,15 @@ def _add_child_costs(agent: dict, child_jobs: list[dict]) -> None:
 
 def _diagnose_children(agent: dict, child_jobs: list[dict]) -> None:
     """导出完成后补跑诊断；失败不影响评估（facts 会标记数据缺失）。"""
-    results = research_store.RUNTIME / "results" / "runs"
+    from factopia import runstore
     for job in child_jobs:
         rid = job.get("run_id")
         if not rid or job.get("kind") == "validate":
             continue
         try:
             from factopia.diagnostics import diagnose_run
-            n = diagnose_run(results / rid)
+            # 显式传 run_id：db 模式下 run.json 可能不在文件里，诊断要能自己找到它
+            n = diagnose_run(runstore.run_dir(rid), rid)
             store.append_trace(agent["agent_id"], {"kind": "diagnose", "run_id": rid, "rounds": n})
         except Exception as e:
             store.append_trace(agent["agent_id"], {"kind": "diagnose_error", "run_id": rid,
@@ -295,14 +296,14 @@ def _diagnose_children(agent: dict, child_jobs: list[dict]) -> None:
 
 def _ensure_validation(agent: dict, child_jobs: list[dict]) -> list[str]:
     """为 RD-Agent 子运行创建/复用可信度检查 job；文本研究已自带，跳过。"""
-    results = research_store.RUNTIME / "results" / "runs"
+    from factopia import runstore
     ids = []
     for job in child_jobs:
         if job.get("kind") in ("validate", "text") or not job.get("run_id"):
             continue
         run_id = job["run_id"]
-        run = _read_json(results / run_id / "run.json")
-        rounds = _read_json(results / run_id / "rounds.json") or []
+        run = runstore.load(run_id)
+        rounds = runstore.rounds(run_id)
         if not isinstance(run, dict) or not isinstance(rounds, list):
             continue
         focus = verdict.focus_round(rounds)
@@ -319,13 +320,6 @@ def _ensure_validation(agent: dict, child_jobs: list[dict]) -> list[str]:
         except Exception:
             continue
     return ids
-
-
-def _read_json(path: Path):
-    try:
-        return json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
 
 
 def _diagnose(facts: dict, memory: dict, policy: dict, chat, agent: dict) -> dict:
@@ -572,8 +566,9 @@ def _validate_plan(data: dict, fact_ids: set[str], available: list[str], rule: d
 
 def _focus_for(run_id: str) -> dict | None:
     """读取一个运行采纳轮次的指标、可证伪判定与可信度状态（评估用，给人看）。"""
-    run = _read_json(children.RESULTS / "runs" / run_id / "run.json")
-    rounds = _read_json(children.RESULTS / "runs" / run_id / "rounds.json") or []
+    from factopia import runstore
+    run = runstore.load(run_id)
+    rounds = runstore.rounds(run_id)
     if not isinstance(run, dict) or not isinstance(rounds, list):
         return None
     rs = run.get("research") or {}
@@ -589,7 +584,7 @@ def _focus_for(run_id: str) -> dict | None:
         return {"run_id": run_id, "market": run.get("market"), "metrics": None,
                 "passed": False, "credibility": "unchecked", "baseline": {}}
     judged = {v["loop"]: v for v in verdict.judge_rounds(run, rounds, rule)}
-    val = _read_json(children.RESULTS / "runs" / run_id / "validation" / f"{focus['loop']}.json")
+    val = runstore.validation(run_id, focus["loop"])
     try:
         cred = verdict.credibility(val, None, rule, None) if val else {"state": "unchecked"}
     except Exception:
@@ -603,12 +598,10 @@ def _focus_for(run_id: str) -> dict | None:
 def _parent_focus(agent: dict, market: str) -> dict | None:
     version = int(agent.get("parent_version") or agent["root"]["version"])
     rid = agent["root"]["research_id"]
-    d = children.RESULTS / "runs"
-    if not d.exists():
-        return None
-    for path in sorted(d.glob("*/run.json"), reverse=True):
-        run = _read_json(path)
-        if not isinstance(run, dict) or run.get("market") != market:
+    from factopia import runstore
+    # 新的在前：run_id 是时间戳前缀，倒序就是"最近一次运行优先"
+    for run in sorted(runstore.all_runs(), key=lambda r: str(r.get("run_id")), reverse=True):
+        if run.get("market") != market:
             continue
         rs = run.get("research") or {}
         if rs.get("id") == rid and rs.get("version") == version:

@@ -1,5 +1,6 @@
 # 基础配置：本地与云端共用。环境差异放在 compose.local.yml / compose.cloud.yml 和 .env 中。
-# 约定：配置中只出现容器内路径；数据放在命名卷中，挂载点统一为 /workspace/runtime。
+# 约定：配置中只出现容器内路径；业务数据在宿主 ./runtime（绑定挂载到 /workspace/runtime），
+# RD-Agent 工作区与 Qlib 二进制数据放在命名卷中（见文件末尾 volumes 说明）。
 services:
   app:
     build:
@@ -8,7 +9,11 @@ services:
     image: factopia-app:dev
     env_file: .env   # 首次使用前：cp .env.example .env
     volumes:
-      - runtime:/workspace/runtime
+      - ./runtime:/workspace/runtime
+      - runtime_rdagent:/workspace/runtime/rdagent
+      - runtime_qlib_data:/workspace/runtime/qlib_data
+      - runtime_qlib_home:/workspace/runtime/qlib_home
+      - runtime_rdagent_markets:/workspace/runtime/rdagent_markets
 
   # RD-Agent 回测镜像：只构建，不常驻。构建后需载入 dind：见 README
   qlib-runner:
@@ -30,7 +35,11 @@ services:
     environment:
       DOCKER_TLS_CERTDIR: ""        # 仅在 compose 内部网络中访问，不对外暴露
     volumes:
-      - runtime:/workspace/runtime
+      - ./runtime:/workspace/runtime
+      - runtime_rdagent:/workspace/runtime/rdagent
+      - runtime_qlib_data:/workspace/runtime/qlib_data
+      - runtime_qlib_home:/workspace/runtime/qlib_home
+      - runtime_rdagent_markets:/workspace/runtime/rdagent_markets
       - rdagent_src:/opt/rdagent-src
       - dind_data:/var/lib/docker   # 保留 dind 中的镜像，重启后无需重新载入
 
@@ -52,7 +61,11 @@ services:
       # 日志签名密钥放在共享卷中，所有 rdagent 容器（运行、日志界面）共用，否则日志无法读取
       ARTIFACT_SIGNING_KEY_PATH: /workspace/runtime/rdagent/.rdagent/artifact_signing.key
     volumes:
-      - runtime:/workspace/runtime
+      - ./runtime:/workspace/runtime
+      - runtime_rdagent:/workspace/runtime/rdagent
+      - runtime_qlib_data:/workspace/runtime/qlib_data
+      - runtime_qlib_home:/workspace/runtime/qlib_home
+      - runtime_rdagent_markets:/workspace/runtime/rdagent_markets
       - rdagent_src:/opt/rdagent-src
     working_dir: /workspace/runtime/rdagent
 
@@ -80,7 +93,11 @@ services:
     environment:
       ARTIFACT_SIGNING_KEY_PATH: /workspace/runtime/rdagent/.rdagent/artifact_signing.key
     volumes:
-      - runtime:/workspace/runtime
+      - ./runtime:/workspace/runtime
+      - runtime_rdagent:/workspace/runtime/rdagent
+      - runtime_qlib_data:/workspace/runtime/qlib_data
+      - runtime_qlib_home:/workspace/runtime/qlib_home
+      - runtime_rdagent_markets:/workspace/runtime/rdagent_markets
       - rdagent_src:/opt/rdagent-src
     ports:
       - "127.0.0.1:19899:19899"     # 只绑定本机
@@ -99,7 +116,11 @@ services:
     restart: unless-stopped
     env_file: .env
     volumes:
-      - runtime:/workspace/runtime
+      - ./runtime:/workspace/runtime
+      - runtime_rdagent:/workspace/runtime/rdagent
+      - runtime_qlib_data:/workspace/runtime/qlib_data
+      - runtime_qlib_home:/workspace/runtime/qlib_home
+      - runtime_rdagent_markets:/workspace/runtime/rdagent_markets
 
   # ── 研究执行（与 dind 同机运行）──────────────────────────────────────────────
   # 后台运行器：按顺序执行页面发起的研究任务，启动 RD-Agent 并实时导出进度（factopia/runner.py）
@@ -120,7 +141,11 @@ services:
     restart: unless-stopped
     env_file: .env
     volumes:
-      - runtime:/workspace/runtime
+      - ./runtime:/workspace/runtime
+      - runtime_rdagent:/workspace/runtime/rdagent
+      - runtime_qlib_data:/workspace/runtime/qlib_data
+      - runtime_qlib_home:/workspace/runtime/qlib_home
+      - runtime_rdagent_markets:/workspace/runtime/rdagent_markets
     command: ["python", "-m", "factopia.export.watch"]
 
   # 前端：nginx 提供静态页面，并把 /api 转发到后端（API_UPSTREAM）
@@ -139,6 +164,13 @@ services:
       - "${FACTOPIA_WEB_BIND:-127.0.0.1}:${FACTOPIA_WEB_PORT:-18080}:8080"
 
 volumes:
-  runtime:
+  # 保留卷：RD-Agent 按市场工作区（hk/uk/fr，数百 MB，IO 密集）与 qlib 二进制数据
+  # （mmap 读取、且要被 dind 内的回测容器二次 bind）留在 Linux 卷里，避免 Windows 绑定挂载
+  # 的性能与嵌套挂载问题。其余业务数据（results/jobs/ideas/research/paper/data…）全在宿主
+  # ./runtime 目录，宿主机可直接查看、跑脚本与校验。
+  runtime_rdagent:
+  runtime_qlib_data:
+  runtime_qlib_home:
+  runtime_rdagent_markets:
   rdagent_src:
   dind_data:
