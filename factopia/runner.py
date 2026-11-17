@@ -596,6 +596,7 @@ def schedule_paper_daily() -> None:
 
 
 def main() -> None:
+    os.umask(0o000)   # runner 以 root 运行，api 容器是 uid 10001：放开掩码，runtime 产物（模拟盘账本等）才能被 api 删除/重置
     init_dirs()
     recover()
     log(f"等待任务（最多同时运行 {MAX_PARALLEL} 个）")

@@ -141,7 +141,7 @@ class LongPortBroker:
             if any(k in st for k in ("cancel", "reject", "expire", "fail", "disused")):
                 out["status"] = "cancelled"
                 out["filled_qty"] = filled_qty
-                out["msg"] = f"券商状态：{st}"
+                out["msg"] = f"券商状态：{st}" + self._reject_reason(order_id, o)
             elif any(k in st for k in ("fill", "all")) or (filled_qty > 0 and "partial" in st):
                 out["status"] = "filled"                  # 部分成交按已成交量结算，余量不再追单
                 out["filled_qty"] = filled_qty
@@ -156,6 +156,21 @@ class LongPortBroker:
             return out
         out["msg"] = "当日与历史订单中都没有找到该订单（可能已过期）"
         return out
+
+    def _reject_reason(self, order_id: str, order=None) -> str:
+        """拒单/撤销原因后缀：列表接口（today_orders/history_orders）的 msg 常为空，
+        真实原因在 order_detail 的 msg 或 history 最后一条里（如 Insufficient Credit Limit）。"""
+        msg = str(getattr(order, "msg", "") or "").strip()
+        if not msg:
+            try:
+                d = self.ctx.order_detail(order_id)
+                msg = str(getattr(d, "msg", "") or "").strip()
+                if not msg:
+                    hist = getattr(d, "history", None) or []
+                    msg = str(getattr(hist[-1], "msg", "") or "").strip() if hist else ""
+            except Exception:
+                return ""
+        return f"，原因：{msg}" if msg else ""
 
     def cancel(self, order_id: str) -> None:
         """撤销挂单；已成交或无法撤销时忽略（状态以 check 为准）。"""

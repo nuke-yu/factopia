@@ -1634,10 +1634,12 @@ def _signals_mod():
 
 
 @app.get("/api/signals")
-def list_signals():
+def list_signals(include_all: bool = False):
     S = _signals_mod()
     jobs = [j for j in store.list_jobs() if j.get("kind") in ("monitor", "paper")]
     items = [e for e in S.catalog() if access.can(e["market"])]                    # 地区视角
+    if not include_all:            # 目录默认只展示可接入（生产中/已暂停）与审批中的信号；不可接入的历史条目需 include_all=1 审计查看
+        items = [e for e in items if e["state"] in ("active", "paused", "in_review")]
     from factopia.paper import engine as paper_engine, report as paper_report
     enrolled = {r["signal_id"]: r for r in paper_engine.enrolled()}
     for e in items:
@@ -1650,6 +1652,8 @@ def list_signals():
                           "nav_last": (res.get("nav") or {}).get("last"), "suggestion": res.get("suggestion")}
         else:
             e["paper"] = None
+        # 可接入模拟盘 = 生产中/已暂停 + 真实行情 + 有冻结因子（active 已隐含） + 有信号数据（score 数据存在，详情页图表同源）
+        e["enrollable"] = e["state"] in ("active", "paused") and not e.get("simulated") and (S.DIR / e["signal_id"] / "score.parquet").exists()
     return {"items": items, "state_zh": S.STATE_ZH}
 
 
