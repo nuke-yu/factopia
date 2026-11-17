@@ -220,7 +220,9 @@ def submit(m: dict, by: str, note: str = "") -> dict:
     if bad:
         raise ApprovalError("还不能提交：" + "；".join(bad))
     spec, st = m["spec"], m["study"]
-    ms = [x for x in ORDER if x in spec["markets"]]
+    ms = [x for x in ORDER if x in spec["markets"] if (st["markets"].get(x) or {}).get("focus")]
+    if not ms:
+        raise ApprovalError("规格中的市场都没有采纳轮次，没有可冻结的因子代码，不能提交审批")
     hits = m["rules"]["setup"]["hits"] + m["rules"]["portfolio"]["hits"]
     model_exc = [mk for mk, e in st["markets"].items()
                  if ((e.get("focus") or {}).get("credibility") or {}).get("state") not in (None, "credible")]

@@ -99,12 +99,17 @@ def catalog() -> list[dict]:
         reg = approval.labels(sub) if lock else None       # 标签按冻结材料动态重算（语言跟随当前地区视角）；锁定记录中的旧副本仅存档
         packs = [f"{p['pack']} {p['version']}" for p in mt["prechecks"]["setup"]["packs"]]
         cats = sorted({d.get("category") for d in spec.get("data_needs") or []} | {"price_volume", "benchmark"})
+        frz_p = approval._dir(sub["id"]) / "materials" / "factors.json"
+        frozen = set(json.loads(frz_p.read_text(encoding="utf-8"))) if frz_p.exists() else set()
         for m in sub["markets"]:
             sid = f"{rid}.v{ver}.{m}"
             if sub["status"] in ("approved", "approved_restricted"):
-                state = "active" if m in (sub.get("approved_markets") or []) else "not_applicable"
-                reason = None if state == "active" else "投资组合经理限定地区：" + next(
-                    (e["note"] for e in approval.events(sub["id"]) if e["action"] == "restrict"), "未在获批范围内")
+                if m in (sub.get("approved_markets") or []):
+                    state = "active" if m in frozen else "not_applicable"
+                    reason = None if state == "active" else "该市场没有冻结的因子代码（无采纳轮次），无法接入生产"
+                else:
+                    state, reason = "not_applicable", "投资组合经理限定地区：" + next(
+                        (e["note"] for e in approval.events(sub["id"]) if e["action"] == "restrict"), "未在获批范围内")
             elif sub["status"] == "in_review":
                 state, reason = "in_review", "审批中，不得用于生产"
             else:

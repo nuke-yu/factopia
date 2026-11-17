@@ -629,6 +629,7 @@ export type SignalEntry = {
   thresholds: Record<string, number>; monitor: { computed_at: string; suggestion: string; suggestion_zh: string; alerts: number } | null;
   events: { action: string; role: string; note: string; at: string; hash: string }[]; monitor_job?: Job | null;
   paper?: { active: boolean; mode: string; nav_last: number | null; suggestion: string | null } | null;
+  enrollable?: boolean; // 可接入模拟盘：生产中/已暂停 + 真实行情 + 有冻结因子与 score 信号数据
 };
 // 模拟盘报告（factopia/paper/report.py 写入 runtime/signals/<sid>/paper.json；详情接口返回完整报告）
 export type PaperResult = {

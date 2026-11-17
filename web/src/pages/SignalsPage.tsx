@@ -475,7 +475,7 @@ export default function SignalsPage() {
                           <Badge tone={STATE_TONE[x.state]}>{t(x.state_zh)}</Badge>
                           {x.resubmission?.status === "in_review" && <span className="text-xs text-accent">{t("重新审批中")}</span>}
                           {x.monitor && <Badge tone={SUG_TONE[x.monitor.suggestion]}>{x.monitor.suggestion === "ok" ? t("正常") : x.monitor.suggestion === "watch" ? t("观察") : t("建议暂停")}</Badge>}
-                          {x.paper && <Badge tone={x.paper.active ? "accent" : "muted"}>{x.paper.active ? t("模拟盘") : t("模拟盘·停用")}</Badge>}
+                          {x.paper && x.enrollable !== false && <Badge tone={x.paper.active ? "accent" : "muted"}>{x.paper.active ? t("模拟盘") : t("模拟盘·停用")}</Badge>}
                           {x.monitor_job && ["queued", "running"].includes(x.monitor_job.state) && <span className="text-xs text-accent">{x.monitor_job.kind === "paper" ? t("模拟盘推进中") : t("计算中")}</span>}
                         </button>
                       </li>
