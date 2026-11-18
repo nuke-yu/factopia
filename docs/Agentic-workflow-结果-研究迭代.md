@@ -50,11 +50,12 @@ flowchart TD
     E -->|"未勾选联网"| F["制定本轮研究计划，并预先登记验收标准<br/>1. 因子表现须达到最低改善幅度<br/>2. 新假设须通过可证伪性检验<br/>3. 须通过可信度复核<br/>(LLM Pro · qwen3.8-max-0902)"]
     E -.->|"勾选联网"| WS["联网检索历史公开资料<br/>(联网搜索 · qwen-plus)"]
     WS -.-> F
-    subgraph DT["深度思考（可选）：计划草案先经独立评审、按意见修订"]
+    subgraph DT["深度思考（可选）：计划草案经最多 3 轮「评审 → 修订」辩论"]
       direction LR
       PC["独立评审：防未来数据泄漏 / 防数据不可得 / 防过拟合 / 核查引用<br/>(Critic · qwen-plus)"] -->|"需修改，且需补证（已勾选联网）"| RS["补充检索公开资料（一次，测试期前）<br/>(联网搜索 · qwen-plus)"]
       RS --> PR["按评审意见修订计划<br/>(LLM Pro · qwen3.8-max-0902)"]
       PC -->|"需修改"| PR
+      PR -.->|"进入下一轮评审（最多 3 轮）"| PC
     end
     F -->|"勾选深度思考"| PC
     F -.->|"未勾选深度思考"| G["AI 起草下一版研究假设<br/>(LLM Pro · qwen3.8-max-0902)"]
@@ -117,7 +118,7 @@ flowchart TD
 
 - 平台共使用 5 类模型：**主模型（LLM Pro）**、**轻量模型（LLM Lite）**、**评审模型（Critic）**、**联网搜索**、**向量模型**；其中向量模型用于平台的资料检索场景，本迭代流程不直接调用。
 - 评估、合规预检、因子重叠 / 互补、报告等环节由平台确定性规则完成，不调用 AI，保证结果可复现、可审计。
-- 深度思考为可选：开启后计划草案先经独立评审再定稿，更严谨、也更耗时。
+- 深度思考为可选：开启后计划草案进入最多 3 轮「独立评审 → 按意见修订」辩论，评审通过即提前定稿；更严谨、也更耗时。
 - 计划也可能直接决定结束研究（如问题已解决或不值得继续）。
 
 ### 技术设计
@@ -133,11 +134,12 @@ flowchart TD
     E -->|"未勾选联网"| F["plan：Planner 草案；预注册本轮改进标准<br/>1. rank IC 是否达到 min_delta<br/>2. 子版本是否通过可证伪测试<br/>3. 可信度检查是否否决<br/>(Pro LLM)"]
     E -.->|"勾选联网"| WS["web_search：检索测试期前资料<br/>(外部搜索 API；不调用 LLM)"]
     WS -.-> F
-    subgraph DT["深度思考（可选）：planning 内的有界多智能体子流程"]
+    subgraph DT["深度思考（可选）：planning 内的有界辩论（最多 debate_rounds 轮）"]
       direction LR
       PC["独立 Critic 评审<br/>泄漏 / 数据 / 过拟合 / 引用<br/>(Critic LLM)"] -->|"revise；需要补证且已勾选联网"| RS["平台补充检索<br/>(一次，测试期前)"]
       RS --> PR["Planner 按评审修订<br/>(Pro LLM)"]
       PC -->|"revise"| PR
+      PR -.->|"进入下一轮评审（最多 3 轮）"| PC
     end
     F -->|"勾选深度思考"| PC
     F -.->|"未勾选深度思考"| F2["最终计划<br/>(普通编程：白名单 + schema 校验)"]
@@ -193,8 +195,8 @@ flowchart TD
 **说明：**
 
 - 图中 `action = new_version` 是主演示路径；Planner 也允许 `run_rdagent` / `run_text` / `validate` / `diagnose` / `stop`，这些动作由普通编程 / runner 执行，不额外调用 Pro/Lite 模型；其中 `run_rdagent` / `run_text` 的子任务内部使用 RD-Agent 的 `CHAT_MODEL`。
-- **联网**和**深度思考**都是 `planning` 阶段内的同步子流程，**不创建 runner job**：联网是 `diagnose → plan` 之间的可选检索（外部搜索 API，不调用 LLM）；深度思考是 `plan` 内部的 Planner → Critic → 修订（最多一轮）。它们与 `waiting_children` 里真正的 RD-Agent 子任务不同，后者是独立 runner job。
-- 图中 `F2` 是经过 `_validate_plan`（工具白名单 + JSON schema + rank IC 方向一致性）的最终计划；未勾选深度思考时 `F` 直接到 `F2`，勾选后 Critic `accept` 或修订完成再到 `F2`。
+- **联网**和**深度思考**都是 `planning` 阶段内的同步子流程，**不创建 runner job**：联网是 `diagnose → plan` 之间的可选检索（外部搜索 API，不调用 LLM）；深度思考是 `plan` 内部的「Planner → Critic → 修订」有界辩论（最多 3 轮，每轮最多一次评审 + 一次修订；Critic `accept` 即提前结束）。它们与 `waiting_children` 里真正的 RD-Agent 子任务不同，后者是独立 runner job。
+- 图中 `F2` 是经过 `_validate_plan`（工具白名单 + JSON schema + rank IC 方向一致性）的最终计划；未勾选深度思考时 `F` 直接到 `F2`，勾选后 Critic `accept` 或打满 3 轮辩论再到 `F2`。
 - 人工批准并运行后，会**按研究规格的市场数 n 一次性创建 n 个 runner job**（每个市场一条独立 RD-Agent workflow）。每个市场的 RD-Agent 完成后，runner 立即为该市场入队可信度检查（validate）；因此 n 条「RD-Agent → validate」流水线并行推进，validate 可以和其它市场的 RD-Agent / validate 重叠执行。所有 job 共用 runner 并发池（默认 3 个槽），超出排队。
 - Agent 进入 `waiting_children`，作为 join / supervisor 等待全部研究子运行 + 可信度检查结束，不占 runner 运行槽；没有采纳轮次的市场不会创建 validate。
 - 草稿是在人工闸门**之前**由 Pro LLM 生成的；人工批准后才保存版本并创建子运行。
@@ -231,8 +233,8 @@ flowchart TD
 | 公告标注 / 检索摘要 / AI 解释 | AI | **Pro LLM** |
 | 线索 AI 建议 / 合并 / 论文因子抽取 | AI | **Pro LLM** |
 | Agent 联网搜索（勾选时） | 外部搜索 API / 百炼内置搜索 | bailian 用 `qwen-plus` 联网；bocha/tavily 不调用 LLM；只取测试期前、日期可靠的结果 |
-| 深度思考 Critic | AI | **Critic LLM**（`FACTOPIA_LLM_CRITIC_MODEL`） |
-| 深度思考 Planner 修订 | AI | **Pro LLM** |
+| 深度思考 Critic | AI | **Critic LLM**（`FACTOPIA_LLM_CRITIC_MODEL`；辩论最多 3 轮，每轮最多一次评审） |
+| 深度思考 Planner 修订 | AI | **Pro LLM**（每轮最多一次修订，评审通过即提前结束） |
 | 研究立项外部资料检索 | 人工触发 + 搜索 | bailian 用 `qwen-plus` 联网；bocha/tavily 不调用 LLM；AI 起草用 **Pro LLM**（`rs-draft-v4`） |
 
 ---
@@ -244,7 +246,7 @@ flowchart TD
 | 选项 | 默认 | 作用 |
 |---|---|---|
 | **联网** | 不勾选 | 只在勾选时，Agent 在 `diagnose` 后、`plan` 前调用联网搜索；未配置搜索 key 时拒绝启动 Agent |
-| **深度思考** | 不勾选 | 规划 → 独立评审 → 修订（最多一轮），更慢、更贵 |
+| **深度思考** | 不勾选 | 规划草案 → 独立评审 → 修订的辩论（最多 3 轮，评审通过提前结束），更慢、更贵 |
 
 ### 0.2.1 联网搜索
 
@@ -289,7 +291,7 @@ FACTOPIA_SEARCH_BEFORE=2021-12-31
 
 研究立项页还有人工可选的「外部资料检索」：搜索、勾选最多 8 条，随「AI 起草研究规格」发送；使用提示词 `rs-draft-v4`，审核页显示外部资料清单。外部资料仅作灵感，不改变平台判定。
 
-### 0.2.2 深度思考（独立评审 + 修订）
+### 0.2.2 深度思考（有界辩论：评审 ↔ 修订）
 
 ```mermaid
 flowchart LR
@@ -298,22 +300,22 @@ flowchart LR
   Q -->|"是，且已勾选联网"| RS["补充检索公开资料<br/>（一次，测试期前）"]
   RS --> R["按评审意见修订计划<br/>(LLM Pro)"]
   Q -->|"否"| R
-  C -->|"评审通过"| G["继续：起草下一版 / 停止"]
-  R --> G
+  R -.->|"进入下一轮评审（最多 3 轮）"| C
+  C -->|"评审通过 / 已满 3 轮"| G["继续：起草下一版 / 停止"]
 
   classDef pro fill:#6d28d9,color:#fff,stroke:#4c1d95
   class P,C,R pro
 ```
 
 - 规划 / 修订用 `FACTOPIA_LLM_MODEL`（主模型）；评审用 `FACTOPIA_LLM_CRITIC_MODEL`（当前 `qwen-plus`），未配置或 403 回退主模型（图中评审按 LLM Pro 归类）；
-- 一个规划轮次内：Planner 一次 → Critic 一次 →（`revise` 时）Planner 修订一次；不是无限辩论；
-- Critic 可返回 `needs_external_search` + `search_query`；只有 `verdict=revise` 且 Agent 启动时勾选联网，平台才执行**一次**补充检索；
-- 补充检索的查询由平台清洗（去掉 2022+ 年份和 `[F#]/[W#]` 标记），仍只取 `FACTOPIA_SEARCH_BEFORE` 之前、日期可靠的结果；结果写入 `rounds/<n>/external_revision.json`，并入修订 prompt；trace 记 `web_search phase=revision`；
+- 一个规划轮次内：计划草案进入「Critic 评审 → Planner 修订」辩论，**最多 3 轮**（`debate_rounds`，策略可配）；Critic `accept`（评审通过）即提前结束，打满 3 轮后以最后一次修订稿定稿；不是无限辩论；
+- Critic 可返回 `needs_external_search` + `search_query`；只有 `verdict=revise` 且 Agent 启动时勾选联网，平台才执行补充检索（**每轮最多一次**，辩论多轮时结果分别写入 `rounds/<n>/external_revision.json`、`external_revision_2.json`、…）；
+- 补充检索的查询由平台清洗（去掉 2022+ 年份和 `[F#]/[W#]` 标记），仍只取 `FACTOPIA_SEARCH_BEFORE` 之前、日期可靠的结果；并入对应轮的修订 prompt；trace 记 `web_search phase=revision`；
 - Critic 检查：2022+ 泄漏、数据不可得、不可检验 / 过拟合、与历史尝试重复、`F#` 引用、单动作白名单；
 - 修订后的计划仍走 `_validate_plan` 白名单与 schema 校验；
-- Critic、补充检索或修订失败时保留原计划，不阻断本轮；
-- 评审问题、要求修改项、是否修订、补充检索来源显示在 Agent 页；写入 `rounds/<n>/plan_critique.json`；
-- 开启后至少多 1–2 次 LLM Pro 调用，耗时和费用更高。
+- Critic、补充检索或修订失败时保留当前计划、辩论提前结束，不阻断本轮；
+- 每轮评审问题、要求修改项、是否修订、补充检索来源逐轮显示在 Agent 页；全部评审写入 `rounds/<n>/plan_critique.json`（列表）；
+- 开启后每轮辩论多 1 次 Critic 评审 +（被要求修改时）1 次修订调用，打满 3 轮最多多 6 次 LLM 调用，耗时和费用更高。
 
 > **它算 sub-workflow 吗？** 算，但是 `planning` 状态内的**同步子流程**：Planner / Critic / 修订都在同一次 Agent 推进中完成，不创建 runner job、不占 runner 并发槽；这与 `waiting_children` 下按市场创建的 RD-Agent 子任务（独立 runner job）是不同层级。联网检索同理，是 `diagnose → plan` 之间的同步子流程。
 
@@ -322,7 +324,7 @@ flowchart LR
 - 后端：`factopia/research/websearch.py`、`factopia/agents/loop.py`、`factopia/agents/prompts/iteration-planner-v2.md`、`iteration-plan-critic-v1.md`、`factopia/research/prompts/rs-draft-v4.md`
 - 前端：`web/src/components/StudyPanel.tsx`、`web/src/pages/ResearchPage.tsx`、`web/src/pages/AgentsPage.tsx`
 - 配置：`.env` / `.env.example` 的 `FACTOPIA_SEARCH_*`
-- 测试：50 个单测通过（3 个需要 rdagent 镜像的用例跳过）；前端 `npm run build` 通过。
+- 测试：Agent 相关 36 个单测通过（3 个需要 rdagent 镜像的用例跳过）；前端 `npm run build` 通过。
 
 ---
 
@@ -352,7 +354,7 @@ flowchart LR
   - 诊断原因与置信度；
   - 外部资料条数与截止日期；
   - 计划动作与预期结果；
-  - Critic 结论、实际模型、是否按评审修订；
+  - Critic 结论（逐轮，含辩论轮数）、实际模型、是否按评审修订；
   - 草稿标题；
   - 审批人、版本、自动运行 / 只保存版本；
   - 评估结论、规则预检计数、自动回流线索；
@@ -378,7 +380,7 @@ RD-Agent 运行步骤按市场显示业务状态，不显示 RD-Agent 日志：
 - **显示“生成下一个假设”的思考过程**：展开 / 收起 **「AI生成假设，思考中...」** Workflow section；按钮变为 **隐藏“生成下一个假设”的思考过程**；
 - 两个 section 可独立展开；决策轨迹 section 位于 AI 生成 section 下方；
 - 草稿生成（`role=draft`）现在也会写入 trace，不再只有 token 用量；
-- 「深度思考评审」步骤显示 Critic 结论、模型、是否按评审修订，以及「补充检索 N 条」；展开后可查看补充来源；
+- 「深度思考评审」步骤显示辩论轮数（如「评审 2/3 轮」）、Critic 结论、模型、是否按评审修订，以及「补充检索 N 条」；展开后逐轮查看评审意见与补充来源；
 - 完整原始日志仍保存在 `runtime/agents/<id>/trace.jsonl`。
 
 ---
@@ -438,7 +440,7 @@ UK 慢，建议用**单市场研究**做现场演示，例如 `hk_vol_price_dive
 
 1. 结果页选一个已完成运行 → 研究结论右上角 **继续研究 ▾ → AI 生成下一版假设（vN+1）并自动运行**；
    - 可选勾选 **联网**：需先在 `.env` 配置 `FACTOPIA_SEARCH_API_KEY`，Agent 会在诊断后检索测试期前的公开资料；
-   - 可选勾选 **深度思考**：规划 → 独立评审 → 修订，多 1–2 次 LLM Pro 评审，演示时更慢、更贵。
+   - 可选勾选 **深度思考**：计划草案进入最多 3 轮「独立评审 → 修订」辩论，评审通过提前结束；每轮多 1–2 次 LLM 调用，演示时更慢、更贵。
 2. Agent 页先停在 **等待人工批准**，展示 vN+1 草稿；
 3. 在草稿编辑器里改标题/假设，点击 **批准并运行**；
 4. 观察阶段 toast：
@@ -471,6 +473,9 @@ Agent 相关红队用例：
 | `test_redteam_budget_stops` | 超出预算会停止 |
 | `test_redteam_stop_cancels_children` | 中止 Agent 会取消子任务 |
 | `test_redteam_diagnosis_drops_unbacked_injection` | 无有效事实引用的结论被丢弃 |
+| `test_deep_think_accept_ends_debate` | Critic 第一次评审即通过 → 不修订，辩论提前结束 |
+| `test_deep_think_debate_max_3_rounds` | Critic 每轮都要求修改 → 打满 3 轮后结束，不产生第 4 次评审 |
+| `test_deep_think_critic_failure_keeps_plan` | Critic 输出非法 → 评审失败，保留原计划 |
 
 另：
 
