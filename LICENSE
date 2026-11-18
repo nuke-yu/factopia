@@ -1,21 +1,22 @@
-    MIT License
+Factopia license scope / 许可范围说明
 
-    Copyright (c) Microsoft Corporation.
+This repository contains both Factopia project code and third-party open-source
+components. This file only describes the scope; see the referenced license files
+for the actual terms.
 
-    Permission is hereby granted, free of charge, to any person obtaining a copy
-    of this software and associated documentation files (the "Software"), to deal
-    in the Software without restriction, including without limitation the rights
-    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-    copies of the Software, and to permit persons to whom the Software is
-    furnished to do so, subject to the following conditions:
+Third-party components
+----------------------
+- rdagents/ : RD-Agent v1.0.0-fix1 (https://github.com/microsoft/RD-Agent)
+  MIT License, Copyright (c) Microsoft Corporation.
+  Full text: rdagents/LICENSE
+- qlibs/    : Qlib (https://github.com/microsoft/qlib)
+  MIT License, Copyright (c) Microsoft Corporation.
+  Full text: qlibs/LICENSE
 
-    The above copyright notice and this permission notice shall be included in all
-    copies or substantial portions of the Software.
+All other files
+---------------
+Factopia project code. Licensing and redistribution are governed by the project
+agreement; no license is granted by this file.
 
-    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-    SOFTWARE
+Full third-party license texts: THIRD_PARTY_NOTICES.md（同时保留在
+rdagents/LICENSE 与 qlibs/LICENSE）。

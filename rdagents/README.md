@@ -6,7 +6,7 @@ RD-Agent v1.0.0（github.com/microsoft/RD-Agent）的源码副本，已并入本
 - 版本：`.factopia_version` 文件记录当前对应的上游版本
 - 构建：`docker/rdagent/Dockerfile` 构建时将源码安装到镜像 `/opt/rdagent-src`；本地开发时由 `compose.local.yml` 挂载覆盖配置模板
 - 扩展：不改此目录代码，Factopia 的定制通过 `factopia/mining/rdagent_ext/`（PYTHONPATH 注入）实现
-- 许可：见仓库根 `LICENSE`（MIT）
+- 许可：见 `rdagents/LICENSE`（MIT，Copyright (c) Microsoft Corporation）；全文亦见仓库根 `THIRD_PARTY_NOTICES.md`
 
 核心代码入口：
 
