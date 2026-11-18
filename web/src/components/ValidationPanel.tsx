@@ -9,7 +9,7 @@ const range = (r?: [number, number] | null) => (r ? tf("{a} 至 {b}", { a: pct(r
 const tTxt = (t: number | null | undefined) => (t == null ? "—" : `t = ${t.toFixed(1)}`);
 
 /**
- * 可信度检查（Spec 第 14.7 节）：对 RD-Agent 采纳的轮次，在 AI 没见过的 2024 年以后数据上复核、与随机因子比较，
+ * 可信度检查（Spec 第 14.7 节）：对 Factopia-Agent 采纳的轮次，在 AI 没见过的 2024 年以后数据上复核、与随机因子比较，
  * 并显示同一个模型多次回测的收益范围（打分并列时选股带有随机性，第 8 章 #21）。
  */
 export default function ValidationPanel({ runId, loop }: { runId: string; loop: number | null }) {
@@ -26,7 +26,7 @@ export default function ValidationPanel({ runId, loop }: { runId: string; loop: 
 
   if (loop == null) return null;
   return (
-    <Panel eyebrow={tf("第 {n} 轮（RD-Agent 采纳）· 不调用大模型", { n: loop })} title={t("可信度检查")}
+    <Panel eyebrow={tf("第 {n} 轮（Factopia-Agent 采纳）· 不调用大模型", { n: loop })} title={t("可信度检查")}
       actions={<RunButton runId={runId} loop={loop} job={job} hasResult={!!v} onStarted={() => setTick((x) => x + 1)} />}>
       {data.error ? <ErrorBox error={data.error} />
         : !data.data ? <Loading what={t("可信度检查")} />
@@ -85,7 +85,7 @@ function Result({ v, job }: { v: Validation; job?: Job }) {
           tone={pl?.share_ge_ai == null ? undefined : cssVar(pl.share_ge_ai <= 0.1 ? "--good" : "--bad")}
           sub={pl ? tf("{n} 组随机因子（测试期）", { n: pl.n }) : t("运行中")} />
         <Stat label={t("并列顺序敏感性")} value={range(ai.test.annual_return_with_cost_range)}
-          sub={tf("测试期扣成本年化：默认排序 {d}，另 {s} 种并列顺序；RD-Agent 报告 {r}", { d: pct(ai.test.annual_return_with_cost_default ?? null), s: v.seeds, r: pct(v.original?.ai?.annual_return_with_cost) })} />
+          sub={tf("测试期扣成本年化：默认排序 {d}，另 {s} 种并列顺序；Factopia-Agent 报告 {r}", { d: pct(ai.test.annual_return_with_cost_default ?? null), s: v.seeds, r: pct(v.original?.ai?.annual_return_with_cost) })} />
       </div>
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]">
@@ -131,7 +131,7 @@ function Result({ v, job }: { v: Validation; job?: Job }) {
       </div>
 
       <p className="text-xs text-muted leading-relaxed max-w-[120ch]">
-        {t("复现：用完整数据重新运行 AI 的因子代码，2023 年底之前的值与 RD-Agent 当时的 ")}{repro >= 0.99 ? t("一致") : t("只有部分一致")}{tf("（{p}）", { p: pct(repro, 1) })}
+        {t("复现：用完整数据重新运行 AI 的因子代码，2023 年底之前的值与 Factopia-Agent 当时的 ")}{repro >= 0.99 ? t("一致") : t("只有部分一致")}{tf("（{p}）", { p: pct(repro, 1) })}
         {repro < 0.99 && t("，代码可能用到了未来数据，结果不可信")}{t("。模型、参数、持股规则与交易成本与该轮完全相同，训练只用 2015–2021 年的数据。")}
         {v.errors.length > 0 && <span className="text-bad"> {tf("{n} 次随机因子回测失败。", { n: v.errors.length })}</span>}
       </p>
@@ -184,7 +184,7 @@ function PlaceboChart({ v }: { v: Validation }) {
     const reported = v.original?.ai?.annual_return_with_cost;
     if (reported != null) {
       (series[2] as Record<string, unknown>).markLine = { symbol: "none", silent: true, lineStyle: { color: text, type: "dashed" },
-        label: { color: text, formatter: t("RD-Agent 报告"), fontSize: 10 }, data: [{ xAxis: reported }] };
+        label: { color: text, formatter: t("Factopia-Agent 报告"), fontSize: 10 }, data: [{ xAxis: reported }] };
     }
     return {
       animationDuration: 800,

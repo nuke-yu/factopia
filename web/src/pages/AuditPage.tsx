@@ -8,7 +8,7 @@ import { Badge, ErrorBox, Loading, Notice, Panel, Seg } from "../components/ui";
 import PrecheckView from "../components/PrecheckView";
 
 const SOURCES: { value: SignalSource; label: string }[] = [
-  { value: "price_volume", label: t("量价（RD-Agent）") }, { value: "text", label: t("文本信号") },
+  { value: "price_volume", label: t("量价（Factopia-Agent）") }, { value: "text", label: t("文本信号") },
 ];
 const RATIONALES: { value: Rationale["category"]; label: string }[] = [
   { value: "behavioural", label: t("心理偏差") }, { value: "risk_premium", label: t("风险补偿") }, { value: "friction", label: t("交易摩擦") },
@@ -148,7 +148,7 @@ function Review({ result, markets, horizon, inputs, locked, setLocked }: {
             <Row name={t("原始假设")} source={t("研究员")}>
               <p className="text-sm leading-relaxed whitespace-pre-wrap">{inputs.hypothesis}</p>
             </Row>
-            <Row name={t("规范化假设")} source={t("AI 起草")} required edited={edited("hypothesis")} original={original.hypothesis} hint={t("英文，发给 RD-Agent")}>
+            <Row name={t("规范化假设")} source={t("AI 起草")} required edited={edited("hypothesis")} original={original.hypothesis} hint={t("英文，发给 Factopia-Agent")}>
               <Area label={t("规范化假设")} value={f.hypothesis} disabled={ro} onChange={(v) => set({ hypothesis: v })} />
               {d.hypothesis_zh && <p className="text-xs text-muted mt-1 leading-relaxed"><span className="text-faint">{t("中文译文（AI 原稿，不随修改更新）：")}</span>{d.hypothesis_zh}</p>}
             </Row>
@@ -166,7 +166,7 @@ function Review({ result, markets, horizon, inputs, locked, setLocked }: {
             <Row name={t("可证伪测试")} source={t("AI 起草")} required edited={edited("falsification")} original={original.falsification} hint={t("在回测测试期上判断")}>
               <Area label={t("可证伪测试")} value={f.falsification} disabled={ro} onChange={(v) => set({ falsification: v })} />
             </Row>
-            <Row name={t("信号来源")} source={t("系统")} edited={edited("signal_source")} hint={t("量价：RD-Agent 自动挖掘；文本：检验情报台的风险表述变化信号（不启动 RD-Agent）")}>
+            <Row name={t("信号来源")} source={t("系统")} edited={edited("signal_source")} hint={t("量价：Factopia-Agent 自动挖掘；文本：检验情报台的风险表述变化信号（不启动 Factopia-Agent）")}>
               <Seg label={t("信号来源")} value={f.signal_source} options={SOURCES} onChange={(v) => !ro && set({ signal_source: v })} />
               {f.signal_source === "text" && <p className="text-xs text-muted mt-1">{t("香港、英国为模拟数据，仅用于流程演示；法国为 AMF 真实公告（2024 年 8 月起，测试期内数据不足）。可证伪测试须写明 rank IC 方向（positive / negative）。")}</p>}
             </Row>
@@ -442,7 +442,7 @@ function PromptPreview({ spec, markets }: { spec: Spec; markets: Market[] }) {
         <pre className="num text-xs whitespace-pre-wrap leading-relaxed text-muted max-h-[520px] overflow-y-auto bg-bg rounded p-3 border-l-2"
           style={{ borderColor: cssVar(`--${market}`) }}>{p.data.text}</pre>
       )}
-      <p className="text-xs text-faint">{t("由 RD-Agent 场景子类运行时使用的同一个函数生成（factopia.research.context.build_context），追加在 RD-Agent 自带的通用背景之后发给 AI。修改左侧内容后自动更新。")}</p>
+      <p className="text-xs text-faint">{t("由 Factopia-Agent 场景子类运行时使用的同一个函数生成（factopia.research.context.build_context），追加在 Factopia-Agent 自带的通用背景之后发给 AI。修改左侧内容后自动更新。")}</p>
     </div>
   );
 }

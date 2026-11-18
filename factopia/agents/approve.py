@@ -60,7 +60,7 @@ def _validate(draft: dict) -> dict:
     english = [str(draft.get(k) or "") for k in ENGLISH_FIELDS] + \
               [str(x) for x in directions] + [str(rationale["note"])]
     if any(CJK.search(x) for x in english):
-        raise ApprovalError("发给 RD-Agent 的字段须为英文；请修改 hypothesis / falsification / directions / rationale.note")
+        raise ApprovalError("发给 Factopia-Agent 的字段须为英文；请修改 hypothesis / falsification / directions / rationale.note")
     return draft
 
 

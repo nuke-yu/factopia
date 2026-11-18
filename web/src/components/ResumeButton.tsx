@@ -3,7 +3,7 @@ import { api } from "../api";
 import { useAsync } from "../lib";
 import { t, tf } from "../i18n";
 
-/** 从断点继续：RD-Agent 从最近的检查点续跑剩下的轮数，已完成的轮次与费用保留（与"重新运行"从头开始不同）。 */
+/** 从断点继续：Factopia-Agent 从最近的检查点续跑剩下的轮数，已完成的轮次与费用保留（与"重新运行"从头开始不同）。 */
 export default function ResumeButton({ jobId, onDone }: { jobId: string; onDone?: () => void }) {
   const info = useAsync(() => api.resumeInfo(jobId), [jobId]);
   const [busy, setBusy] = useState(false);

@@ -45,7 +45,7 @@ export default function StudyScatter({ study }: { study: Study }) {
       tooltip: {
         backgroundColor: cssVar("--bg-2"), borderColor: line, textStyle: { color: text },
         formatter: (p: { data: P }) => {
-          const d = p.data, who = d.loop == null ? t("起点（20 个基础因子）") : tf("第 {i} 轮{k}", { i: d.loop ?? 0, k: d.decision ? t("（RD-Agent 采纳）") : "" });
+          const d = p.data, who = d.loop == null ? t("起点（20 个基础因子）") : tf("第 {i} 轮{k}", { i: d.loop ?? 0, k: d.decision ? t("（Factopia-Agent 采纳）") : "" });
           const v = d.loop == null ? "" : "<br/>" + tf("可证伪测试：{k}", { k: d.passed === true ? t("通过") : d.passed === false ? t("未通过") : "—" });
           return `<b>${MARKET_LABEL[d.m]} · ${who}</b><br/>rank IC ${d.value[0].toFixed(4)}<br/>${t("扣成本年化")} ${(d.value[1] * 100).toFixed(1)}%${v}`;
         },

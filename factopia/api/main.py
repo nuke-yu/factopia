@@ -491,7 +491,7 @@ class PreviewIn(BaseModel):
 
 @app.post("/api/research/preview")
 def research_preview(body: PreviewIn):
-    """提示词预览（RS-07）：调用 RD-Agent 场景子类运行时使用的同一个函数。"""
+    """提示词预览（RS-07）：调用 Factopia-Agent 场景子类运行时使用的同一个函数。"""
     _check_markets([body.market])
     spec = _prepare_spec(body.spec, lock=False)
     dates = split_dates(body.market, spec["horizon"])
@@ -524,9 +524,9 @@ def _prepare_spec(raw: dict, lock: bool) -> dict:
             spec["seeds"] = seedlib.normalize(spec["seeds"])      # 编号以因子库为准重新校验，统计不入规格
         except seedlib.SeedError as e:
             raise HTTPException(422, str(e))
-    spec["signal_source"] = spec.get("signal_source") or "price_volume"     # price_volume：RD-Agent；text：文本信号研究（第 14.17 节）
+    spec["signal_source"] = spec.get("signal_source") or "price_volume"     # price_volume：Factopia-Agent；text：文本信号研究（第 14.17 节）
     if spec["signal_source"] not in ("price_volume", "text"):
-        raise HTTPException(422, t("信号来源须为 price_volume（量价，RD-Agent）或 text（文本信号）"))
+        raise HTTPException(422, t("信号来源须为 price_volume（量价，Factopia-Agent）或 text（文本信号）"))
     spec["markets"] = spec.get("markets") or []
     _check_markets(spec["markets"])
     ev = spec.get("evidence") or {}
@@ -954,7 +954,7 @@ class ValidateIn(BaseModel):
 
 @app.post("/api/runs/{run_id}/validate")
 def start_validation(run_id: str, body: ValidateIn):
-    """对某一轮（默认 RD-Agent 最终采纳的轮次）排入可信度检查；已有排队或运行中的同一检查时直接返回该任务。"""
+    """对某一轮（默认 Factopia-Agent 最终采纳的轮次）排入可信度检查；已有排队或运行中的同一检查时直接返回该任务。"""
     d = _run_dir(run_id)
     run, rounds = _json(d / "run.json"), _json(d / "rounds.json")
     loop = body.loop
@@ -999,7 +999,7 @@ def _study_findings(markets: dict, rule: dict) -> list[dict]:
         noise = cred.get("noise") or {}
         if noise.get("range"):
             lo, hi = noise["range"]
-            rep_ = f"（RD-Agent 当时报告 {noise['reported']:.1%}）" if noise.get("reported") is not None else ""
+            rep_ = f"（Factopia-Agent 当时报告 {noise['reported']:.1%}）" if noise.get("reported") is not None else ""
             out.append({"tone": "warn", "text": f"{name}：同一个模型，只改变打分相同的股票的先后顺序，测试期扣成本年化在 "
                                                  f"{lo:.1%} 至 {hi:.1%} 之间{rep_}——收益对并列顺序很敏感，单次回测的收益不能作为证据。"})
         for c in cred.get("checks", []):
@@ -1015,7 +1015,7 @@ def _study_findings(markets: dict, rule: dict) -> list[dict]:
                             "text": f"{name}：{v['n']} 组随机因子中有 {v['share']:.0%} 的收益不低于 AI 因子"
                                     f"{'，AI 因子明显好于随机' if c['ok'] else '，AI 因子与随机因子没有明显区别'}。"})
             if c["key"] == "reproduce" and c["ok"] is False:
-                out.append({"tone": "bad", "text": f"{name}：重新计算的因子值与 RD-Agent 当时的只有 {c['value']:.0%} 一致，代码可能用到了未来数据。"})
+                out.append({"tone": "bad", "text": f"{name}：重新计算的因子值与 Factopia-Agent 当时的只有 {c['value']:.0%} 一致，代码可能用到了未来数据。"})
     for m, e in markets.items():      # 研究结果诊断（第 14.11 节）
         d, name = ((e.get("focus") or {}).get("diagnostics")), MARKET_ZH[m]
         if not d:
@@ -1051,8 +1051,8 @@ def _study_findings(markets: dict, rule: dict) -> list[dict]:
     adopted = [x for _, x in rows if x.get("decision")]
     bad = [x for x in adopted if x.get("passed") is False]
     if bad:
-        out.append({"tone": "warn", "text": f"RD-Agent 采纳的 {len(adopted)} 轮中，{len(bad)} 轮没有通过可证伪测试："
-                                             "RD-Agent 的 AI 评审主要看收益，与事先写好的标准不一致。"})
+        out.append({"tone": "warn", "text": f"Factopia-Agent 采纳的 {len(adopted)} 轮中，{len(bad)} 轮没有通过可证伪测试："
+                                             "Factopia-Agent 的 AI 评审主要看收益，与事先写好的标准不一致。"})
     return out
 
 
@@ -2000,7 +2000,7 @@ def _load_job(job_id: str) -> dict:
 
 @app.get("/api/jobs/{job_id}")
 def get_job(job_id: str):
-    """任务状态与 RD-Agent 控制台输出的最后 40 行（准备数据阶段尚无进度事件时显示）。"""
+    """任务状态与 Factopia-Agent 控制台输出的最后 40 行（准备数据阶段尚无进度事件时显示）。"""
     job = _load_job(job_id)
     path = store.log_path(job_id)
     tail = path.read_text(errors="replace").splitlines()[-40:] if path.exists() else []
@@ -2033,7 +2033,7 @@ def job_resume_info(job_id: str):
 
 @app.post("/api/jobs/{job_id}/resume")
 def resume_job(job_id: str, body: ResumeIn):
-    """从断点继续：同一任务重新排队，RD-Agent 从最近的检查点续跑剩下的轮数（已完成的轮次与费用保留）。"""
+    """从断点继续：同一任务重新排队，Factopia-Agent 从最近的检查点续跑剩下的轮数（已完成的轮次与费用保留）。"""
     job = _load_job(job_id)
     access.require(job["market"], t("在该市场继续运行任务"))
     try:

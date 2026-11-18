@@ -41,7 +41,7 @@ MIN_TRADE = 0.005             # 权重变化小于此值视为未交易
 CAPACITY_FLOOR = 50e6         # 容量低于 5000 万港元（换算为基础币种）视为"容量不足"
 BASE_CURRENCY = os.environ.get("FACTOPIA_BASE_CURRENCY", "HKD")   # 运行不属于任何研究版本（或授权未写明）时的默认值
 LOCAL = {"hk": "HKD", "uk": "GBP", "fr": "EUR"}
-# 单边成本与其中的税费：(开仓, 平仓)，来自市场规则包的 costs（RULE-04），与 RD-Agent 回测配置一致（open_cost / close_cost）
+# 单边成本与其中的税费：(开仓, 平仓)，来自市场规则包的 costs（RULE-04），与 Factopia-Agent 回测配置一致（open_cost / close_cost）
 _COSTS = {m: rules.costs(m) for m in LOCAL}
 TAX = {m: (c["buy"]["tax"], c["sell"]["tax"]) for m, c in _COSTS.items()}
 COST = {m: (round(c["buy"]["total"], 6), round(c["sell"]["total"], 6)) for m, c in _COSTS.items()}
@@ -297,7 +297,7 @@ def diagnose_round(run_dir: Path, key: str, md: dict, fx: pd.Series | None, run:
     if run.get("kind") == "text":
         pre_fix = False
     out = {"run_id": run_dir.name, "round": key, "market": market, "horizon": horizon, "base_currency": base,
-           "backtest_note": "基于 RD-Agent 原始回测（并列顺序修正前，收益受随机选股影响，见第 14.7–14.8 节）" if pre_fix else "",
+           "backtest_note": "基于 Factopia-Agent 原始回测（并列顺序修正前，收益受随机选股影响，见第 14.7–14.8 节）" if pre_fix else "",
            "price_source": sources.describe(md.get("dataset")),
            "cost": ct, "liquidity": lc, "fx": fxi, "exposure": exposures(bt, pos, md), "economic": economic(ct, fxi, lc)}
     sc_p = run_dir / "score" / f"{key}.parquet"

@@ -71,7 +71,7 @@ export default function StudyPanel({ researchId, version, current }: { researchI
               <span className="text-text">{t("判定方法：")}</span>
               {tf("主市场（{m}）看{k}，需同时满足 rank IC {sg}、扣成本年化超额高于起点、{d}；其他市场看采纳轮次的 rank IC 方向是否与假设一致。", {
                 m: MARKET_LABEL[s.rule.primary],
-                k: textStudy ? t("按验证期判定采纳的轮次（文本信号研究）") : " " + t("RD-Agent 最终采纳的轮次"),
+                k: textStudy ? t("按验证期判定采纳的轮次（文本信号研究）") : " " + t("Factopia-Agent 最终采纳的轮次"),
                 sg: s.rule.ric_sign > 0 ? t("为正") : t("为负"),
                 d: textStudy ? t("绝对回撤（扣成本）不比等权持有股票池差") : t("最大回撤不比起点差"),
               })}
@@ -100,7 +100,7 @@ export default function StudyPanel({ researchId, version, current }: { researchI
               <div className="label mb-1">{t("各轮的 rank IC（横轴）与扣成本年化超额（纵轴）")}</div>
               <StudyScatter study={s} />
               <p className="text-[11px] text-faint mt-1">
-                {t("每个点是一轮，大点为 RD-Agent 采纳的轮次，空心菱形为起点（20 个基础因子）。打分真正有效时，点应落在白色一侧的上方；落在红色区域上方的点，是“收益变好、排序能力却与假设相反”。")}
+                {t("每个点是一轮，大点为 Factopia-Agent 采纳的轮次，空心菱形为起点（20 个基础因子）。打分真正有效时，点应落在白色一侧的上方；落在红色区域上方的点，是“收益变好、排序能力却与假设相反”。")}
               </p>
             </div>
             <div>
@@ -358,7 +358,7 @@ function MarketCard({ e, current }: { e: StudyMarket; current: boolean }) {
       {e.insufficient && <p className="text-xs text-muted">{e.insufficient}</p>}
       {done && f ? (
         <>
-          <div className="text-xs text-faint">{tf("第 {i} 轮（{k}）· {f}{more}", { i: f.loop, k: e.kind === "text" ? t("验证期判定采纳") : t("RD-Agent 采纳"), f: joinList(f.factors.slice(0, 3)), more: f.factors.length > 3 ? tf(" 等 {n} 个", { n: f.factors.length }) : "" })}</div>
+          <div className="text-xs text-faint">{tf("第 {i} 轮（{k}）· {f}{more}", { i: f.loop, k: e.kind === "text" ? t("验证期判定采纳") : t("Factopia-Agent 采纳"), f: joinList(f.factors.slice(0, 3)), more: f.factors.length > 3 ? tf(" 等 {n} 个", { n: f.factors.length }) : "" })}</div>
           <dl className="grid grid-cols-2 gap-x-3 gap-y-2 text-xs">
             <div><dt className="text-faint">{t("扣成本年化")}{f.credibility.noise?.median != null ? t("（单次）") : ""}</dt><dd className="num text-base">{pct(b?.annual_return_with_cost)} → <span className="text-text">{pct(f.metrics.annual_return_with_cost)}</span></dd>
               {f.credibility.noise?.median != null && f.credibility.noise.range && <dd className="num text-[11px] text-warn">
@@ -379,7 +379,7 @@ function MarketCard({ e, current }: { e: StudyMarket; current: boolean }) {
       ) : done && e.insufficient ? null : done ? (
         <p className="text-xs text-muted">{e.kind === "text"
           ? tf("验证期未满足采纳条件（rank IC 方向与假设一致且扣成本超额高于等权持有股票池），不采纳；起点扣成本年化超额 {p}。", { p: pct(b?.annual_return_with_cost) })
-          : tf("RD-Agent 没有采纳任何一轮：新因子都没有超过起点（扣成本年化 {p}）。", { p: pct(b?.annual_return_with_cost) })}</p>
+          : tf("Factopia-Agent 没有采纳任何一轮：新因子都没有超过起点（扣成本年化 {p}）。", { p: pct(b?.annual_return_with_cost) })}</p>
       ) : (
         <p className="text-xs text-muted">{(e.state as string) === "hidden" ? t("当前地区视角不显示其他地区的结果（演示用地区视角）。")
           : e.job ? tf("任务{s}，完成后自动判定。", { s: t(e.job.state_zh) }) : t("这个版本还没有在该市场运行。")}</p>

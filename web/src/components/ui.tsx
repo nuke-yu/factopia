@@ -111,7 +111,7 @@ export function ErrorBox({ error }: { error: string }) {
   return <Notice tone="bad" title={t("数据载入失败")}>{error}</Notice>;
 }
 
-/** LaTeX 数学公式渲染（RD-Agent 生成的因子 formulation、变量名）。公式非法时降级为原文显示。 */
+/** LaTeX 数学公式渲染（Factopia-Agent 生成的因子 formulation、变量名）。公式非法时降级为原文显示。 */
 export function Tex({ tex, display = false, className = "" }: { tex: string | null | undefined; display?: boolean; className?: string }) {
   if (!tex) return null;
   let html: string | null = null;

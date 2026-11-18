@@ -5,7 +5,7 @@ import { cssVar, MARKET_LABEL, useThemeVersion } from "../lib";
 import { LANG, LOCALE, t, tf } from "../i18n";
 import { Notice } from "./ui";
 
-const STEPS = [["direct_exp_gen", "提出假设"], ["coding", "编写代码"], ["running", "Qlib 回测"], ["feedback", "评审结果"]] as const;
+const STEPS = [["direct_exp_gen", "提出假设"], ["coding", "编写代码"], ["running", "回测"], ["feedback", "评审结果"]] as const;
 const KIND_COLOR: Record<string, string> = { step: "--accent", docker: "--uk", exec: "--good", result: "--fr", error: "--bad" };
 const mmss = (s: number) => `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
 const hhmmss = (tm: string | null) => (tm ? new Date(tm).toLocaleTimeString(LOCALE[LANG], { hour12: false }) : "");
@@ -23,7 +23,7 @@ function useNow(): number {
 const since = (tm: string | null, now: number) => (tm ? Math.max(0, (now - new Date(tm).getTime()) / 1000) : 0);
 
 /**
- * 运行中的实时状态（运行器每 3 秒解析一次 RD-Agent 控制台输出）：
+ * 运行中的实时状态（运行器每 3 秒解析一次 Factopia-Agent 控制台输出）：
  * 阶段进度、当前步骤与计时、正在执行的回测容器、计数、各次回测结果（实时柱状图）、最近活动。
  */
 export default function LiveStatus({ job, live }: { job: Job; live: LiveState }) {
@@ -74,7 +74,7 @@ export default function LiveStatus({ job, live }: { job: Job; live: LiveState })
               })}
             </ol>
           ) : (
-            <div className="text-sm text-muted">{t("RD-Agent 正在准备：生成该市场的数据文件、检查运行环境，第 0 轮的回测步骤中会先跑起点（20 个基础因子）。")}</div>
+            <div className="text-sm text-muted">{t("Factopia-Agent 正在准备：生成该市场的数据文件、检查运行环境，第 0 轮的回测步骤中会先跑起点（20 个基础因子）。")}</div>
           )}
           {!running ? null : live.docker ? (
             <div className="flex flex-col gap-1">
@@ -102,14 +102,14 @@ export default function LiveStatus({ job, live }: { job: Job; live: LiveState })
                   <span className={a.kind === "result" ? "text-text" : a.kind === "error" ? "text-bad" : "text-muted"}>{a.text}</span>
                 </li>
               ))}
-              {live.activity.length === 0 && <li className="text-xs text-faint">{t("等待 RD-Agent 输出…")}</li>}
+              {live.activity.length === 0 && <li className="text-xs text-faint">{t("等待 Factopia-Agent 输出…")}</li>}
             </ol>
           </div>
         </div>
         <div>
           <div className="label mb-1">{t("各次回测结果（扣成本年化超额，实时）")}</div>
           <BacktestBars live={live} loops={job.loops} />
-          <p className="text-[11px] text-faint mt-1">{t("每完成一次 Qlib 回测增加一根柱子；虚线为起点（20 个基础因子）。是否采纳由随后的 AI 评审决定。")}</p>
+          <p className="text-[11px] text-faint mt-1">{t("每完成一次回测增加一根柱子；虚线为起点（20 个基础因子）。是否采纳由随后的 AI 评审决定。")}</p>
         </div>
       </div>
     </section>

@@ -24,7 +24,7 @@ RESULTS = RUNTIME / "results"
 # 与 factopia.factors.evaluate.SPLITS 一致；train 期即 AI 可见的已有发现所用区间（MINE-11）
 PERIODS = {
     "train": {"label": "2015–2021", "note": "AI 可见（测试期开始前）"},
-    "valid": {"label": "2022–2023", "note": "与 RD-Agent 回测测试期重叠，不提供给 AI"},
+    "valid": {"label": "2022–2023", "note": "与 Factopia-Agent 回测测试期重叠，不提供给 AI"},
     "test": {"label": "2024 至今", "note": "AI 从未见过的数据"},
 }
 MARKET_INFO = {

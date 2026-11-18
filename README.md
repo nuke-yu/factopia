@@ -120,8 +120,85 @@ $DC run --rm app python -m factopia.export.alpha158
 - 命令行方式（`FACTOPIA_RESEARCH=... rdagent fin_factor`）仍可用，与页面走同一个启动脚本；锁定的版本在 `/workspace/runtime/research/<编号>/v<k>.yaml`。
 - 提示词预览与 RD-Agent 实际收到的内容由同一个函数生成（`factopia/research/context.py`）。
 
-**部署到云服务器：** `web` 与 `api` 镜像可独立部署（`--profile platform`）；`runner`、`exporter` 需要与 `dind` 同机，并使用挂载的源码（`compose.local.yml`），打包进镜像是后续工作。
+**部署到云服务器：** 见下一节「部署到阿里云 ECS」。`web` 与 `api` 镜像可独立部署（`--profile platform`）；`runner`、`exporter` 需要与 `dind` 同机，并使用挂载的源码（`compose.cloud.yml`），打包进镜像是后续工作。
 默认只监听本机；对外开放前**必须**在前面加 HTTPS 反向代理与登录（目前接口没有身份验证），再在 `.env` 中设置 `FACTOPIA_WEB_BIND=0.0.0.0`、`FACTOPIA_WEB_PORT`。
+
+## 部署到阿里云 ECS
+
+当前部署：`AI-Campaign-2026-Team12`（cn-beijing，2 核 / 7G / 79G 系统盘 / 固定带宽 3Mbps），公网 <http://101.201.239.22/>，代码在 `/opt/factopia`。
+
+### 这台机器的三处硬约束
+
+| 约束 | 影响 | 处理 |
+|---|---|---|
+| Docker Hub 直连不通（`registry-1.docker.io` 超时） | 基础镜像拉不下来 | `/etc/docker/daemon.json` 配 `registry-mirrors: docker.m.daocloud.io, docker.1ms.run`；dind 用 `.env` 的 `DIND_REGISTRY_MIRROR` |
+| ghcr.io 通但被限速到 ~11KB/s | `app` 镜像的 `uv` 拷贝层要下 16.74MB，约 20 分钟 | 已下完并进缓存；换机器时先 `docker pull ghcr.m.daocloud.io/astral-sh/uv:0.6.11` 再 `docker tag` 回 `ghcr.io/astral-sh/uv:0.6.11` |
+| 安全组只放行 22 / 80（18080 静默丢包） | 默认的 18080 公网访问不到 | `.env` 里 `FACTOPIA_WEB_PORT=80`，用根路径访问 |
+
+内存 7G 偏紧：回测容器限 3G（`QLIB_DOCKER_MEM_LIMIT=3g`、`QLIB_DOCKER_SHM_SIZE=1g`），`FACTOPIA_MAX_PARALLEL=1` 一次只跑一个研究任务；另加了 4G swap 兜底。
+
+首次构建耗时（2 核 / 3Mbps）：api 5 分钟、web 1 分钟、app 24 分钟（含 ghcr 限速）、qlib-runner 31 分钟（xgboost 3 还会拖 336MB 的 `nvidia-nccl-cu12`，CPU 机器上用不到，可考虑把 Dockerfile 里的 `xgboost` 改成 `"xgboost<3"`）、rdagent 13 分钟。
+
+### 首次部署
+
+```bash
+# 本机：打包（排除 runtime 里的 rdagent_src、node_modules、.git、.venv）
+tar -czf src.tgz --exclude=./runtime --exclude=./.git --exclude=./.venv \
+    --exclude=./web/node_modules --exclude=./web/dist --exclude='*/__pycache__' .
+tar -czf runtime.tgz --exclude=runtime/rdagent_src runtime
+
+scp src.tgz runtime.tgz root@101.201.239.22:/opt/factopia/
+scp .env.cloud root@101.201.239.22:/opt/factopia/.env      # 云端 env：0.0.0.0:80、国内镜像源、内存下调
+
+# 服务器
+cd /opt/factopia && tar xzf src.tgz && tar xzf runtime.tgz && rm src.tgz runtime.tgz
+printf 'factopia:%s\n' "$(openssl passwd -apr1 '<密码>')" > docker/htpasswd   # Basic Auth
+bash scripts/deploy_cloud.sh      # 修属主 → 构建 → 起 dind 载入回测镜像 → 生成 qlib / 文本数据集 → 起服务
+```
+
+`deploy_cloud.sh` 幂等，改代码后重跑即可（镜像层会复用缓存）。只改 Python 代码时可跳过构建：`docker restart factopia-api-1 factopia-runner-1`（源码是挂载进容器的）。
+
+**属主是必做的一步**：`api` 镜像以 `uid=10001(factopia)` 运行，而 `runtime` 是从本地打包上传的，里面文件的属主是打包机的 uid（Windows 上是 `197609`）。本地 Docker Desktop 的 9p 挂载不校验 uid，Linux ext4 会真的校验——漏了这步所有写操作都报 `PermissionError`，页面显示成「研究存储目录尚未初始化：请先启动后台运行器」。
+
+```bash
+chown -R 10001:10001 runtime
+find runtime -type d -exec chmod 2775 {} +
+apt-get install -y acl   # 可选：让 runner(root) 之后新建的文件 api 也能改
+find runtime -type d -exec setfacl -d -m u:10001:rwx,u::rwx,g::rwx,o::rx {} +
+```
+
+### 与本地开发的差异
+
+- `compose.cloud.yml` 取代 `compose.local.yml`：runtime 用绑定挂载 `./runtime`（Linux ext4，不需要本地 Windows 那套命名卷覆盖），不继承本地 Clash / IPv6 的 `extra_hosts`。
+- 前端多一层 nginx Basic Auth（`docker/web/cloud.conf.template`，密码文件 `docker/htpasswd` 不入库），`/healthz` 豁免。
+- 构建走国内源：`APT_MIRROR` / `UV_DEFAULT_INDEX` / `PIP_INDEX_URL`（阿里云）、`NPM_REGISTRY`（npmmirror）。
+
+### 常见报错
+
+| 页面提示 | 真实原因 | 处理 |
+|---|---|---|
+| 研究存储目录尚未初始化：请先启动后台运行器 | api 以 uid 10001 运行，runtime 文件属主是打包机 uid，写入被拒（`PermissionError` 被统一转成这条 503，与 runner 无关） | 见上一节的 `chown -R 10001:10001 runtime` |
+| 该数据集尚未生成文本信号（先运行 python -m factopia.text all） | `runtime/text/<数据集>/summary.json` 不存在。`fr` 是真实 AMF 数据，要联网采集；`demo_hk`/`demo_uk` 是模拟数据 | `$DC run --rm app python -m factopia.text demo && $DC run --rm app python -m factopia.text all --lexicon`（不调用大模型）；`--yes --budget 3` 才走大模型标注，每数据集约 $2.3 |
+| RD-Agent 退出码 1：cannot import name 'ExpandingGroupby' | 镜像里装成 pandas 3，`pandarallel` 导入即崩 | 已在 `docker/rdagent/Dockerfile` 锁定 `pandas<3`；老任务的日志是历史记录，不代表当前环境 |
+| 运行器重启，运行中断 | runner 启动时会把它上次没跑完的任务标记成这个状态（单机单实例的预期行为） | 重新发起即可；历史失败任务已归档到 `runtime/jobs/_archive_local_debug/` |
+
+`/api/text/overview` 里 `ready: false` 的数据集前端会自动隐藏，不会报错——所以没采集 `fr` 时页面只显示两个模拟数据集。
+
+### 运维
+
+```bash
+cd /opt/factopia
+DC="docker compose -f docker-compose.yml -f compose.cloud.yml"
+$DC ps
+$DC logs -f --tail=100 api runner          # 后端 / 研究运行器
+$DC exec dind docker ps                    # 回测容器
+du -sh runtime/*; df -h                    # 79G 系统盘，runtime 目前 95M
+```
+
+- 演示数据在 `runtime/`：9 个运行、三市场行情、审批链、模拟盘记录，页面打开即有内容。
+- `runtime/rdagent_markets/<市场>/qlib_data` 是 RD-Agent 用的数据集（截止 2023-12-31），由 `$DC run --rm app python -m factopia.data.to_qlib --rdagent` 生成；缺了它发起研究会报「缺少市场数据」。
+- 已知限制：无 HTTPS（Basic Auth 凭据明文传输）；3Mbps 上行，首屏 + 图表加载偏慢；单机 dind，回测与 Web 争 2 核。
+
 
 ## 模拟盘（信号接入与撮合）
 
