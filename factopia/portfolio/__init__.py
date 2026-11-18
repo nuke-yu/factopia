@@ -293,7 +293,7 @@ def build(spec: dict, study: dict) -> dict:
         "costs": {m: rules.costs(m) for m in markets},
         "rule_packs": [{"pack": p["pack"], "version": p["version"]} for p in rules.select(markets)],
         "pit": json.loads(pit.read_text(encoding="utf-8")) if pit.exists() else None,
-        "backtest_note": "回测基于 Yahoo Finance 复权收盘价与当前成分股（非时间点一致，见第 14.10 节）；成本按规则包，未模拟冲击随规模变化",
+        "backtest_note": "回测基于 Yahoo Finance 复权收盘价与当前成分股（非时间点一致）；成本按规则包，未模拟冲击随规模变化",
     }
     summary["feedback"] = suggestions(summary)
     out = OUT_DIR / f"{spec['id']}_v{spec['version']}"

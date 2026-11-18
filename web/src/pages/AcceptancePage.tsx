@@ -43,7 +43,7 @@ export default function AcceptancePage() {
         <span className="text-sm text-muted">{tt("按平台上的实际记录自动核对 · 红队测试")}</span>
         <span className="ml-auto text-xs text-faint">{tf("计算于 {d} UTC", { d: t.computed_at.slice(0, 16).replace("T", " ") })}</span>
       </div>
-      <Panel eyebrow={tt("业务 spec 原文 8 条，按平台记录自动核对")} title={tf("成功标准（{a} / {b}）", { a: okCount, b: data.criteria.length })}>
+      <Panel eyebrow={tt("业务标准原文 8 条，按平台记录自动核对")} title={tf("成功标准（{a} / {b}）", { a: okCount, b: data.criteria.length })}>
         <ol className="flex flex-col divide-y divide-line">
           {data.criteria.map((c) => (
             <li key={c.no} className="py-2.5 grid gap-1 sm:grid-cols-[2rem_minmax(0,1fr)_auto] items-start">
@@ -55,7 +55,7 @@ export default function AcceptancePage() {
           ))}
         </ol>
       </Panel>
-      <Panel eyebrow={tt("BR-53：待验证量化目标（非预先承诺收益）")} title={tt("量化目标")}>
+      <Panel eyebrow={tt("待验证量化目标（非预先承诺收益）")} title={tt("量化目标")}>
         <div className="grid gap-6 sm:grid-cols-2 xl:grid-cols-4">
           <Target label={tt("研究周期缩短")} value={pct(t.cycle.reduction, 0)} target="30%–50%" ok={t.cycle.reduction == null ? null : t.cycle.reduction >= 0.3}
             sub={tf("平台 {p} vs 人工基线 {b}（{s}）", { p: hours(t.cycle.platform_hours), b: hours(t.cycle.baseline_hours), s: t.cycle.baseline_status })} />
@@ -92,7 +92,7 @@ export default function AcceptancePage() {
                 ))}
               </ul>
             )}
-            <p className="text-xs text-faint mt-2">{tt("可复现 = 重新运行得到与获批时相同的结果。训练已固定随机种子与确定性模式（2026-10-13）；此前运行的检查需重新运行才能度量。并列敏感性计入可信度检查（第 14.7 节）。")}</p>
+            <p className="text-xs text-faint mt-2">{tt("可复现 = 重新运行得到与获批时相同的结果。训练已固定随机种子与确定性模式（2026-10-13）；此前运行的检查需重新运行才能度量。并列敏感性计入可信度检查。")}</p>
           </div>
         </div>
       </Panel>

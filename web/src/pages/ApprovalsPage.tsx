@@ -28,7 +28,7 @@ function SubmitPanel({ onDone }: { onDone: (sid: string) => void }) {
   if (pick.loading) return <Loading what={t("研究项目")} />;
   const c = check.data;
   return (
-    <Panel eyebrow={t("WB-05：立项预检 → 运行 → 组合与组合预检 → 报告 → 提交审批")} title={t("提交审批")}>
+    <Panel eyebrow={t("立项预检 → 运行 → 组合与组合预检 → 报告 → 提交审批")} title={t("提交审批")}>
       <div className="flex flex-col gap-3">
         <VersionPicker pick={pick} />
         {check.loading && <div className="label">{t("检查中…")}</div>}
@@ -205,7 +205,7 @@ function Detail({ sid, roles }: { sid: string; roles: string[] }) {
       </Panel>
       {error && <ErrorBox error={error} />}
       <div className="grid gap-5 xl:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]">
-        <Panel eyebrow={t("第 12.2.1 节：本地研究员（香港 → 英国 → 法国）→ 数据负责人 → 地区合规 → 模型风险 → 投资组合经理 → 运营")} title={t("审批路线")}>
+        <Panel eyebrow={t("本地研究员（香港 → 英国 → 法国）→ 数据负责人 → 地区合规 → 模型风险 → 投资组合经理 → 运营")} title={t("审批路线")}>
           <ol className="flex flex-col gap-1">
             {sub.steps.map((s, i) => <StepCard key={`${s.role}-${i}-${sub.current}`} s={s} i={i} sub={sub} actor={actor} onAct={act} />)}
           </ol>
@@ -213,7 +213,7 @@ function Detail({ sid, roles }: { sid: string; roles: string[] }) {
             <p className="text-xs text-faint mt-2">{tf("当前应由「{r}」处理；切换演示身份后操作。其他身份只能发表意见。", { r: t(sub.steps[sub.current]?.role ?? "") })}</p>
           )}
         </Panel>
-        <Panel eyebrow={t("BR-23：只追加，每条记录上一条的哈希")} title={t("留痕")}>
+        <Panel eyebrow={t("只追加，每条记录上一条的哈希")} title={t("留痕")}>
           <ol className="flex flex-col gap-2 text-sm">
             {d.events.map((e) => (
               <li key={e.hash} className="border-b border-line pb-1.5">
@@ -257,7 +257,7 @@ export default function ApprovalsPage() {
       <div className="grid gap-5 xl:grid-cols-[minmax(0,4fr)_minmax(0,8fr)]">
         <div className="flex flex-col gap-5">
           <SubmitPanel onDone={(id) => { list.reload(); setParams({ sid: id }); }} />
-          <Panel eyebrow={t("WB-02：当前环节、负责人、等待时长")} title={tf("提交（{n}）", { n: list.data.items.length })}>
+          <Panel eyebrow={t("当前环节、负责人、等待时长")} title={tf("提交（{n}）", { n: list.data.items.length })}>
             {list.data.items.length === 0 ? <p className="text-sm text-muted">{t("还没有提交。")}</p> : (
               <ul className="flex flex-col divide-y divide-line">
                 {list.data.items.map((s) => (

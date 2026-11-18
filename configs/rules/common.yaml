@@ -62,7 +62,7 @@ rules:
     severity: warn
     stages: [setup, release]
     check: {type: source_used, source: simulated_demo}
-    source: 第 11.9 节模拟数据策略
+    source: 模拟数据策略
     approvers: [数据负责人, 模型风险]
     impact: 涉及市场的结论只用于流程演示；取得授权数据后须重新验证
   - id: GEN-DATA-004
@@ -86,7 +86,7 @@ rules:
     severity: warn
     stages: [portfolio, release]
     check: {type: cost_sensitivity, min_holding_days: 10, min_breakeven: 2.0}
-    source: 客户授权自由文本条款；研究结果诊断（第 14.11 节）
+    source: 客户授权自由文本条款；研究结果诊断
     approvers: [投资组合经理]
     impact: 成本上升时超额可能消失，需降低换手或提高信号门槛
   - id: GEN-ECON-001
@@ -94,7 +94,7 @@ rules:
     severity: warn
     stages: [portfolio, release]
     check: {type: economic_fail}
-    source: 四类迁移标签（第 14.11 节）
+    source: 四类迁移标签
     approvers: [模型风险, 投资组合经理]
     impact: 不建议在该市场使用，或须说明本地化调整
   - id: GEN-PIT-001
@@ -102,7 +102,7 @@ rules:
     severity: warn
     stages: [portfolio, release]
     check: {type: pit_status}
-    source: 时间点一致性状态（第 14.10 节）
+    source: 时间点一致性状态
     approvers: [模型风险]
     impact: 回测结果可能偏乐观（如幸存者偏差），审批时须考虑
   - id: GEN-ESG-001
@@ -120,6 +120,6 @@ rules:
     severity: info
     stages: [setup, release]
     check: {type: always}
-    source: 业务 spec 治理边界（BR-47）
+    source: 平台治理边界
     approvers: [发起研究员]
     impact: AI 不自行批准规则例外，不改变原始数据或原文资料

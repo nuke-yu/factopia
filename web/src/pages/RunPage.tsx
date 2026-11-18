@@ -184,7 +184,7 @@ function Replay({ runId, jobId }: { runId: string; jobId?: string }) {
   return (
     <>
       {run.context_leak && (
-        <Notice tone="bad" title={t("此次运行受数据泄漏影响（MINE-11 修复前），仅用于展示过程")}>{t("运行时提供给 AI 的已有发现包含测试期的评估结论。")}</Notice>
+        <Notice tone="bad" title={t("此次运行受数据泄漏影响，仅用于展示过程")}>{t("运行时提供给 AI 的已有发现包含测试期的评估结论。")}</Notice>
       )}
       <section className="panel p-4 flex flex-wrap items-center gap-3">
         {running ? (
@@ -332,7 +332,7 @@ function IdleLane({ market }: { market: Market }) {
         <span className="size-2.5 rounded-full" style={{ background: cssVar(`--${market}`) }} />
         <span className="font-medium">{MARKET_LABEL[market]}</span>
       </div>
-      <p className="text-sm text-muted mt-3">{t("本次运行未包含该市场。研究规格锁定后，可在三个市场分别运行（RS-09）。")}</p>
+      <p className="text-sm text-muted mt-3">{t("本次运行未包含该市场。研究规格锁定后，可在三个市场分别运行。")}</p>
     </section>
   );
 }
@@ -466,7 +466,7 @@ function PromptModal({ runId, index, onClose }: { runId: string; index: number; 
     <div className="fixed inset-0 z-40 bg-black/60 grid place-items-center p-4" role="dialog" aria-modal="true" aria-label={t("发给 AI 的提示词")} onClick={onClose}>
       <div className="panel w-full max-w-5xl max-h-[85vh] flex flex-col p-4" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center gap-3 mb-3">
-          <h2 className="font-display font-semibold">{t("发给 AI 的提示词（WB-01）")}</h2>
+          <h2 className="font-display font-semibold">{t("发给 AI 的提示词")}</h2>
           <Seg label={t("内容")} value={tab} onChange={setTab} options={[{ value: "system", label: t("系统提示") }, { value: "user", label: t("用户提示") }, { value: "response", label: t("AI 回复") }]} />
           <button className="btn ml-auto" onClick={onClose}>{t("关闭")}</button>
         </div>

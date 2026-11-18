@@ -100,7 +100,7 @@ def targets(versions: list[dict]) -> dict:
         files.append({"file": f"{p.parent.name}/{p.name}", "sentences": len(ss), "dropped": int(e.get("dropped") or 0)})
     cit = {"shown": shown, "cited": cited, "coverage": round(cited / shown, 4) if shown else None, "model_dropped": dropped,
            "model_compliance": round(cited / (cited + dropped), 4) if cited + dropped else None, "target": 1.0, "files": files,
-           "scope": "研究结论中的 AI 解释与报告引用的 AI 解释；情报台 AI 摘要同样逐句强制引用（第 14.9 节），不存档"}
+           "scope": "研究结论中的 AI 解释与报告引用的 AI 解释；情报台 AI 摘要同样逐句强制引用，不存档"}
     # 可复现率：获批的市场版本
     from factopia import approval
     items = []

@@ -226,7 +226,7 @@ blockquote{{margin:6px 0;padding:6px 12px;border-left:3px solid var(--line);colo
         sents = "".join(f"<li>{e(s.get('text'))} <span class='meta mono'>{e(' '.join(s.get('cites') or []))}</span></li>" for s in ex.get("sentences") or [])
         out.append(f"<h3>AI 解释市场差异（每句引用平台事实编号；需研究员确认）</h3><ul>{sents}</ul>"
                    f"<p class='meta'>生成：模型 {e(ex.get('model'))} · 提示词 {e(ex.get('prompt_version'))} · {e((ex.get('created_at') or '')[:16].replace('T', ' '))} UTC"
-                   f"{' · 丢弃无引用句子 ' + str(ex.get('dropped')) + ' 句' if ex.get('dropped') else ''}（BR-46）</p>")
+                   f"{' · 丢弃无引用句子 ' + str(ex.get('dropped')) + ' 句' if ex.get('dropped') else ''}</p>")
     # ④ 自动挖掘与验证
     out.append("<h2>④ 自动挖掘结果与验证记录</h2>")
     for m in ms:
@@ -263,12 +263,12 @@ blockquote{{margin:6px 0;padding:6px 12px;border-left:3px solid var(--line);colo
               pct(sum(a["markets"][m].values()))] for m in ms]
             + [["<b>合计</b>", pct(a["by_effect"]["allocation"]), pct(a["by_effect"]["selection"]), pct(a["by_effect"]["fx_interaction"]),
                 f'<b>{pct(a["sum_of_effects"])}</b>']])
-            + f'<p>组合相对基准的区间超额 {pct(a["total_excess"])}；各项之和与超额之差 {a["linking_error"]:.1e}（PORT-08 要求 &lt; 1bp）。'
+            + f'<p>组合相对基准的区间超额 {pct(a["total_excess"])}；各项之和与超额之差 {a["linking_error"]:.1e}（要求 &lt; 1bp）。'
               f'组合的汇率贡献（绝对）：{e("、".join(f"{Z[m]} {pct(v)}" for m, v in a["fx_contribution_abs"].items()))}。</p>')
-        out.append("<h3>约束与来源（PORT-02）</h3>" + _table(["约束", "取值", "来源", "执行情况"],
+        out.append("<h3>约束与来源</h3>" + _table(["约束", "取值", "来源", "执行情况"],
                                                           [[e(c["name"]), e(c["value"]), e(c["source"]), e(c["status"])] for c in pf["constraints"]]))
         fb = d.get("feedback") or []
-        out.append("<h3>反馈闭环（BR-32；平台建议，研究员决定）</h3>" + _table(
+        out.append("<h3>反馈闭环（平台建议，研究员决定）</h3>" + _table(
             ["市场", "平台建议", "依据", "研究员决定"],
             [[e(Z[s["market"]]), e(s["action_zh"]), e("；".join(s["reasons"])),
               e(next((f"{x['action_zh']}（{x.get('by', '')}，{x['at'][:10]}）" for x in reversed(fb) if x["market"] == s["market"]), "未记录"))]

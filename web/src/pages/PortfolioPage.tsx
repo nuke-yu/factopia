@@ -81,14 +81,14 @@ function RebalancePanel({ id, version, builtAt, markets }: { id: string; version
   const [sel, setSel] = useState<string>("");
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const { data, error, loading } = useAsync(() => api.portfolioRebalances(id, version), [id, version, builtAt]);
-  if (loading) return <Panel eyebrow={t("PORT-04：相邻调仓的逐股持仓变化")} title={t("调仓明细")}><Loading what={t("调仓明细")} /></Panel>;
+  if (loading) return <Panel eyebrow={t("相邻调仓的逐股持仓变化")} title={t("调仓明细")}><Loading what={t("调仓明细")} /></Panel>;
   if (error || !data || data.rebalances.length === 0)
-    return <Panel eyebrow={t("PORT-04：相邻调仓的逐股持仓变化")} title={t("调仓明细")}>{error ? <ErrorBox error={error} /> : <p className="text-sm text-muted">{t("无调仓记录")}</p>}</Panel>;
+    return <Panel eyebrow={t("相邻调仓的逐股持仓变化")} title={t("调仓明细")}>{error ? <ErrorBox error={error} /> : <p className="text-sm text-muted">{t("无调仓记录")}</p>}</Panel>;
   const list = data.rebalances;
   const cur = list.find((r) => r.date === sel) ?? list[list.length - 1];
   const N = 12;
   return (
-    <Panel eyebrow={t("PORT-04：相邻调仓的逐股持仓变化（市场内权重）")} title={t("调仓明细")}>
+    <Panel eyebrow={t("相邻调仓的逐股持仓变化（市场内权重）")} title={t("调仓明细")}>
       <div className="flex flex-wrap items-center gap-3 mb-3">
         <label htmlFor="rebal-date" className="label">{t("调仓日")}</label>
         <select id="rebal-date" className="field w-auto" value={cur.date} aria-label={t("选择调仓日")}
@@ -218,7 +218,7 @@ function Detail({ id, version }: { id: string; version: number }) {
               {series ? <NavChart s={series} base={pf.base_currency} /> : <Loading what={t("净值")} />}
               <p className="text-xs text-faint mt-1">{pf.backtest_note}</p>
             </Panel>
-            <Panel eyebrow={t("PORT-07：基础币种收益 =（1 + 本地收益）×（1 + 汇率收益）− 1")} title={t("汇率拆分（区间累计）")}>
+            <Panel eyebrow={t("基础币种收益 =（1 + 本地收益）×（1 + 汇率收益）− 1")} title={t("汇率拆分（区间累计）")}>
               <table className="w-full text-sm num">
                 <thead className="label text-left"><tr><th className="py-1">{t("市场")}</th><th>{t("本地收益")}</th><th>{t("汇率收益")}</th><th>{t("交叉项")}</th><th>{tf("{c} 收益", { c: pf.base_currency })}</th></tr></thead>
                 <tbody>
@@ -231,7 +231,7 @@ function Detail({ id, version }: { id: string; version: number }) {
                 {tf("组合的汇率贡献（绝对）：{l}", { l: joinList(pf.markets.map((m) => `${MARKET_LABEL[m]} ${signed(pf.attribution.fx_contribution_abs[m], 2)}`)) })}</p>
             </Panel>
           </div>
-          <Panel eyebrow={t("PORT-09：全组合（基础币种，相对复合基准）与每个市场（本地币种 / 基础币种，相对本地指数）")} title={t("业绩指标")}>
+          <Panel eyebrow={t("全组合（基础币种，相对复合基准）与每个市场（本地币种 / 基础币种，相对本地指数）")} title={t("业绩指标")}>
             <div className="overflow-x-auto">
               <table className="w-full text-sm num">
                 <thead className="label text-left">
@@ -266,9 +266,9 @@ function Detail({ id, version }: { id: string; version: number }) {
                     <td>{signed(pf.attribution.by_effect.selection, 2)}</td><td>{signed(pf.attribution.by_effect.fx_interaction, 2)}</td><td>{signed(pf.attribution.sum_of_effects, 2)}</td></tr>
                 </tbody>
               </table>
-              <p className="text-xs text-faint mt-2">{tf("组合相对基准的区间超额 {e}，各项之和与之相差 {d}（PORT-08 要求 < 1bp）。", { e: signed(pf.attribution.total_excess, 2), d: pf.attribution.linking_error.toExponential(1) })}</p>
+              <p className="text-xs text-faint mt-2">{tf("组合相对基准的区间超额 {e}，各项之和与之相差 {d}（要求 < 1bp）。", { e: signed(pf.attribution.total_excess, 2), d: pf.attribution.linking_error.toExponential(1) })}</p>
             </Panel>
-            <Panel eyebrow={t("PORT-02：每个约束注明来源条款或规则编号")} title={t("约束与执行情况")}>
+            <Panel eyebrow={t("每个约束注明来源条款或规则编号")} title={t("约束与执行情况")}>
               <ul className="flex flex-col gap-2 text-sm">
                 {pf.constraints.map((c) => (
                   <li key={c.name} className="grid grid-cols-[9rem_minmax(0,1fr)] gap-2">
@@ -279,7 +279,7 @@ function Detail({ id, version }: { id: string; version: number }) {
               </ul>
             </Panel>
           </div>
-          <Panel eyebrow={t("BR-32：组合结果与归因反馈到各市场的信号；平台建议，研究员决定")} title={t("反馈闭环")}>
+          <Panel eyebrow={t("组合结果与归因反馈到各市场的信号；平台建议，研究员决定")} title={t("反馈闭环")}>
             <FeedbackBlock pf={pf} decisions={state.feedback} onSave={async (m, action, note) => {
               const fb = await api.portfolioFeedback(id, version, { market: m, action, note });
               setState((s) => ({ ...s, feedback: fb }));

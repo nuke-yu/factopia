@@ -86,10 +86,10 @@ function RunSection({ runId }: { runId: string }) {
       <div className="flex flex-col gap-2">
         {run.context_leak && (
           <Notice tone="bad" title={t("此次运行受数据泄漏影响，结果仅用于展示流程")}>
-            {t("运行时提供给 AI 的已有发现包含测试期（2022–2023）的评估结论（MINE-11 修复前），不能作为研究结论。")}
+            {t("运行时提供给 AI 的已有发现包含测试期（2022–2023）的评估结论，不能作为研究结论。")}
           </Notice>
         )}
-        <Notice title={t("回测结果可信度待排查（Spec 第 8 章 #21）")}>
+        <Notice title={t("回测结果可信度待排查")}>
           {t("多次运行中出现 rank IC 为负、收益却高于起点，原因未明（三市场研究中香港、法国都出现）；比较基准为 Factopia-Agent 默认的 20 个基础因子，而非完整 Alpha158。")}
         </Notice>
       </div>
@@ -181,7 +181,7 @@ function QuantileSection({ q }: { q: Quantiles }) {
       </div>
       {(q.tie_share ?? 0) > 0.2 && (
         <Notice title={t("模型打分区分度不足")}>
-          {tf("每天约 {p} 的股票得到完全相同的打分，只能放进同一组，所以各组股票数不等（平均 {s} 只），部分交易日有的组没有股票（累计收益里按持有现金计）。这与第 8 章 #21（打分几乎相同、IC 为负）是同一个问题。", { p: pct(q.tie_share, 0), s: q.size.map((s) => s.toFixed(0)).join(" / ") })}
+          {tf("每天约 {p} 的股票得到完全相同的打分，只能放进同一组，所以各组股票数不等（平均 {s} 只），部分交易日有的组没有股票（累计收益里按持有现金计）。这与打分几乎相同、IC 为负是同一个问题。", { p: pct(q.tie_share, 0), s: q.size.map((s) => s.toFixed(0)).join(" / ") })}
         </Notice>
       )}
       <div className="grid gap-5 lg:grid-cols-2">

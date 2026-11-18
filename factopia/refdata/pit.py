@@ -36,7 +36,7 @@ def build() -> dict:
     add("membership", "股票池成分股", True, "成分股生效日", "指数公司公告日", "公告日", all(pit.values()),
         "全部为历史成分股" if all(pit.values()) else
         "使用当前成分股（" + "、".join(MARKET_ZH[m] for m, v in pit.items() if not v) + "）：存在幸存者偏差，"
-        "历史上被剔除、退市的股票不在样本中，回测结果可能偏高；需数据商的历史成分股（第 0.2 节）")
+        "历史上被剔除、退市的股票不在样本中，回测结果可能偏高；需数据商的历史成分股")
     add("fx", "汇率", True, "交易日", "伦敦收盘", "收盘后", True, "组合层换算使用当日收盘汇率")
     text = RUNTIME / "text" / "fr" / "summary.json"
     add("text", "公告文本信号", True, "公告日期（当地）", "正式发布时间（AMF 发往市场时间）",

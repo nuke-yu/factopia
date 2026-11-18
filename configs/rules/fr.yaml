@@ -41,7 +41,7 @@ rules:
     check: {type: data_category, category: text}
     source: 欧盟市场滥用条例（596/2014）第 7、17 条
     approvers: [法国合规]
-    impact: 按实际可获取时间生效（第 14.9 节），不得使用发布前信息
+    impact: 按实际可获取时间生效，不得使用发布前信息
   - id: FR-GDPR-001
     title: 公告文本含高管姓名等个人数据（GDPR）
     severity: warn

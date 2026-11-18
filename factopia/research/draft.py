@@ -253,7 +253,7 @@ def _system_questions(d: dict, inputs: dict) -> list[str]:
                   + (f"（将作为约束发给 AI：{t['constraint_en']}）" if t["constraint_en"] else "（只在组合层使用）"))
     years = sorted(set(TEST_YEAR.findall(f"{inputs['hypothesis']} {inputs.get('direction', '')}")))
     if years or d["leak_flags"]:
-        qs.append(f"输入中提到测试期（2022 年起）的内容{('：' + '、'.join(years)) if years else ''}；保留会提前透露考题（MINE-11）。")
+        qs.append(f"输入中提到测试期（2022 年起）的内容{('：' + '、'.join(years)) if years else ''}；保留会提前透露考题。")
     return qs
 
 
