@@ -1,10 +1,9 @@
 # AI 调研循环设计（线索 → 立项，WF-03）
 
-> 状态：**已实现**（2026-11-17；2026-11-18 改为**有界辩论**）。展示用第三条 agentic workflow：线索池里点「AI 调研」，
-> Agent 在**最多 3 轮辩论**内自行决定检索什么证据、何时证据足够，最后起草研究规格（或给出「暂不可立项」结论）。
-> 每轮辩论 = Planner 陈述（选动作举证）→ 独立 Critic 反驳 → Planner 修订 → 执行；**Critic 无反驳时辩论提前结束**，输出假设。
+> 状态：**已实现**（2026-11-17）。展示用第三条 agentic workflow：线索池里点「AI 调研」，
+> Agent 在**最多 3 轮**内自行决定检索什么证据、何时证据足够，最后起草研究规格（或给出「暂不可立项」结论）。
 > 与前两条的关系：WF-02 研究迭代 Agent 在**立项后**（有子任务、评估与回流），RD-Agent 在**子运行内**（完整挖掘循环）；
-> 本条在**立项前**（检索 + 辩论，无子任务、无评估回流），是三者里最轻的一条。
+> 本条在**立项前**（纯"检索 → 决策"循环，无子任务、无评估回流），是三者里最轻的一条。
 
 ## 1. 主流程
 
@@ -12,21 +11,17 @@
 ```mermaid
 flowchart TD
     A["线索详情页：用户点「AI 调研」<br/>（用户）"] --> C["平台读取<br/>(1)线索<br/>(2)市场(HK/UK/FR)<br/>(3)可用数据(如香港基准指数、个股日线)"]
-    C --> P["AI 陈述计划：判断下一步需要什么证据<br/>(LLM Pro · qwen3.8-max-0902)"]
+    C --> P["AI 判断下一步需要什么证据<br/>(LLM Pro · qwen3.8-max-0902)"]
     P --> V["平台合规校验：证据引用、测试期防泄漏"]
-    V --> CR["独立评审反驳<br/>(LLM Critic · qwen-plus)"]
-    CR -->|"有反驳"| PR["AI 按评审意见修订计划<br/>(LLM Pro · qwen3.8-max-0902)"]
-    PR --> EX["执行本轮计划"]
-    CR -->|"无反驳：辩论提前结束"| EX
-    EX --> T{"计划动作？"}
+    V --> T{"AI 自主选择的下一步<br/>(LLM Pro · qwen3.8-max-0902)"}
     T -->|"查内部资料"| E1["内部资料：因子库 / 既往研究 / 字段口径<br/>(LLM Lite · deepseek-v4.1-flash)"]
     T -->|"查外部资料"| E2["外部资料：测试期前的公开资料<br/>(联网搜索 · qwen-plus)"]
     T -->|"补充平台证据"| E3["平台已有证据：历史因子与既往研究"]
-    E1 --> R{"评审有反驳 且 未满 3 轮？"}
+    E1 --> R{"证据足够或达到 3 轮上限？<br/>(LLM Pro · qwen3.8-max-0902)"}
     E2 --> R
     E3 --> R
-    R -->|"是，继续辩论"| P
-    R -->|"否：无反驳 / 满 3 轮"| F["汇总证据：可检验则起草，否则给出结论"]
+    R -->|"还不够，继续"| P
+    R -->|"足够 / 达到上限"| F["汇总证据：可检验则起草，否则给出结论"]
     T -->|"直接起草"| DR["AI 起草研究规格<br/>（引用调研证据）<br/>(LLM Pro · qwen3.8-max-0902)"]
     T -->|"放弃"| GU["生成「暂不可立项」结论与理由<br/>(LLM Lite · deepseek-v4.1-flash)"]
     F -->|"可检验"| DR
@@ -36,23 +31,20 @@ flowchart TD
 
     classDef pro fill:#6d28d9,color:#fff,stroke:#4c1d95
     classDef lite fill:#0284c7,color:#fff,stroke:#075985
-    classDef critic fill:#0f766e,color:#fff,stroke:#115e59
     classDef search fill:#15803d,color:#fff,stroke:#14532d
     classDef human fill:#d97706,color:#fff,stroke:#92400e
-    class P,PR,DR pro
+    class P,T,R,DR pro
     class E1,GU lite
-    class CR critic
     class E2 search
     class A,H human
 
     subgraph LG["图例"]
       direction LR
-      LG1["(LLM Pro · qwen3.8-max-0902)：主模型，完成复杂推理<br/>（陈述计划 / 修订计划 / 起草）"]:::pro
+      LG1["(LLM Pro · qwen3.8-max-0902)：主模型，完成复杂推理<br/>（判断下一步 / 选择动作 / 证据是否足够 / 起草）"]:::pro
       LG2["(LLM Lite · deepseek-v4.1-flash)：轻量模型，完成简单任务"]:::lite
-      LG3["(LLM Critic · qwen-plus)：独立评审，反驳或通过计划"]:::critic
-      LG4["(联网搜索 · qwen-plus)：联网检索公开资料"]:::search
-      LG5["（用户）：用户在页面上的操作"]:::human
-      LG6["无标注：平台自动执行"]
+      LG3["(联网搜索 · qwen-plus)：联网检索公开资料"]:::search
+      LG4["（用户）：用户在页面上的操作"]:::human
+      LG5["无标注：平台自动执行"]
     end
 ```
 #### 字段口径: 
@@ -67,16 +59,15 @@ flowchart TD
 #### 测试期：
 factopia为了防泄漏划定的样本外回测区间，當前是2022-01 ～ 2023-12
 
-**用戶看到的效果：** 用戶只需选择一条线索并点击「AI 调研」；AI 自行决定查内部资料、外部资料还是补充平台证据，最多 3 轮辩论，每轮由独立评审反驳、AI 修订，最后给出可立项的研究规格草稿或「暂不可立项」结论。所有结果进入研究立项审核，由用戶确认或修改。
+**用戶看到的效果：** 用戶只需选择一条线索并点击「AI 调研」；AI 自行决定查内部资料、外部资料还是补充平台证据，最多 3 轮，最后给出可立项的研究规格草稿或「暂不可立项」结论。所有结果进入研究立项审核，由用戶确认或修改。
 
-> 模型标识：**LLM Pro** = `qwen3.8-max-0902`；**LLM Lite** = `deepseek-v4.1-flash`；**LLM Critic** = `qwen-plus`（`FACTOPIA_LLM_CRITIC_MODEL`，未配置回退 Pro）；**联网搜索** = `qwen-plus`（当前 bailian provider）。未标注步骤为平台确定性流程。
+> 模型标识：**LLM Pro** = `qwen3.8-max-0902`；**LLM Lite** = `deepseek-v4.1-flash`；**联网搜索** = `qwen-plus`（当前 bailian provider）。未标注步骤为平台确定性流程。
 >
-> 业务视图按每一步分别标注 AI；实现上 `P / CR / PR / T` 中 `P`（陈述）与 `PR`（修订）是同一 Planner 的两次调用，`CR` 是独立 Critic；`R` 中的“满 3 轮”是平台确定性约束。补充平台证据来自 Alpha158 测试期前统计与既往运行摘要，不调用 LLM。
+> 业务视图按每一步分别标注 AI；实现上 `P / T / R` 属于同一轮 Planner 输出，`R` 中的“达到 3 轮上限”是平台确定性约束。补充平台证据来自 Alpha158 测试期前统计与既往运行摘要，不调用 LLM。
 
 | 步骤 | 模型 | 用途 |
 |---|---|---|
-| P 陈述计划 / PR 修订 | qwen3.8-max-0902 | Planner 判断下一步、选择动作、按评审意见修订 |
-| CR 独立评审 | qwen-plus | 反驳或通过计划（泄漏 / 数据可得性 / 引用 / 动作合理性） |
+| P / T / R | qwen3.8-max-0902 | Planner 判断下一步、选择分支、判断证据是否足够 |
 | E1 查内部资料 | deepseek-v4.1-flash | 只做中英法检索词改写，随后 BM25 检索 |
 | E2 查外部资料 | qwen-plus | bailian 联网搜索；bocha/tavily 模式不经过聊天模型 |
 | DR 起草研究规格 | qwen3.8-max-0902 | 生成研究规格草稿 |
@@ -92,19 +83,16 @@ factopia为了防泄漏划定的样本外回测区间，當前是2022-01 ～ 202
 flowchart TD
     A["线索详情页：用户点「AI 调研」"] --> B["创建 brief 记录与 runner job（kind=brief）"]
     B --> C["初始化：装载线索 [I1]、市场(hk/uk/fr)、实际数据<br/>与调研策略 / 提示词（平台背景）"]
-    C --> P["陈述：基于线索 + 事实清单 [F#]，从白名单选下一步<br/>(LLM Pro · qwen3.8-max-0902)"]
+    C --> P["plan：基于线索 + 事实清单 [F#]，从白名单选下一步<br/>(LLM Pro · qwen3.8-max-0902)"]
     P --> V["确定性校验：白名单 / schema / [F#] 引用 / 测试期年份过滤"]
-    V --> CR["反驳：独立 Critic 评审（accept / revise）<br/>(LLM Critic · qwen-plus)"]
-    CR -->|"revise"| PR["修订：Planner 按评审意见修订一次<br/>(LLM Pro · qwen3.8-max-0902)"]
-    PR --> T{"动作？"}
-    CR -.->|"accept"| T
+    V --> T{"动作？"}
     T -->|"search_internal"| E1["内部语义检索：因子库 / 既往研究 / 字段口径<br/>(LLM Lite · deepseek-v4.1-flash · 查询改写)<br/>→ 新事实编入 [F#]"]
     T -->|"search_external"| E2["联网检索：仅测试期前、日期可靠<br/>(qwen-plus · 联网搜索)<br/>→ 新事实编入 [F#]"]
     T -->|"evidence"| E3["证据包：Alpha158 / 既往运行摘要<br/>→ 新事实编入 [F#]"]
-    E1 --> R{"Critic 无反驳 或 已满 3 轮？"}
+    E1 --> R{"已满 3 轮？"}
     E2 --> R
     E3 --> R
-    R -->|"否（有反驳且未满）"| P
+    R -->|"否"| P
     R -->|"是"| F["收尾：有事实且可检验 → 起草；否则 → 不可立项结论"]
     F --> DR["起草研究规格：make_draft 并入调研事实与外部资料<br/>(LLM Pro · qwen3.8-max-0902)"]
     F --> GU["写「暂不可立项」调研结论<br/>(LLM Lite · deepseek-v4.1-flash)"]
@@ -115,15 +103,12 @@ flowchart TD
 
     classDef pro fill:#6d28d9,color:#fff,stroke:#4c1d95
     classDef lite fill:#0284c7,color:#fff,stroke:#075985
-    classDef critic fill:#0f766e,color:#fff,stroke:#115e59
-    class P,PR,DR pro
-    class CR critic
+    class P,DR pro
     class GU lite
 ```
 
-**Agentic 特征：** 每轮辩论的陈述都基于上一轮自己检索回来的事实清单做决策——选哪个工具、查什么、
-查够了没有、要不要放弃；独立 Critic 逐轮反驳（泄漏 / 数据可得性 / 引用 / 动作合理性），Planner 按评审意见修订；
-Critic 无反驳时辩论提前结束、输出假设。轮数不固定（1–3 轮），上限与校验由确定性代码兜底。
+**Agentic 特征：** 每轮 `plan` 都基于上一轮自己检索回来的事实清单做决策——选哪个工具、查什么、
+查够了没有、要不要放弃——轮数不固定（1–3 轮），由 LLM 的动态决策驱动；上限与校验由确定性代码兜底。
 
 ### 1.1 初始化数据从哪里来
 
@@ -158,18 +143,7 @@ Critic 无反驳时辩论提前结束、输出假设。轮数不固定（1–3 �
 ### 2.2 确定性校验
 
 复用 WF-02 `_validate_plan` 的套路：工具白名单、JSON schema、`[F#]` 引用有效性、`args` 中 2022+ 年份清洗。
-陈述与修订后的计划各过一遍校验；不合格时带原因重试一次，再不合格强制收尾。该步骤不调用大模型。
-
-### 2.3 辩论：独立评审与修订（每轮一次反驳、至多一次修订）
-
-- **反驳**（Critic LLM，`FACTOPIA_LLM_CRITIC_MODEL`）：独立评审陈述稿，检查动作在白名单内且与事实相符、
-  论点都有有效引用（[I1] / [F#]）、无测试期泄漏、不依赖平台没有的数据、动作是最小充分步骤、
-  draft 的假设与引用事实不矛盾；输出 `verdict = accept / revise` + `issues`（severity / text / cites）+ `required_changes`；
-  Critic 引用的无效事实被确定性代码丢弃；
-- **修订**（LLM Pro）：`revise` 时 Planner 带评审意见修订一次；修订稿再过同一套白名单 / schema 校验；
-  修订失败保留原陈述稿，不阻断本轮；
-- **提前收尾**：Critic `accept`（无反驳）时，执行完本轮动作即收尾输出假设（可起草 → draft；否则 → give_up 结论）；
-- 评审失败（输出非法 / 预算已超限）不阻断本轮：按原计划执行，继续下一轮辩论。
+不合格时带原因重试一次 `plan`；再不合格强制收尾。该步骤不调用大模型。
 
 ### 2.3 工具执行（全部复用现有模块）
 
@@ -191,40 +165,37 @@ Critic 无反驳时辩论提前结束、输出假设。轮数不固定（1–3 �
 
 | 步骤 | 模型 | 说明 |
 |---|---|---|
-| 陈述 / 修订 | **Pro**（`FACTOPIA_LLM_MODEL`，qwen3.8-max-0902） | 与 WF-02 Planner 一致 |
-| 反驳 | **Critic**（`FACTOPIA_LLM_CRITIC_MODEL`，qwen-plus；未配置或 403 回退 Pro） | 与 WF-02 深度思考的独立评审同模型 |
+| plan | **Pro**（`FACTOPIA_LLM_MODEL`，qwen3.8-max-0902） | 与 WF-02 Planner 一致；可选：policy 配置切 Lite 省钱 |
 | draft | **Pro** | `make_draft` 用主模型，与现有立项起草一致 |
 | give_up 结论 | **Lite**（`FACTOPIA_LLM_LITE_MODEL`，deepseek-v4.1-flash） | 简单总结任务 |
 
-单次调研费用参考：每轮辩论 = 1 次陈述 + 1 次反驳 +（被反驳时）1 次修订；
-3 轮打满约 7–9 次 LLM 调用 + 起草，单次运行成本约 $0.01–0.1 级，时长约 1–2 分钟。
+单次调研费用参考：3 轮 plan + 1 次 draft ≈ 4 次 Pro 调用 + 至多 1 次 Lite，单次运行成本约 $0.1 级，时长约 1 分钟内。
 
 ## 4. 记录与检查点
 
 ```
 runtime/briefs/<brief_id>/
 ├── brief.json          # 状态、轮数、事实清单 [F#]、结论、模型与 token
-├── rounds/<n>/plan.json        # 每轮：陈述稿 / 修订稿、critique 摘要、revised 标记
-├── rounds/<n>/plan_critique.json  # 独立评审：verdict / issues / required_changes
+├── rounds/<n>/plan.json        # 每轮：plan 输出、校验结果
 ├── rounds/<n>/action.json      # 执行结果、新增事实
-└── trace.jsonl         # kind=state / llm（planner / planner_revise / plan_critic）/ tool，与 WF-02 trace 同格式
+└── trace.jsonl         # kind=state / llm / tool，与 WF-02 trace 同格式（决策轨迹可展开展示）
 ```
 
-- 状态：`queued → planning → acting → closing → done / not_researchable / failed`（每轮在 planning/acting 间交替，辩论收尾经 closing）；
-- 费用走现有 `runtime/llm_costs.jsonl` 账本（用途："AI 调研规划" / "AI 调研规划评审" / "研究规格起草" / "AI 调研结论"）；
-- 预算上限在 policy 配置（如 `$0.5`），超限强制收尾（预算已超限时不再产生评审 / 结论 LLM 调用）；
+- 状态：`queued → planning → acting → closing → done / not_researchable / stopped / failed`（每轮在 planning/acting 间交替；收尾经 closing）；
+- 费用走现有 `runtime/llm_costs.jsonl` 账本（用途："AI 调研规划" / "研究规格起草" / "AI 调研结论"）；
+- 预算上限在 policy 配置（如 `$0.5`），超限强制收尾（预算已超限时不再产生新的 LLM 调用）；
 - runner 取消请求（`cancel_requested`）在每个 LLM 调用前检查，取消即停止。
 
 ## 5. 介绍脚本（约 2 分钟）
 
 1. 打开线索池，选一条**量价类**预置线索 → 点「AI 调研」；
-2. 调研面板实时展示（5 秒轮询，复用 Agent 页 Workflow 进度样式），每轮可见辩论三件套：
-   - 第 1 轮：陈述（内部检索）→ **评审要求修订**（如"查询太宽泛"）→ 已按评审修订 → 执行，+3 条事实；
-   - 第 2 轮：陈述（联网检索）→ 评审要求修订 → 修订 → 执行，+2 条事实（页面提示"来源需人工核验"）；
-   - 第 3 轮：陈述（起草）→ **评审通过 → 无反驳，辩论提前结束** → 输出假设；
-3. 点「去审核」跳研究立项审核页：展示草稿的假设 / 方向 / 数据需求 / 待确认事项，说明"证据来自 AI 调研，可在线索页回看每轮辩论轨迹"；
-4. **第二条讲解路径（give_up）**：选一条依赖基本面数据的线索 → 辩论 1–2 轮后 Critic 通过放弃计划，展示结论卡片（数据未接入、建议方向），说明"放弃"也是辩论得出的结论；
-5. 收尾讲解：三条 workflow 的层次——立项前（本条，检索-辩论）、立项后（WF-02，研究迭代）、子运行内（RD-Agent，因子挖掘）。
+2. 调研面板实时展示（5 秒轮询，复用 Agent 页 Workflow 进度样式）：
+   - 第 1 轮：plan → 内部检索，+3 条事实；
+   - 第 2 轮：plan → 联网检索，+2 条事实（页面提示"来源需人工核验"）；
+   - 第 3 轮：plan → `draft`；
+3. 点「去审核」跳研究立项审核页：展示草稿的假设 / 方向 / 数据需求 / 待确认事项，说明"证据来自 AI 调研，可在线索页回看每轮轨迹"；
+4. **第二条讲解路径（give_up）**：选一条依赖基本面数据的线索 → 第 1–2 轮即 `give_up`，展示结论卡片（数据未接入、建议方向），说明 AI 会"放弃"也是自主决策的一部分；
+5. 收尾讲解：三条 workflow 的层次——立项前（本条，检索-决策）、立项后（WF-02，研究迭代）、子运行内（RD-Agent，因子挖掘）。
 
 ## 6. 改动清单与工作量
 
@@ -254,12 +225,6 @@ runtime/briefs/<brief_id>/
 | `test_brief_idempotent` | 同一线索重复点「AI 调研」不创建第二个进行中的 brief |
 | `test_brief_budget_stops` | 超预算强制收尾 |
 | `test_brief_cancel_stops` | 取消请求在下一轮 LLM 调用前生效 |
-| `test_critic_accept_ends_early` | Critic 无反驳 → 辩论提前收尾、直接输出假设 |
-| `test_critic_revise_triggers_revision` | 反驳 → 按评审意见修订，执行修订稿 |
-| `test_critic_failure_keeps_plan` | 评审输出非法 → 保留原计划照常执行 |
-| `test_critic_invalid_cites_dropped` | 评审引用不存在的事实 → 无效引用被丢弃 |
-| `test_debate_max_rounds_with_revise` | 每轮都被反驳 → 打满 3 轮强制收尾 |
-| `test_critic_usage_counted` | 陈述 / 反驳 / 修订费用全部入账 |
 
 ## 8. 实现记录（2026-11-17）
 
@@ -269,16 +234,6 @@ runtime/briefs/<brief_id>/
 - 测试：`tests/test_briefs.py` 14 个用例（含红队：白名单外工具拒绝、无引用拒绝、年份清洗、满轮收尾、预算停止、取消、幂等），全部通过；`tests.test_agents` / `test_agents_p1` 33 个现有用例回归通过；
 - 前端构建：`npm run build` 通过；`web/dist` 已更新；
 - 冒烟测试（真实 LLM）：对 WF-02 预置线索 `idea_20261114202859_963f` 启动调研 → 第 1 轮内部检索 +8 事实 → 第 2 轮 `give_up`（正确识别"依赖公告文本数据、平台不可得"）→ Lite 写结论，23 秒完成，费用 $0.002。
-
-### 8.1 辩论改造（2026-11-18）
-
-- 每轮辩论 = 陈述 → 反驳 → 修订 → 执行：`brief._debate()`（`_plan_prompt` / `_plan_call` / `_critique_plan`）；
-- Critic 用 `FACTOPIA_LLM_CRITIC_MODEL`（qwen-plus），`accept` 时执行本轮动作后**提前收尾输出假设**；`revise` 时 Planner 带评审意见修订一次（修订稿再过白名单 / schema 校验，失败保留原稿）；
-- 每轮评审写入 `rounds/<n>/plan_critique.json`，trace 记 `role=plan_critic / planner_revise`；收尾原因（如"Critic 无反驳，辩论提前收尾"）保留到终态 `stop_reason` 供 UI 展示；
-- 预算护栏：预算已超限时不再产生评审 / 修订 / 结论 LLM 调用；
-- 前端：BriefPanel 每轮显示「评审通过 / 评审要求修订 / 已按评审修订 / 评审不可用」+ 评审意见与引用；面板说明改为辩论描述；
-- 测试：新增 6 个辩论用例（accept 提前收尾、revise 修订生效、评审失败不阻断、无效引用丢弃、打满轮数、费用入账），`tests.test_briefs` 20 个用例 + 现有 33 个 agent 用例全部通过；
-- 冒烟测试（真实 LLM）：同一线索 `idea_20261114202859_963f` 重新调研 → 第 1 轮陈述内部检索（qwen3.8-max）→ Critic 无反驳（qwen-plus，accept）→ 执行 +8 事实 → 辩论提前收尾 → 起草研究规格（outcome=draft），75 秒完成，费用 $0.007。
 
 ## 9. 线索卡片交互与锁定设计（2026-11-17）
 
@@ -360,6 +315,6 @@ const locked = !!editing || !!researchingId;
 
 ## 10. 可选扩展（v1 未做）
 
-- **终局法官**：辩论后由一个独立 LLM 法官裁定 draft / give_up（当前收尾判定是确定性代码）；
+- **Critic 评审**：plan 后加一轮 Critic LLM（`FACTOPIA_LLM_CRITIC_MODEL`）评审证据充分性，与 WF-02 深度思考同款式；
 - **plan 切 Lite**：policy 可配，进一步降费；
 - **调研摘要回写线索**：brief 结束后把事实清单摘要写回线索的 `ai_hypothesis` / 备注，供人工转立项时参考。
