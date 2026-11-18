@@ -6,6 +6,7 @@ import ResearchPage from "./pages/ResearchPage";
 import AuditPage from "./pages/AuditPage";
 import { RegionBanner, RegionSwitch } from "./components/RegionSwitch";
 import RunnerBanner from "./components/RunnerBanner";
+import ModelSettings from "./components/ModelSettings";
 
 /** 按需加载页面。重新部署后旧页面引用的文件名已不存在：加载失败时自动刷新一次，取得新版本。 */
 function lazyPage(load: () => Promise<{ default: ComponentType }>) {
@@ -160,7 +161,7 @@ export default function App() {
                 </NavLink>
               ))}
             </nav>
-            <div className="ml-auto flex items-center gap-2"><RegionSwitch /><ThemeToggle /></div>
+            <div className="ml-auto flex items-center gap-2"><RegionSwitch /><ThemeToggle /><ModelSettings /></div>
           </div>
         </header>
         <main className="flex-1 mx-auto w-full max-w-[1680px] px-4 md:px-6 py-6">

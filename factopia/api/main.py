@@ -119,6 +119,29 @@ def health():
     return {"status": "ok", "results": RESULTS.exists()}
 
 
+# ---------------------------------------------------------------- 设置菜单：模型选择
+
+@app.get("/api/settings/models")
+def settings_models():
+    """当前模型选择、可选项与费用（美元 / 百万 token）。环境变量映射只在配置里，不在界面出现。"""
+    from factopia import settings as runtime_settings
+    return runtime_settings.state()
+
+
+class ModelSettingsIn(BaseModel):
+    models: dict[str, str]
+
+
+@app.put("/api/settings/models")
+def settings_models_update(body: ModelSettingsIn):
+    """保存模型选择；平台调用立即生效，RD-Agent 新任务在下一次启动时生效。"""
+    from factopia import settings as runtime_settings
+    try:
+        return runtime_settings.save_models(body.models)
+    except runtime_settings.SettingsError as e:
+        raise HTTPException(422, str(e))
+
+
 @app.get("/api/overview")
 def overview():
     return _json(RESULTS / "overview.json")
