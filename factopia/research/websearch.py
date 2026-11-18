@@ -32,7 +32,7 @@ def config() -> dict:
     except ValueError:
         count = 8
     if provider == "bailian":
-        # 比赛环境只有百炼 key：用模型内置搜索，不额外申请博查/Tavily
+        # 当前环境只配置了百炼 key：用模型内置搜索，不额外申请博查 / Tavily
         key = (os.environ.get("FACTOPIA_LLM_API_KEY") or os.environ.get("OPENAI_API_KEY")
                or os.environ.get("FACTOPIA_SEARCH_API_KEY") or "").strip()
         base = (os.environ.get("FACTOPIA_LLM_BASE_URL") or os.environ.get("LITELLM_PROXY_API_BASE")

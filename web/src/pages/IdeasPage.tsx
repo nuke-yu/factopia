@@ -860,7 +860,7 @@ export default function IdeasPage() {
         <div>
           <div className="label">{t("00 · 线索池")}</div>
           <h1 className="font-display text-2xl font-semibold tracking-wide mt-1">{t("所有研究从一条线索开始")}</h1>
-          <p className="text-muted mt-1 max-w-[80ch]">{t("投资假设、论文研报、研究员经验与人工反馈从这里提交；监控预警、组合归因建议与审批退回自动回流。研究员挑选线索转为研究立项，之后走同一条有治理的流程（Spec 第 17 章）。")}</p>
+          <p className="text-muted mt-1 max-w-[80ch]">{t("投资假设、论文研报、研究员经验与人工反馈从这里提交；监控预警、组合归因建议与审批退回自动回流。研究员挑选线索转为研究立项，之后走同一条有治理的流程。")}</p>
         </div>
       </div>
       {list.error && <ErrorBox error={list.error} />}

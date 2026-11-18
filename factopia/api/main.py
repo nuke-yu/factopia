@@ -1021,7 +1021,7 @@ def _study_findings(markets: dict, rule: dict) -> list[dict]:
         ric_ok = ric is not None and ric * sign > 0
         if r is not None and br is not None and r > br and not ric_ok:
             out.append({"tone": "bad", "text": f"{name}：采纳轮次的收益高于起点（{br:.1%} → {r:.1%}），但 rank IC 为 {ric:.3f}，"
-                                                f"方向与假设相反——收益提高不是因为模型会给股票排序（第 8 章 #21）。"})
+                                                f"方向与假设相反——收益提高不是因为模型会给股票排序。"})
         elif ric_ok:
             out.append({"tone": "good", "text": f"{name}：采纳轮次的 rank IC 为 {ric:.3f}，方向与假设一致"
                                                  + ("，但幅度很小。" if abs(ric) < 0.02 else "。")})

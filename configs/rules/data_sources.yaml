@@ -54,7 +54,7 @@ sources:
     visibility: public
     status: forbidden
     licence: 使用条款禁止自动抓取，禁止用于开发、训练、验证 AI 系统
-    note: 须向港交所申请书面授权或采购 IIS 数据服务（Spec 第 11.3.3 节）
+    note: 须向港交所申请书面授权或采购 IIS 数据服务
     regions: [hk]
 # 数据可见范围（BR-01、02）：每个来源的可见级别；授权"数据可见范围"条款 → 允许的级别（GEN-VIS-001）
 visibility:

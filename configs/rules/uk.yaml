@@ -33,7 +33,7 @@ rules:
     check: {type: data_category, category: text}
     source: UK Market Abuse Regulation 第 7、14 条
     approvers: [英国合规]
-    impact: 只使用正式发布后的公告，按实际可获取时间生效（第 14.9 节）
+    impact: 只使用正式发布后的公告，按实际可获取时间生效
   - id: UK-GDPR-001
     title: 文本或另类数据可能含个人数据（UK GDPR）
     severity: warn

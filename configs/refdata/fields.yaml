@@ -45,7 +45,7 @@ fields:
      formula: "大模型逐段给出；人工修正后置信度记为 1.0；概念置信度 < 0.6 或翻译置信度 < 0.7 进入语言专家复核"}
   - {group: 文本信号, name: tone, zh: 风险语气, unit: 每百段净风险表述, source: 平台, adjustment: 使用复核后生效的标注, available: 同 effective_date,
      formula: "tone = Σ(方向 × 置信度) ÷ 公告段落总数 × 100；方向：风险加重 +1、缓解 −1；判定不涉及风险的段落记 0"}
-  - {group: 文本信号, name: risk_change, zh: 管理层风险表述变化, unit: 每百段净风险表述的变化, source: AMF 公告（法国）/ 模拟数据（香港、英国）, adjustment: —, available: 公告正式发布 + 处理延迟，按收盘时刻顺延（Spec 第 14.9 节）,
+  - {group: 文本信号, name: risk_change, zh: 管理层风险表述变化, unit: 每百段净风险表述的变化, source: AMF 公告（法国）/ 模拟数据（香港、英国）, adjustment: —, available: 公告正式发布 + 处理延迟，按收盘时刻顺延,
      formula: "risk_change = 本篇 tone − 同一系列上一篇 tone（同公司、同类型、同语言）；从 effective_date 起沿用，最长 63 个交易日；同日多篇取平均"}
   # ── 参考数据（当前快照，不用于回测）──
   - {group: 参考数据, name: sector / industry, zh: 行业分类, unit: —, source: Yahoo Finance（Morningstar 口径）, adjustment: —, available: 当前快照，非时间点一致, note: 不是 GICS / ICB；正式使用需数据商授权的行业分类}

@@ -127,7 +127,7 @@ export default function ResearchPage() {
       <div>
         <div className="label">{t("02 · 研究立项")}</div>
         <h1 className="font-display text-2xl font-semibold tracking-wide mt-1">{t("提出假设，选择研究范围")}</h1>
-        <p className="text-muted mt-1 max-w-[70ch]">{t("研究员只需表达想法和范围；AI 会据此起草研究规格（研究计划、候选方向、可证伪测试），在下一步由你审核确认（Spec 第 16 章）。")}</p>
+        <p className="text-muted mt-1 max-w-[70ch]">{t("研究员只需表达想法和范围；AI 会据此起草研究规格（研究计划、候选方向、可证伪测试），在下一步由你审核确认。")}</p>
       </div>
       {!!draft.ideaIds?.length && (
         <div className="panel p-3 flex flex-col gap-1.5 text-sm">
@@ -191,7 +191,7 @@ export default function ResearchPage() {
                 {!!mandate?.free_text.length && (
                   <p className="text-sm mt-3"><span className="text-faint">{t("需要 AI 解释的条款：")}</span>{mandate.free_text.join(IS_ZH ? "；" : "; ")}</p>
                 )}
-                <p className="text-xs text-faint mt-2">{t("模拟授权，不含真实客户信息。结构化条款由系统直接转换为约束；自由文本条款由 AI 解释，在审核页逐条确认（第 16.5 节）。")}</p>
+                <p className="text-xs text-faint mt-2">{t("模拟授权，不含真实客户信息。结构化条款由系统直接转换为约束；自由文本条款由 AI 解释，在审核页逐条确认。")}</p>
               </>
             )}
           </Panel>
@@ -235,7 +235,7 @@ export default function ResearchPage() {
             {mentions.length > 0 && (
               <div className="mt-3">
                 <Notice title={tf("输入中出现了测试期内的年份：{l}", { l: joinList(mentions) })}>
-                  {t("Factopia-Agent 回测测试期从 2022 年开始。描述测试期内发生的事等于提前透露考题（MINE-11）。如确需保留，请在审核页确认。")}
+                  {t("Factopia-Agent 回测测试期从 2022 年开始。描述测试期内发生的事等于提前透露考题。如确需保留，请在审核页确认。")}
                 </Notice>
               </div>
             )}

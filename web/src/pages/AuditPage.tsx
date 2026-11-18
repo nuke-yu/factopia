@@ -181,7 +181,7 @@ function Review({ result, markets, horizon, inputs, locked, setLocked }: {
             <Row name={t("约束")} source={t("系统")} hint={t("授权结构化条款 + 已解释的自由文本条款 + 平台规则")}>
               <ul className="text-sm flex flex-col gap-1">{d.constraints.map((c) => <li key={c} className="num text-xs">· {c}</li>)}</ul>
             </Row>
-            <Row name={t("证据包")} source={t("系统")} hint={t("只用测试期之前的数据（MINE-11）")}>
+            <Row name={t("证据包")} source={t("系统")} hint={t("只用测试期之前的数据")}>
               <EvidenceList result={result} />
             </Row>
           </div>
@@ -210,15 +210,15 @@ function Review({ result, markets, horizon, inputs, locked, setLocked }: {
             </ul>
             <p className="text-xs text-faint mt-2">{t("勾选表示已阅读并接受；不同意的内容请直接修改左侧字段。确认记录随版本保存。")}</p>
           </Panel>
-          <Panel eyebrow="MINE-11" title={t("防泄漏检查")}>
+          <Panel eyebrow={t("防泄漏")} title={t("防泄漏检查")}>
             <ul className="flex flex-col gap-2 text-sm">
               <Check ok text={tf("证据包计算区间截至 {e}（测试期 {s} 起）", { e: result.evidence.alpha158[0]?.period.end ?? "—", s: result.evidence.alpha158[0]?.test_start ?? "—" })} />
               <Check ok text={t("以往运行只提供假设方向与是否采纳；受泄漏影响的运行已排除")} />
               <Check ok={mentions.length === 0} text={mentions.length ? tf("规格中出现测试期年份：{y}", { y: joinList(mentions) }) : t("规格中没有测试期内的年份")} />
-              <Check ok={false} warnOnly text={t("大模型自身可能记得测试期的行情，无法消除（第 8 章 #20）")} />
+              <Check ok={false} warnOnly text={t("大模型自身可能记得测试期的行情，无法消除")} />
             </ul>
           </Panel>
-          <Panel eyebrow={`BR-21 · ${t("锁定前")}`} title={t("立项预检")}>
+          <Panel eyebrow={t("锁定前")} title={t("立项预检")}>
             {pre.loading && <div className="label">{t("检查中…")}</div>}
             {pre.error && <div className="text-xs text-bad">{pre.error}</div>}
             {(locked?.precheck_setup ?? pre.data) && <PrecheckView pre={(locked?.precheck_setup ?? pre.data)!} compact />}
@@ -250,7 +250,7 @@ function Review({ result, markets, horizon, inputs, locked, setLocked }: {
         </aside>
       </div>
 
-      <Panel eyebrow={`RS-07 · ${t("所见即所发")}`} title={t("提示词预览")}>
+      <Panel eyebrow={t("所见即所发")} title={t("提示词预览")}>
         <PromptPreview spec={locked ?? spec} markets={markets} />
       </Panel>
     </div>

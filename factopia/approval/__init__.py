@@ -370,7 +370,7 @@ def act(sid: str, role: str, by: str, action: str, note: str = "", rule: str | N
         return s
     _require(s["status"] == "in_review", f"该提交已结束（{STATUS_ZH[s['status']]}）")
     step = s["steps"][s["current"]]
-    _require(role == step["role"], f"当前应由「{step['role']}」处理，不能跳步（WB-05）")
+    _require(role == step["role"], f"当前应由「{step['role']}」处理，不能跳步")
     ev = {"action": action, "role": role, "by": by, "note": note, "step": s["current"]}
 
     if action in ("exception", "acknowledge"):

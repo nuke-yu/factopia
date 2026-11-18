@@ -389,7 +389,7 @@ function Detail({ sid, onChanged }: { sid: string; onChanged: () => void }) {
               <ul className="text-xs text-muted flex flex-col gap-1">{m.diagnosis.map((d) => <li key={d}>· {d}</li>)}</ul>
             </Panel>
           </div>
-          <Panel eyebrow={t("BR-31：参照期（测试期）与上线期对比")} title={t("监控指标")}>
+          <Panel eyebrow={t("参照期（测试期）与上线期对比")} title={t("监控指标")}>
             <div className="overflow-x-auto">
               <table className="w-full text-sm num">
                 <thead className="label text-left"><tr><th className="py-1 pr-3">{t("指标")}</th>
