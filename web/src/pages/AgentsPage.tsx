@@ -971,7 +971,7 @@ function AgentTraceControls({ showTrace, showWorkflow, onToggleTrace, onToggleWo
         </button>
         <button type="button" className={`btn h-8 ${showWorkflow ? "border-accent text-accent" : ""}`}
           aria-pressed={showWorkflow} onClick={onToggleWorkflow}>
-          {showWorkflow ? t("隐藏生成下一个AI的思考过程") : t("显示生成下一个AI的思考过程")}
+          {showWorkflow ? t("隐藏“生成下一个假设”的思考过程") : t("显示“生成下一个假设”的思考过程")}
         </button>
       </div>
     </Panel>
