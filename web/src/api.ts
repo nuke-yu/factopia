@@ -422,6 +422,57 @@ export type TextSummary = {
   citations: { n: number; dataset: string; doc_id: string; paragraph: number; company: string; title: string;
     published_at: string; available_at: string; simulated: boolean; url: string | null }[];
 };
+export type DigFact = {
+  id: string; concept: string; name: string; direction: 1 | -1; statement: string; date: string | null;
+  evidence: string; cites: number[]; refs: { doc_id: string; paragraph: number; title: string }[];
+  review_status: string | null; at: string;
+};
+export type DigHit = {
+  doc_id: string; paragraph: number; company: string; instrument: string; title: string; language: string;
+  published_at: string | null; business_date: string | null; original: string; translation: Record<string, string>;
+  concepts: { concept: string; name: string; direction: number; confidence: number }[]; matched: string[];
+  review_status: string | null; simulated: boolean;
+};
+export type DigRound = {
+  round: number;
+  plan?: { action: string; rationale: { text: string; cites: string[] };
+    args: { query?: string; annotate_first?: boolean; summarize_first?: boolean; reason?: string };
+    model?: string; error?: string } | null;
+  rewrite?: { query: string; terms: string[]; concepts: string[]; model: string | null; error?: string } | null;
+  search?: { query: string; hits: DigHit[]; total: number; scoped_out: number; error?: string } | null;
+  annotate?: { labelled: number; docs: number; model: string; skipped?: boolean; reason?: string; errors?: string[] } | null;
+  summarize?: { query: string; sentences: { text: string; cites: number[] }[]; dropped: number; model: string | null; error?: string } | null;
+  extract?: { added_facts: string[]; dropped: { reason: string; statement?: string }[]; model?: string;
+    skipped?: boolean; reason?: string; error?: string } | null;
+  conclusion?: { summary?: string; groups?: { concept: string; name: string; summary: string; cites: string[] }[];
+    timeline?: { date: string; statement: string; cites: string[] }[]; signal_note?: string; follow_ups?: string[];
+    give_up?: { reason: string; evidence_gaps: string[]; suggestion: string } } | null;
+};
+export type DigWeb = {
+  configured: boolean | null; provider: string | null; model: string | null; warning: string | null;
+  queries: { query: string; n: number; error: string | null }[];
+  results: { title: string; url: string; snippet: string; published: string | null; source: string | null }[];
+  error: string | null; at: string;
+};
+export type TextDig = {
+  dig: {
+    dig_id: string; dataset: string; instrument: string; company: string; state: string;
+    created_at: string; updated_at: string;
+    seed: { dataset: string; company: string; instrument: string; market: Market; simulated: boolean;
+      n_filings: number | null; filing: Record<string, unknown> | null };
+    round: number; max_rounds: number; facts: DigFact[];
+    usage: { prompt_tokens: number; completion_tokens: number }; cost_usd: number;
+    web_search: boolean; web: DigWeb | null;
+    outcome: "done" | "insufficient" | null;
+    conclusion: { summary?: string; groups?: { concept: string; name: string; summary: string; cites: string[] }[];
+      timeline?: { date: string; statement: string; cites: string[] }[]; signal_note?: string; web_note?: string;
+      follow_ups?: string[];
+      give_up?: { reason: string; evidence_gaps: string[]; suggestion: string };
+      model: string | null; at?: string; fallback?: boolean } | null;
+    stop_reason: string | null; last_error: string | null; job_id?: string;
+  };
+  rounds: DigRound[];
+};
 // ---------------------------------------------------------------- 数据台：参考数据与时间点一致性
 export type PitDomain = { key: string; name: string; used_in_backtest: boolean; business_date: string; published_at: string;
   available_at: string; status: "ok" | "warn"; note: string };
@@ -578,6 +629,7 @@ export type SignalEntry = {
   thresholds: Record<string, number>; monitor: { computed_at: string; suggestion: string; suggestion_zh: string; alerts: number } | null;
   events: { action: string; role: string; note: string; at: string; hash: string }[]; monitor_job?: Job | null;
   paper?: { active: boolean; mode: string; nav_last: number | null; suggestion: string | null } | null;
+  enrollable?: boolean; // 可接入模拟盘：生产中/已暂停 + 真实行情 + 有冻结因子与 score 信号数据
 };
 // 模拟盘报告（factopia/paper/report.py 写入 runtime/signals/<sid>/paper.json；详情接口返回完整报告）
 export type PaperResult = {
@@ -706,6 +758,25 @@ export type IdeaDetail = Idea & { events: { action: string; by: string; note?: s
 export type IdeaList = { items: Idea[]; counts: { channel: Record<string, number>; status: Record<string, number> }; synced: number;
   channels: Record<IdeaChannel, string>; manual: IdeaChannel[]; status_zh: Record<IdeaStatus, string>; licences: Record<string, string>;
   feedback_roles: string[] };
+export type BriefTool = "search_internal" | "search_external" | "evidence" | "draft" | "give_up";
+export type BriefFact = { id: string; source: string; kind?: string; kind_zh?: string; title: string; text: string;
+  url?: string; published?: string; ref?: string; at?: string };
+export type BriefRound = { round: number; plan: { action: BriefTool; rationale: { text: string; cites: string[] };
+    args: Record<string, unknown>; model: string; prompt_version: string; at?: string; error?: string } | null;
+  action: { action: BriefTool; added_facts: string[]; summary?: Record<string, unknown>; error?: string; at?: string } | null;
+  conclusion: { reason: string; evidence_gaps: string[]; suggestion: string; model: string | null; at?: string } | null };
+export type IdeaBrief = { brief: { brief_id: string; idea_id: string; state: string; created_at: string; updated_at: string;
+    idea: { title: string; body: string; channel: string; channel_zh?: string; markets: Market[]; hypothesis: string; direction: string };
+    round: number; max_rounds: number; facts: BriefFact[]; cost_usd: number; usage: { prompt_tokens: number; completion_tokens: number };
+    outcome: "draft" | "not_researchable" | null; stop_reason: string | null; last_error: string | null;
+    job_id?: string;
+    draft?: { inputs: Record<string, unknown>;
+      draft: { id?: string; title_zh?: string; hypothesis: string; hypothesis_zh?: string; directions: string[];
+        rationale?: { category: string; note: string }; data_needs?: { category: string; name: string }[];
+        open_questions?: string[]; system_questions?: string[]; signal_source?: string; markets?: string[] };
+      meta?: Record<string, unknown> };
+    conclusion: { reason: string; evidence_gaps: string[]; suggestion: string; model: string | null; at?: string } | null };
+  rounds: BriefRound[] };
 export type IdeaInput = { channel: IdeaChannel; title: string; body: string; markets: Market[]; submitted_by: string; role?: string;
   confirm_no_client_data: boolean; direction?: string; period?: string; feedback_role?: string;
   document?: { name?: string; content_base64?: string; source: string; licence: string; licence_note?: string; published?: string;
@@ -838,6 +909,10 @@ export const api = {
     return get<{ query: string; concepts: { concept: string; name: string; terms: string[] }[]; results: TextHit[]; truncated: boolean }>(`/text/search?${p}`);
   },
   textSummary: (q: string, concepts: string[] = []) => post<TextSummary>("/text/summary", { q, concept: concepts.length ? concepts : null }),
+  textDigCreate: (body: { dataset: string; instrument: string; company: string; filing_id?: string; web_search?: boolean }) =>
+    post<{ dig_id: string; job_id: string; state: string; created_at: string }>("/text/dig", body),
+  textDigs: (dataset: string, instrument: string) =>
+    get<TextDig>(`/text/digs?dataset=${encodeURIComponent(dataset)}&instrument=${encodeURIComponent(instrument)}`),
   textReview: (status: "pending" | "done" | "all", dataset?: string, tier: ReviewTier | "all" = "all") =>
     get<{ items: ReviewItem[]; counts: ReviewCounts; actions: Record<string, string>; tiers_zh: Record<ReviewTier, string> }>(
       `/text/review?status=${status}&limit=60&tier=${tier}${dataset ? `&dataset=${dataset}` : ""}`),
@@ -920,4 +995,6 @@ export const api = {
     post<IdeaSuggestion>("/ideas/suggest", { channel, markets, avoid, seed, skip_angle }),
   ideaCombine: (ids: string[], by: string, base: string | null) => post<IdeaCombo>("/ideas/combine", { ids, by, base }),
   ideaAiHypothesis: (id: string) => post<Idea>(`/ideas/${id}/ai-hypothesis`, {}),
+  ideaBriefCreate: (id: string) => post<{ brief_id: string; job_id: string; state: string; created_at: string }>(`/ideas/${id}/brief`, {}),
+  ideaBrief: (id: string) => get<IdeaBrief>(`/ideas/${id}/brief`),
 };

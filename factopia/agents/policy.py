@@ -99,3 +99,100 @@ def should_stop(agent: dict, memory: dict, policy: dict) -> str | None:
         if len(tail) >= patience:
             return f"连续 {patience} 轮没有改进"
     return None
+
+
+# ── AI 调研（WF-03）策略 ──────────────────────────────────────────
+
+BRIEF_DEFAULTS = {
+    "max_rounds": 3,
+    "budget_usd": 0.5,
+    "mandate": "demo_crossborder_hk",
+    "horizon": 20,
+    "tools": ["search_internal", "search_external", "evidence", "draft", "give_up"],
+    "prompts": {
+        "planner": "brief-planner-v1",
+        "conclusion": "brief-conclusion-v1",
+    },
+}
+
+
+def load_brief(path: str | Path | None = None) -> dict:
+    """读取并校验 AI 调研策略；文件不存在时使用默认值。"""
+    p = Path(path) if path else CONFIGS / "agents" / "brief.yaml"
+    raw = {}
+    if p.exists():
+        raw = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+        if not isinstance(raw, dict):
+            raise PolicyError(f"策略文件必须是 YAML 对象：{p}")
+    policy = {**BRIEF_DEFAULTS, **raw}
+    try:
+        policy["max_rounds"] = int(policy["max_rounds"])
+        policy["budget_usd"] = float(policy["budget_usd"])
+        policy["horizon"] = int(policy["horizon"])
+    except (TypeError, ValueError) as e:
+        raise PolicyError(f"AI 调研策略中的轮数 / 预算 / 周期必须是数字：{e}") from e
+    if policy["max_rounds"] < 1:
+        raise PolicyError("max_rounds 必须 ≥ 1")
+    if policy["budget_usd"] < 0:
+        raise PolicyError("budget_usd 必须 ≥ 0")
+    if policy["horizon"] not in (1, 5, 20, 60):
+        raise PolicyError("horizon 必须是 1 / 5 / 20 / 60 之一")
+    if not isinstance(policy["tools"], list) or not all(isinstance(x, str) for x in policy["tools"]):
+        raise PolicyError("tools 必须是字符串列表")
+    prompts = policy.get("prompts") or {}
+    if not isinstance(prompts, dict):
+        raise PolicyError("prompts 必须是对象")
+    for key in ("planner", "conclusion"):
+        if not prompts.get(key):
+            raise PolicyError(f"prompts.{key} 不能为空")
+    policy["prompts"] = {**BRIEF_DEFAULTS["prompts"], **prompts}
+    return policy
+
+
+# ── 公告深挖（WF-04）策略 ──────────────────────────────────────
+
+DIG_DEFAULTS = {
+    "max_rounds": 4,
+    "budget_usd": 1.5,
+    "max_hits": 20,
+    "tools": ["query", "finish", "give_up"],
+    "prompts": {
+        "planner": "dig-planner-v1",
+        "rewrite": "dig-rewrite-v1",
+        "extract": "dig-extract-v1",
+        "conclusion": "dig-conclusion-v1",
+    },
+}
+
+
+def load_dig(path: str | Path | None = None) -> dict:
+    """读取并校验公告深挖策略；文件不存在时使用默认值。"""
+    p = Path(path) if path else CONFIGS / "agents" / "dig.yaml"
+    raw = {}
+    if p.exists():
+        raw = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+        if not isinstance(raw, dict):
+            raise PolicyError(f"策略文件必须是 YAML 对象：{p}")
+    policy = {**DIG_DEFAULTS, **raw}
+    try:
+        policy["max_rounds"] = int(policy["max_rounds"])
+        policy["budget_usd"] = float(policy["budget_usd"])
+        policy["max_hits"] = int(policy["max_hits"])
+    except (TypeError, ValueError) as e:
+        raise PolicyError(f"公告深挖策略中的轮数 / 预算 / 命中数必须是数字：{e}") from e
+    if not 3 <= policy["max_rounds"] <= 5:
+        raise PolicyError("max_rounds 必须是 3–5")
+    if policy["budget_usd"] < 0:
+        raise PolicyError("budget_usd 必须 ≥ 0")
+    if policy["max_hits"] < 1:
+        raise PolicyError("max_hits 必须 ≥ 1")
+    if not isinstance(policy["tools"], list) or not all(isinstance(x, str) for x in policy["tools"]):
+        raise PolicyError("tools 必须是字符串列表")
+    prompts = policy.get("prompts") or {}
+    if not isinstance(prompts, dict):
+        raise PolicyError("prompts 必须是对象")
+    for key in ("planner", "rewrite", "extract", "conclusion"):
+        if not prompts.get(key):
+            raise PolicyError(f"prompts.{key} 不能为空")
+    policy["prompts"] = {**DIG_DEFAULTS["prompts"], **prompts}
+    return policy

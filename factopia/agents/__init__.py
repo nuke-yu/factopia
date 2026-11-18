@@ -5,4 +5,4 @@
 
 P0 只实现事实包、诊断、规划、new_version 草稿与报告；不接 API / 前端 / runner。
 """
-__all__ = ["store", "policy", "observe", "tools", "llm", "loop", "report"]
+__all__ = ["store", "policy", "observe", "tools", "llm", "loop", "report", "brief", "dig"]

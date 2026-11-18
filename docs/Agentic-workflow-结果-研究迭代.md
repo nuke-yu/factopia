@@ -31,11 +31,98 @@ docker compose -f docker-compose.yml -f compose.local.yml --profile platform --p
 
 模型由 `.env` 控制：
 
-- **Pro LLM** = `FACTOPIA_LLM_MODEL`，当前为 `qwen3.8-max-0902`（Planner / 起草 / 诊断等复杂任务）
-- **Critic LLM** = `FACTOPIA_LLM_CRITIC_MODEL`，当前为 `qwen-plus`（深度思考的独立评审；未配置或 403 回退 Pro LLM）
-- **Lite LLM** = `FACTOPIA_LLM_LITE_MODEL`，当前为 `deepseek-v4.1-flash`（简单任务）
+- **LLM Pro（主模型）** = `FACTOPIA_LLM_MODEL`，当前为 `qwen3.8-max-0902`（规划 / 起草 / 诊断 / 修订等复杂任务）
+- **LLM Lite（轻量模型）** = `FACTOPIA_LLM_LITE_MODEL`，当前为 `deepseek-v4.1-flash`（简单任务）
+- **Critic（评审模型）** = `FACTOPIA_LLM_CRITIC_MODEL`，当前为 `qwen-plus`（深度思考的独立评审；未配置或 403 回退主模型）
+- **联网搜索** = `FACTOPIA_SEARCH_PROVIDER=bailian` + `FACTOPIA_SEARCH_MODEL=qwen-plus`（百炼内置搜索；bocha / tavily 不调用 LLM）
+- **向量模型** = `EMBEDDING_MODEL`，当前为 `openai/text-embedding-v4`（平台资料 / 语义检索用；本迭代流程不直接调用）
 - **普通编程** = 确定性代码 / 文件 / 队列，不调用大模型
-- **人工** = 页面上的审改、批准、终止等人工操作
+- **用户操作** = 页面上的审改、批准、终止等人工操作
+
+### 业务设计
+
+> 面向金融业客户阅读。图中每个 AI 步骤都标注了所用模型类型与具体模型；未标注的步骤由平台自动执行，不调用 AI。
+
+```mermaid
+flowchart TD
+    A["结果页：用户选择「继续研究 ▾ → AI 生成下一版假设并自动运行」"] --> D["汇总本轮研究事实与结论"]
+    D --> E["诊断上一轮未达标原因<br/>(LLM Pro · qwen3.8-max-0902)"]
+    E -->|"未勾选联网"| F["制定本轮研究计划，并预先登记验收标准<br/>1. 因子表现须达到最低改善幅度<br/>2. 新假设须通过可证伪性检验<br/>3. 须通过可信度复核<br/>(LLM Pro · qwen3.8-max-0902)"]
+    E -.->|"勾选联网"| WS["联网检索历史公开资料<br/>(联网搜索 · qwen-plus)"]
+    WS -.-> F
+    subgraph DT["深度思考（可选）：计划草案先经独立评审、按意见修订"]
+      direction LR
+      PC["独立评审：防未来数据泄漏 / 防数据不可得 / 防过拟合 / 核查引用<br/>(Critic · qwen-plus)"] -->|"需修改，且需补证（已勾选联网）"| RS["补充检索公开资料（一次，测试期前）<br/>(联网搜索 · qwen-plus)"]
+      RS --> PR["按评审意见修订计划<br/>(LLM Pro · qwen3.8-max-0902)"]
+      PC -->|"需修改"| PR
+    end
+    F -->|"勾选深度思考"| PC
+    F -.->|"未勾选深度思考"| G["AI 起草下一版研究假设<br/>(LLM Pro · qwen3.8-max-0902)"]
+    PC -->|"评审通过"| G
+    PR --> G
+    G --> H["用户审阅并修改草稿"]
+    H -->|"批准并运行"| I["保存新版本，各市场自动运行验证"]
+    H -->|"只保存版本"| J["保存新版本，暂不运行"]
+    H -->|"拒绝"| K["研究停止"]
+    H -.->|"用户终止当前研究"| Y["停止全部研究任务；禁止再生成新版本"]
+    subgraph PAR["n 条并行验证流水线（每个市场一条；n = 新版本覆盖的市场数）"]
+      direction LR
+      M1["市场 1：自动执行研究验证（回测）"] -->|"完成后立即复核"| V1["市场 1：可信度复核（用未见数据独立重跑）"]
+      M2["市场 2：自动执行研究验证（回测）"] -->|"完成后立即复核"| V2["市场 2：可信度复核（用未见数据独立重跑）"]
+      Mn["…… 市场 n：自动执行研究验证（回测）"] -->|"完成后立即复核"| Vn["…… 市场 n：可信度复核（用未见数据独立重跑）"]
+    end
+    I -->|"一次建立 n 条流水线"| M1
+    I --> M2
+    I --> Mn
+    V1 --> L["汇总各市场验证与可信度复核结果"]
+    V2 --> L
+    Vn --> L
+    L --> N["结合验证结果与可信度复核，按预先登记的标准评估本轮是否改进"]
+    N --> O["合规规则预检"]
+    O --> P{"未改进 / 无法判定？"}
+    P -->|"是"| Q["失败经验自动回流线索池<br/>（渠道：研究 Agent 反馈）"]
+    P -->|"否"| R["记录本轮研究结论，判断是否继续迭代"]
+    Q --> R
+    R -->|"继续下一轮迭代"| D
+    R -->|"达到轮数上限 / 停止条件"| S["结束"]
+    S --> T["研究详情页展示：评估、合规预检、因子重叠、报告"]
+    Q -.->|"用户打开线索时"| U["AI 将线索改写为研究假设<br/>(LLM Lite · deepseek-v4.1-flash)"]
+    T -.->|"用户继续研究"| V["发起下一版 / 提交审批"]
+    V -.->|"进入研究立项"| W["AI 起草研究立项规格<br/>(LLM Pro · qwen3.8-max-0902)"]
+
+    classDef pro fill:#6d28d9,color:#fff,stroke:#4c1d95
+    classDef lite fill:#0284c7,color:#fff,stroke:#075985
+    classDef critic fill:#0f766e,color:#fff,stroke:#115e59
+    classDef search fill:#15803d,color:#fff,stroke:#14532d
+    classDef human fill:#d97706,color:#fff,stroke:#92400e
+    class E,F,G,W,PR pro
+    class PC critic
+    class WS,RS search
+    class U lite
+    class A,H,V human
+    
+    subgraph LG["图例"]
+      direction LR
+      LG1["(LLM Pro · qwen3.8-max-0902)：主模型，完成复杂推理<br/>（诊断 / 规划 / 起草 / 修订）"]:::pro
+      LG2["(Critic · qwen-plus)：独立评审模型"]:::critic
+      LG3["(LLM Lite · deepseek-v4.1-flash)：轻量模型，完成简单任务"]:::lite
+      LG4["(联网搜索 · qwen-plus)：联网检索公开资料"]:::search
+      LG5["（用户）：用户在页面上的操作"]:::human
+      LG6["无标注：平台自动执行"]
+    end
+
+```
+
+补充说明：
+
+- 平台共使用 5 类模型：**主模型（LLM Pro）**、**轻量模型（LLM Lite）**、**评审模型（Critic）**、**联网搜索**、**向量模型**；其中向量模型用于平台的资料检索场景，本迭代流程不直接调用。
+- 评估、合规预检、因子重叠 / 互补、报告等环节由平台确定性规则完成，不调用 AI，保证结果可复现、可审计。
+- 深度思考为可选：开启后计划草案先经独立评审再定稿，更严谨、也更耗时。
+- 计划也可能直接决定结束研究（如问题已解决或不值得继续）。
+
+### 技术设计
+
+> 面向开发人员。节点标注为模型类型（不标注具体模型）；`(普通编程)` 为确定性代码路径。
 
 ```mermaid
 flowchart TD
@@ -48,7 +135,9 @@ flowchart TD
     WS -.-> F
     subgraph DT["深度思考（可选）：planning 内的有界多智能体子流程"]
       direction LR
-      PC["独立 Critic 评审<br/>泄漏 / 数据 / 过拟合 / 引用<br/>(Critic LLM)"] -->|"revise"| PR["Planner 按评审修订<br/>(Pro LLM)"]
+      PC["独立 Critic 评审<br/>泄漏 / 数据 / 过拟合 / 引用<br/>(Critic LLM)"] -->|"revise；需要补证且已勾选联网"| RS["平台补充检索<br/>(一次，测试期前)"]
+      RS --> PR["Planner 按评审修订<br/>(Pro LLM)"]
+      PC -->|"revise"| PR
     end
     F -->|"勾选深度思考"| PC
     F -.->|"未勾选深度思考"| F2["最终计划<br/>(普通编程：白名单 + schema 校验)"]
@@ -96,7 +185,7 @@ flowchart TD
     class E,F,G,W,PR pro
     class PC critic
     class U lite
-    class B,C,D,I,J,K,L,V1,V2,Vn,M,N,O,Q,R,S,T,Y,Z,WS,F2 code
+    class B,C,D,I,J,K,L,V1,V2,Vn,M,N,O,Q,R,S,T,Y,Z,WS,RS,F2 code
     class A,H,V human
     class M1,M2,Mn rda
 ```
@@ -155,15 +244,18 @@ flowchart TD
 | 选项 | 默认 | 作用 |
 |---|---|---|
 | **联网** | 不勾选 | 只在勾选时，Agent 在 `diagnose` 后、`plan` 前调用联网搜索；未配置搜索 key 时拒绝启动 Agent |
-| **深度思考** | 不勾选 | Planner → 独立 Critic → Planner 修订（最多一轮），更慢、更贵 |
+| **深度思考** | 不勾选 | 规划 → 独立评审 → 修订（最多一轮），更慢、更贵 |
 
 ### 0.2.1 联网搜索
 
 ```mermaid
 flowchart LR
-  D["diagnose<br/>(Pro LLM)"] -.->|"勾选联网"| W["web_search<br/>(外部搜索 API；不调用 LLM)"]
-  W -.-> P["plan / Planner v2<br/>(Pro LLM)"]
+  D["诊断未达标原因<br/>(LLM Pro)"] -.->|"勾选联网"| W["联网检索历史公开资料<br/>（仅测试期前；不调用模型）"]
+  W -.-> P["制定本轮计划<br/>(LLM Pro)"]
   D --> P
+
+  classDef pro fill:#6d28d9,color:#fff,stroke:#4c1d95
+  class D,P pro
 ```
 
 安全边界：
@@ -197,28 +289,31 @@ FACTOPIA_SEARCH_BEFORE=2021-12-31
 
 研究立项页还有人工可选的「外部资料检索」：搜索、勾选最多 8 条，随「AI 起草研究规格」发送；使用提示词 `rs-draft-v4`，审核页显示外部资料清单。外部资料仅作灵感，不改变平台判定。
 
-### 0.2.2 深度思考（有界多智能体）
+### 0.2.2 深度思考（独立评审 + 修订）
 
 ```mermaid
 flowchart LR
-  P["Planner 草案<br/>(Pro LLM)"] --> C["独立 Critic<br/>泄漏 / 数据可得性 / 过拟合 / 引用 / 白名单<br/>(Critic LLM)"]
-  C -->|"revise"| R["Planner 修订<br/>(Pro LLM)"]
-  C -->|"accept"| G["继续 new_version / stop"]
+  P["计划草案<br/>(LLM Pro)"] --> C["独立评审<br/>防泄漏 / 数据可得性 / 过拟合 / 引用 / 动作清单<br/>(LLM Pro)"]
+  C -->|"需修改"| Q{"需要补充外部证据？"}
+  Q -->|"是，且已勾选联网"| RS["补充检索公开资料<br/>（一次，测试期前）"]
+  RS --> R["按评审意见修订计划<br/>(LLM Pro)"]
+  Q -->|"否"| R
+  C -->|"评审通过"| G["继续：起草下一版 / 停止"]
   R --> G
 
   classDef pro fill:#6d28d9,color:#fff,stroke:#4c1d95
-  classDef critic fill:#0f766e,color:#fff,stroke:#115e59
-  class P,R pro
-  class C critic
+  class P,C,R pro
 ```
 
-- Planner / 修订用 `FACTOPIA_LLM_MODEL`（主模型）；Critic 用 `FACTOPIA_LLM_CRITIC_MODEL`（当前 `qwen-plus`），未配置或 403 回退主模型；
+- 规划 / 修订用 `FACTOPIA_LLM_MODEL`（主模型）；评审用 `FACTOPIA_LLM_CRITIC_MODEL`（当前 `qwen-plus`），未配置或 403 回退主模型（图中评审按 LLM Pro 归类）；
 - 一个规划轮次内：Planner 一次 → Critic 一次 →（`revise` 时）Planner 修订一次；不是无限辩论；
+- Critic 可返回 `needs_external_search` + `search_query`；只有 `verdict=revise` 且 Agent 启动时勾选联网，平台才执行**一次**补充检索；
+- 补充检索的查询由平台清洗（去掉 2022+ 年份和 `[F#]/[W#]` 标记），仍只取 `FACTOPIA_SEARCH_BEFORE` 之前、日期可靠的结果；结果写入 `rounds/<n>/external_revision.json`，并入修订 prompt；trace 记 `web_search phase=revision`；
 - Critic 检查：2022+ 泄漏、数据不可得、不可检验 / 过拟合、与历史尝试重复、`F#` 引用、单动作白名单；
 - 修订后的计划仍走 `_validate_plan` 白名单与 schema 校验；
-- Critic 或修订失败时保留原计划，不阻断本轮；
-- 评审问题、要求修改项、是否修订显示在 Agent 页；写入 `rounds/<n>/plan_critique.json`；
-- 开启后至少多 1–2 次 Pro LLM 调用，耗时和费用更高。
+- Critic、补充检索或修订失败时保留原计划，不阻断本轮；
+- 评审问题、要求修改项、是否修订、补充检索来源显示在 Agent 页；写入 `rounds/<n>/plan_critique.json`；
+- 开启后至少多 1–2 次 LLM Pro 调用，耗时和费用更高。
 
 > **它算 sub-workflow 吗？** 算，但是 `planning` 状态内的**同步子流程**：Planner / Critic / 修订都在同一次 Agent 推进中完成，不创建 runner job、不占 runner 并发槽；这与 `waiting_children` 下按市场创建的 RD-Agent 子任务（独立 runner job）是不同层级。联网检索同理，是 `diagnose → plan` 之间的同步子流程。
 
@@ -227,7 +322,7 @@ flowchart LR
 - 后端：`factopia/research/websearch.py`、`factopia/agents/loop.py`、`factopia/agents/prompts/iteration-planner-v2.md`、`iteration-plan-critic-v1.md`、`factopia/research/prompts/rs-draft-v4.md`
 - 前端：`web/src/components/StudyPanel.tsx`、`web/src/pages/ResearchPage.tsx`、`web/src/pages/AgentsPage.tsx`
 - 配置：`.env` / `.env.example` 的 `FACTOPIA_SEARCH_*`
-- 测试：49 个单测通过（3 个需要 rdagent 镜像的用例跳过）；前端 `npm run build` 通过。
+- 测试：50 个单测通过（3 个需要 rdagent 镜像的用例跳过）；前端 `npm run build` 通过。
 
 ---
 
@@ -283,6 +378,7 @@ RD-Agent 运行步骤按市场显示业务状态，不显示 RD-Agent 日志：
 - **显示生成下一个AI的思考过程**：展开 / 收起 **「AI生成假设，思考中...」** Workflow section；按钮变为 **隐藏生成下一个AI的思考过程**；
 - 两个 section 可独立展开；决策轨迹 section 位于 AI 生成 section 下方；
 - 草稿生成（`role=draft`）现在也会写入 trace，不再只有 token 用量；
+- 「深度思考评审」步骤显示 Critic 结论、模型、是否按评审修订，以及「补充检索 N 条」；展开后可查看补充来源；
 - 完整原始日志仍保存在 `runtime/agents/<id>/trace.jsonl`。
 
 ---
@@ -342,7 +438,7 @@ UK 慢，建议用**单市场研究**做现场演示，例如 `hk_vol_price_dive
 
 1. 结果页选一个已完成运行 → 研究结论右上角 **继续研究 ▾ → AI 生成下一版假设（vN+1）并自动运行**；
    - 可选勾选 **联网**：需先在 `.env` 配置 `FACTOPIA_SEARCH_API_KEY`，Agent 会在诊断后检索测试期前的公开资料；
-   - 可选勾选 **深度思考**：Planner → Critic → 修订，多 1–2 次 Pro LLM 评审，演示时更慢、更贵。
+   - 可选勾选 **深度思考**：规划 → 独立评审 → 修订，多 1–2 次 LLM Pro 评审，演示时更慢、更贵。
 2. Agent 页先停在 **等待人工批准**，展示 vN+1 草稿；
 3. 在草稿编辑器里改标题/假设，点击 **批准并运行**；
 4. 观察阶段 toast：

@@ -93,11 +93,11 @@ def enroll(signal_id: str, capital: float | None = None) -> dict:
 
     try:
         ent = signals.entry(signal_id)
+        entry = signals.monitor_entry(signal_id)   # 提交材料缺该市场的冻结因子代码时在此抛 CatalogError
     except signals.CatalogError as e:
         raise PaperError(str(e)) from e
     if ent["state"] not in ("active", "paused"):
         raise PaperError(t("信号当前状态为「{state}」，仅生产中 / 已暂停的信号可接入模拟盘", state=ent["state_zh"]))
-    entry = signals.monitor_entry(signal_id)
     m = entry["market"]
     if entry.get("price_dataset") in sources.SIMULATED:
         raise PaperError(t("该信号的行情来自模拟数据集（虚构行情），不能接入模拟盘；真实行情的信号才能接入"))

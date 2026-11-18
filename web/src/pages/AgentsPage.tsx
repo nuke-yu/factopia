@@ -494,7 +494,7 @@ function WorkflowProgress({ agent, rounds, jobs }: { agent: Agent; rounds: Agent
           <WorkflowStep title={t("深度思考评审")} status={deep}>
             {plan?.deep_think
               ? plan.deep_think.critique
-                ? <>{plan.deep_think.critique.verdict === "accept" ? t("通过评审") : t("需要修订")} · {plan.deep_think.revised ? t("已按评审修订") : t("保留原计划")}{plan.deep_think.critique.model ? ` · ${plan.deep_think.critique.model}` : ""}</>
+                ? <>{plan.deep_think.critique.verdict === "accept" ? t("通过评审") : t("需要修订")} · {plan.deep_think.revised ? t("已按评审修订") : t("保留原计划")}{plan.deep_think.critique.model ? ` · ${plan.deep_think.critique.model}` : ""}{plan.deep_think.revision_external && <span className="text-faint"> · {plan.deep_think.revision_external.error ? t("补充检索失败") : tf("补充检索 {n} 条", { n: plan.deep_think.revision_external.results?.length ?? 0 })}</span>}</>
                 : t("评审未返回，已保留原计划")
               : deep === "active" ? t("Critic 正在评审计划…") : t("等待 Planner 草案")}
           </WorkflowStep>
@@ -748,6 +748,11 @@ function RoundCard({ agent, round, busy, awaiting, onApprove, onReject }: {
                   {t("深度思考 · 多智能体评审")} · {plan.deep_think.critique.verdict} ·{" "}
                   {plan.deep_think.revised ? t("已按评审修订") : t("保留原计划")}
                   {plan.deep_think.critique.model && <span className="text-faint"> · {plan.deep_think.critique.model}</span>}
+                  {plan.deep_think.revision_external && (
+                    <span className="text-faint"> · {plan.deep_think.revision_external.error
+                      ? t("补充检索失败")
+                      : tf("补充检索 {n} 条", { n: plan.deep_think.revision_external.results?.length ?? 0 })}</span>
+                  )}
                 </summary>
                 <ul className="mt-1 flex flex-col gap-1 text-xs">
                   {(plan.deep_think.critique.issues || []).map((x: any, i: number) => (
@@ -762,6 +767,28 @@ function RoundCard({ agent, round, busy, awaiting, onApprove, onReject }: {
                   <ul className="mt-1 list-disc pl-4 text-xs text-muted">
                     {plan.deep_think.critique.required_changes.map((x: string, i: number) => <li key={i}>{x}</li>)}
                   </ul>
+                )}
+                {plan.deep_think.revision_external && (
+                  <div className="mt-2 text-xs">
+                    <div className="label mb-1">{t("修订前补充检索")}</div>
+                    {plan.deep_think.revision_external.error
+                      ? <p className="text-warn">{plan.deep_think.revision_external.error}</p>
+                      : (
+                        <ul className="flex flex-col gap-0.5">
+                          {(plan.deep_think.revision_external.results || []).map((x: any, i: number) => (
+                            <li key={x.url || i}>
+                              {x.url
+                                ? <a href={x.url} target="_blank" rel="noreferrer" className="text-accent hover:underline">{x.title || "—"}</a>
+                                : <span>{x.title || "—"}</span>}
+                              <span className="text-faint"> · {x.published || "—"}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    {plan.deep_think.revision_external.warning && (
+                      <p className="text-warn mt-1">{t(plan.deep_think.revision_external.warning)}</p>
+                    )}
+                  </div>
                 )}
               </details>
             )}

@@ -1,0 +1,13 @@
+# 公告深挖（WF-04）策略：情报台内公司公告的有界检索-提取循环（docs/Agentic-workflow-情报台-深挖.md）
+max_rounds: 4                      # 检索轮数上限（3–5）；满轮强制收尾
+budget_usd: 1.5                    # 深挖总预算（美元）；超限强制收尾
+max_hits: 20                       # 每轮交给提取的最大命中段落数
+tools:                             # Planner 白名单
+  - query
+  - finish
+  - give_up
+prompts:
+  planner: dig-planner-v1
+  rewrite: dig-rewrite-v1
+  extract: dig-extract-v1
+  conclusion: dig-conclusion-v1

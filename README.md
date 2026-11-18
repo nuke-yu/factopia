@@ -67,7 +67,7 @@ $DC run --rm app python -m factopia.agents approve <agent_id> --no-run          
 $DC run --rm app python -m factopia.agents reject <agent_id> --reason "..."                  # 拒绝本轮
 $DC run --rm app python -m unittest tests.test_agents tests.test_agents_p1 -v
 # 页面：结果页「继续研究」→ 让 Agent 自动迭代；Agent 页 /agents（审改、批准、trace、报告）
-# 演示脚本：docs/Agent工作流-演示脚本.md（含规则预检、自动线索回流、因子库重叠、红队与讲解口径）
+# 演示脚本：docs/Agentic-workflow-结果-研究迭代.md（含规则预检、自动线索回流、因子库重叠、红队与讲解口径）
 # runner 生命周期测试（rdagent 镜像；Windows 路径按实际仓库位置替换）
 # MSYS_NO_PATHCONV=1 $DC run --rm -T -w /workspace -v "D:/sandbox/projects/factopia/tests:/workspace/tests:ro" --entrypoint "" runner python -m unittest tests.test_runner_agent -v
 
