@@ -6,10 +6,14 @@
 
 # pip 源可通过 --build-arg PIP_INDEX_URL=... 覆盖（默认阿里云；海外可传官方 PyPI）
 ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+# npm 源可通过 --build-arg NPM_REGISTRY=... 覆盖（默认官方；国内构建走镜像站，见 compose.cloud.yml）
+ARG NPM_REGISTRY=https://registry.npmjs.org
 
 # ---- 构建阶段：编译 RD-Agent 自带的 Web UI（Vue + Vite，需要 Node 22）----
 # 由 `rdagent server_ui` 提供服务，含 Playground：选择场景、上传资料、启动与控制运行、实时查看过程
 FROM node:22-slim AS web
+ARG NPM_REGISTRY
+ENV NPM_CONFIG_REGISTRY=$NPM_REGISTRY
 COPY rdagents /src
 WORKDIR /src/web
 # 上游 v1.0.0 的 package.json 中 vite@8 与 @vitejs/plugin-vue@5（声明支持 vite 5/6）版本声明冲突，npm 严格校验会拒绝安装
@@ -54,6 +58,12 @@ ENV CONDA_DEFAULT_ENV=rdagent \
 # 依赖单独成层：rdagents/ 代码变更时无需重新下载依赖（含 paper trading 所需 longport/yfinance 等）
 COPY rdagents/requirements.txt /tmp/rdagent-requirements.txt
 RUN pip install --no-cache-dir -i "$PIP_INDEX_URL" -r /tmp/rdagent-requirements.txt tables longport yfinance exchange_calendars
+
+# pandas 锁到 2.x：requirements.txt 未锁版本，会解析到 pandas 3（pandarallel 1.6.5 已停更，
+# 导入期写死 `from pandas.core.window.expanding import ExpandingGroupby`，该名字在 pandas 3 被删除），
+# 结果是 RD-Agent 一 import factor_runner 就崩、任务 0 轮失败。
+RUN pip install --no-cache-dir -i "$PIP_INDEX_URL" "pandas>=2.2.3,<3" \
+    && python -c "import pandas as pd; assert pd.__version__.startswith('2.'), pd.__version__; from pandas.core.window.expanding import ExpandingGroupby"
 
 # 源码目录即安装目录：RD-Agent 会把自身目录下的模板文件夹挂载给回测容器，
 COPY rdagents /opt/rdagent-src

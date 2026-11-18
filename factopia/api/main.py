@@ -75,7 +75,7 @@ def _storage_not_ready(request, exc: PermissionError):
 
 def _json(path: Path):
     if not path.exists():
-        raise HTTPException(404, t("结果文件不存在：{name}（先运行 factopia.export）", name=path.name))
+        raise HTTPException(404, t("结果文件不存在：{name}（先运行生成该结果的命令：factopia.export / factopia.refdata）", name=path.name))
     return _cached_json(path, path.stat().st_mtime)
 
 

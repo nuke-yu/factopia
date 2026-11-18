@@ -284,6 +284,10 @@ def create(body: dict) -> dict:
             raise IdeaError("文件超过 20 MB")
         doc_text, pages = _extract_text(str(doc_in.get("name") or "document"), raw)
     hits = pii_hits(("标题", title), ("内容", text), ("文档", doc_text))
+    if ch == "paper":
+        # 论文标题页本就含作者联系方式（邮箱/机构地址），是公开发表的作者信息而非客户身份数据；
+        # 仅豁免"文档"字段的电子邮件命中，其余 PII 检查（电话/证件/IBAN 等）与标题/内容字段不受影响
+        hits = [h for h in hits if not (h["field"] == "文档" and h["type"] == "电子邮件")]
     if hits:
         raise IdeaError("内容中疑似包含个人身份信息，请删除后重新提交：" + "；".join(f"{h['type']}（{h['field']}：{h['context']}）" for h in hits[:5]))
     mkts = _clean_markets(body.get("markets"))

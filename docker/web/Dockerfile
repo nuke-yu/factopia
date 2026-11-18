@@ -1,7 +1,12 @@
 # Factopia 前端：独立部署的镜像。构建阶段编译静态页面，运行阶段由 nginx 提供页面并转发 /api。
 # 构建上下文为仓库根目录：docker compose build web
 # 字体与图表库全部打包进镜像，运行时不访问任何境外 CDN（第 14.4 节 #17 的教训）。
+# npm 源可通过 --build-arg NPM_REGISTRY=... 覆盖（默认官方；国内构建走镜像站，见 compose.cloud.yml）
+ARG NPM_REGISTRY=https://registry.npmjs.org
+
 FROM node:22-slim AS build
+ARG NPM_REGISTRY
+ENV NPM_CONFIG_REGISTRY=$NPM_REGISTRY
 WORKDIR /app
 COPY web/package.json web/package-lock.json ./
 RUN npm ci
