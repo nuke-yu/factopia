@@ -1,6 +1,6 @@
 """信号监控（业务需求 BR-31、42；Spec 第 14.15 节）。由后台运行器执行（任务 kind = "monitor"，一个市场版本一个任务）。
 
-"上线后"期间：测试期结束之后的数据（2024 年起，AI 与研究员都没有用过），作为演示用的上线期；参照期为该运行的测试期。
+"上线后"期间：测试期结束之后的数据（2024 年起，AI 与研究员都没有用过），作为展示用的上线期；参照期为该运行的测试期。
 1. 用获批时冻结的因子代码（审批材料 materials/factors.json）在完整数据（可信度检查生成的 daily_pv.h5）上重算因子值；
    各因子截面标准化，按参照期 rank IC 的方向对齐后等权合成为一个信号（不重新训练模型，避免监控本身引入新的拟合）。
 2. 按市场计算监控指标（参照期 vs 上线期）：
@@ -393,8 +393,8 @@ def run(entry: dict, log=print) -> dict:
         "diagnosis": diagnose(rs, ls, dr, dl), "thresholds": entry.get("thresholds") or {},
         "rolling": {"dates": [str(d.date()) for d in series.index[::3]], "values": [_r(v) for v in series.to_numpy()[::3]],
                     "live_start": live_start},
-        "note": "上线期为测试期之后的数据（2024 年起），用于演示上线后的监控；" + (
-            "信号为情报台的文本信号（风险表述变化，按公告可获取时间生效）" + ("；行情与公告均为模拟数据，仅用于流程演示" if ds else "")
+        "note": "上线期为测试期之后的数据（2024 年起），用于展示上线后的监控；" + (
+            "信号为情报台的文本信号（风险表述变化，按公告可获取时间生效）" + ("；行情与公告均为模拟数据，仅用于流程验证" if ds else "")
             if all(f.get("kind") == "text" for f in entry["factors"]) else "信号为冻结因子的等权合成，不含模型重新训练"),
         "price_source": sources.describe(ds), "currency": ccy,
     }

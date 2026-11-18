@@ -25,7 +25,7 @@ sources:
     visibility: internal
     status: approved
     licence: 内部生成
-    note: 仅用于流程演示，结论不构成研究证据
+    note: 仅用于流程验证，结论不构成研究证据
     regions: [hk, uk]
   gleif:
     name: GLEIF 法律实体数据

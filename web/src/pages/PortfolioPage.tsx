@@ -308,7 +308,7 @@ function ComplementPanel() {
     <Panel eyebrow={t("同一市场多个采纳信号 · 前半段定权重、后半段评估")} title={t("互补组合")}>
       <div className="flex flex-wrap items-center gap-3 mb-3">
         <Seg label={t("市场")} value={m} options={visibleMarkets().map((x) => ({ value: x, label: MARKET_LABEL[x] }))} onChange={(x) => { setM(x); setKeys(null); }} />
-        {data?.price_source?.simulated && <Badge tone="warn">{t("模拟数据，仅用于流程演示")}</Badge>}
+        {data?.price_source?.simulated && <Badge tone="warn">{t("模拟数据，仅用于流程验证")}</Badge>}
       </div>
       {loading ? <Loading what={t("互补组合")} /> : error || !data ? <ErrorBox error={error ?? t("无数据")} /> : (
         <div className="flex flex-col gap-3 text-sm">

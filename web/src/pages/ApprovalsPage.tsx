@@ -195,7 +195,7 @@ function Detail({ sid, roles }: { sid: string; roles: string[] }) {
           )}
           <div className="flex flex-wrap items-center gap-3">
             <a className="btn" href={`/api/approvals/${sid}/evidence`}>{t("导出审计证据包")}</a>
-            <label className="text-sm flex items-center gap-2 ml-auto whitespace-nowrap">{t("演示身份")}
+            <label className="text-sm flex items-center gap-2 ml-auto whitespace-nowrap">{t("地区身份")}
               <select id="actor" className="field w-auto" value={actor} onChange={(e) => setActor(e.target.value)}>
                 {roles.map((r) => <option key={r} value={r}>{t(r)}</option>)}
               </select>
@@ -210,7 +210,7 @@ function Detail({ sid, roles }: { sid: string; roles: string[] }) {
             {sub.steps.map((s, i) => <StepCard key={`${s.role}-${i}-${sub.current}`} s={s} i={i} sub={sub} actor={actor} onAct={act} />)}
           </ol>
           {sub.status === "in_review" && actor !== sub.steps[sub.current]?.role && (
-            <p className="text-xs text-faint mt-2">{tf("当前应由「{r}」处理；切换演示身份后操作。其他身份只能发表意见。", { r: t(sub.steps[sub.current]?.role ?? "") })}</p>
+            <p className="text-xs text-faint mt-2">{tf("当前应由「{r}」处理；切换地区身份后操作。其他身份只能发表意见。", { r: t(sub.steps[sub.current]?.role ?? "") })}</p>
           )}
         </Panel>
         <Panel eyebrow={t("只追加，每条记录上一条的哈希")} title={t("留痕")}>
@@ -252,7 +252,7 @@ export default function ApprovalsPage() {
           <h1 className="font-display text-xl font-semibold">{t("跨地区审批与审计")}</h1>
         </div>
         <span className="text-sm text-muted">{t("香港 → 伦敦 → 巴黎 · 例外处理 · 获批锁定 · 审计证据包")}</span>
-        <span className="ml-auto text-xs text-faint">{t("模拟审批：审批人为演示角色，不涉及真实人员")}</span>
+        <span className="ml-auto text-xs text-faint">{t("模拟审批：审批人为平台内置角色，不涉及真实人员")}</span>
       </div>
       <div className="grid gap-5 xl:grid-cols-[minmax(0,4fr)_minmax(0,8fr)]">
         <div className="flex flex-col gap-5">

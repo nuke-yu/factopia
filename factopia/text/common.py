@@ -17,7 +17,7 @@ TEXT = RUNTIME / "text"
 REVIEW = TEXT / "review"
 PRICES = RUNTIME / "data" / "standardized"
 
-SIMULATED_LABEL = "模拟数据，仅用于流程演示"
+SIMULATED_LABEL = "模拟数据，仅用于流程验证"
 
 # series_by_subtype：与同类公告（年报比年报）的上一期比较；否则与同一公司同一语言的上一篇比较
 # processing_delay_min：从正式发布到研究人员实际可获取（下载、抽取、翻译、理解）的保守延迟（Spec 第 11.5 节 ④）

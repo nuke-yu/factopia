@@ -248,7 +248,7 @@ def _over_budget(rec: dict) -> bool:
 
 def _seed_text(rec: dict) -> str:
     s = rec["seed"]
-    src = "模拟数据（仅用于流程演示）" if s.get("simulated") else "真实公告"
+    src = "模拟数据（仅用于流程验证）" if s.get("simulated") else "真实公告"
     lines = [f"{s['company']} ({s['instrument']}), market {s['market']}, dataset {s['dataset']}（{src}）"]
     if s.get("n_filings"):
         lines.append(f"announcements in dataset: {s['n_filings']}")

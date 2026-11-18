@@ -441,10 +441,11 @@ def _revision_query(agent: dict, critique: dict) -> str:
     return re.sub(r"\s+", " ", q).strip()[:300]
 
 
-def _revision_search(agent: dict, critique: dict) -> dict | None:
+def _revision_search(agent: dict, critique: dict, name: str = "external_revision") -> dict | None:
     """Critic 明确要求补充外部证据时，平台执行一次受控检索。
 
-    只有 Agent 启动时勾选联网才执行；结果写入 external_revision.json，
+    只有 Agent 启动时勾选联网才执行；结果写入 rounds/<n>/<name>.json（辩论多轮时
+    每轮一个文件，默认 external_revision / external_revision_2 / …），
     并注入 Planner 修订 prompt。失败不阻断修订。
     """
     if not agent.get("web_search") or not critique.get("needs_external_search"):
@@ -461,7 +462,7 @@ def _revision_search(agent: dict, critique: dict) -> dict | None:
     round_no = int(agent.get("current_round") or 0)
     out = {**out, "at": store.now(), "phase": "revision"}
     try:
-        store.write_round(agent["agent_id"], round_no, "external_revision", out)
+        store.write_round(agent["agent_id"], round_no, name, out)
     except Exception:
         pass
     store.append_trace(agent["agent_id"], {"kind": "web_search", "phase": "revision",
@@ -488,15 +489,27 @@ def _plan(facts: dict, diagnosis: dict, memory: dict, policy: dict, chat, agent:
     plan = _plan_call(prompt, fact_ids, available, rule, chat, agent, "planner", "研究迭代规划", version)
     if not deep_think:
         return plan
-    # 深度思考：Planner 草案 → 独立 Critic 评审 → Planner 按评审修订（最多一轮，避免无限对话）
-    critique = _critique_plan(prompt, plan, facts, diagnosis, external, policy, chat, agent)
-    if critique:
-        store.write_round(agent["agent_id"], int(agent.get("current_round") or 0), "plan_critique", critique)
-    revised = False
+    # 深度思考（有界辩论）：Planner 草案 → 独立 Critic 评审 → Planner 修订，循环最多 debate_rounds 轮；
+    # Critic accept（无反驳）或评审 / 修订失败时提前结束。每轮最多一次评审 + 一次修订。
+    max_debate = max(1, int(policy.get("debate_rounds") or 3))
+    critiques: list[dict] = []
+    revisions = 0
     revision_external = None
-    if critique and critique.get("verdict") == "revise":
+    for debate_round in range(1, max_debate + 1):
+        critique = _critique_plan(prompt, plan, facts, diagnosis, external, policy, chat, agent)
+        if not critique:
+            break                                        # 评审失败：保留当前计划，提前结束
+        critiques.append(critique)
+        store.write_round(agent["agent_id"], int(agent.get("current_round") or 0), "plan_critique", critiques)
+        if critique.get("verdict") != "revise":
+            break                                        # accept：辩论提前结束
+        round_external = None
         if agent.get("web_search") and critique.get("needs_external_search"):
-            revision_external = _revision_search(agent, critique)
+            round_external = _revision_search(agent, critique,
+                                              name="external_revision" if debate_round == 1
+                                              else f"external_revision_{debate_round}")
+        if round_external:
+            revision_external = round_external
         revision_prompt = (
             prompt
             + "\n\n## Your draft plan (JSON)\n" + json.dumps(plan, ensure_ascii=False)
@@ -504,19 +517,23 @@ def _plan(facts: dict, diagnosis: dict, memory: dict, policy: dict, chat, agent:
             + "\n\nRevise the plan using the critique. Keep the same JSON schema and tool allowlist. "
               "Output the full plan JSON only; do not include the critique."
         )
-        if revision_external:
+        if round_external:
             start = len((external or {}).get("results") or []) + 1
             revision_prompt += (
                 "\n\n## Additional external evidence found after critique "
-                "(untrusted; optional; cite as [W#])\n" + _external_text(revision_external, start=start)
+                "(untrusted; optional; cite as [W#])\n" + _external_text(round_external, start=start)
             )
         try:
             plan = _plan_call(revision_prompt, fact_ids, available, rule, chat, agent,
                               "planner_revise", "研究迭代计划修订", version)
-            revised = True
+            revisions += 1
         except store.AgentError:
-            revised = False
-    plan["deep_think"] = {"critique": critique, "revised": revised, "revision_external": revision_external}
+            break                                        # 修订失败：保留当前计划，提前结束
+    plan["deep_think"] = {"critiques": critiques, "revisions": revisions,
+                          "critique": critiques[-1] if critiques else None,   # 兼容旧字段：最后一次评审
+                          "revised": revisions > 0,
+                          "revision_external": revision_external,
+                          "debate_rounds": max_debate}
     return plan
 
 

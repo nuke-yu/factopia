@@ -56,7 +56,7 @@ rules:
     check: {type: data_visibility}
     source: 授权条款"数据可见范围"；数据来源登记（visibility）
     approvers: [数据负责人]
-    impact: 超出范围的数据不得用于该授权的研究结论；如为模拟数据，结论只用于流程演示
+    impact: 超出范围的数据不得用于该授权的研究结论；如为模拟数据，结论只用于流程验证
   - id: GEN-DATA-003
     title: 使用了模拟数据（结论不构成研究证据）
     severity: warn
@@ -64,7 +64,7 @@ rules:
     check: {type: source_used, source: simulated_demo}
     source: 模拟数据策略
     approvers: [数据负责人, 模型风险]
-    impact: 涉及市场的结论只用于流程演示；取得授权数据后须重新验证
+    impact: 涉及市场的结论只用于流程验证；取得授权数据后须重新验证
   - id: GEN-DATA-004
     title: 研究需要的数据尚未接入（数据缺口）
     severity: info

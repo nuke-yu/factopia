@@ -288,7 +288,7 @@ def sensitivity(dataset: str, delays=(60, 120, 240), holds=(21, 63, 126), horizo
 
 
 def compare(horizon: int = 20) -> dict:
-    """⑤ 三个市场分别检验后的对比（演示主线第 6 步）；模拟数据的市场明确标注。"""
+    """⑤ 三个市场分别检验后的对比（示例主线第 6 步）；模拟数据的市场明确标注。"""
     rows = []
     for ds, cfg in DATASETS.items():
         s = read_json(ds_dir(ds) / "summary.json")
