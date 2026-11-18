@@ -140,13 +140,19 @@ class DigTests(unittest.TestCase):
         fr.mkdir(parents=True)
         (fr / "aligned.parquet").touch()
         self.search_out: list[dict] = []
-        self.search_mock = mock.patch("factopia.text.search.search", side_effect=self._search).start()
-        self.summarize_mock = mock.patch("factopia.text.search.summarize", return_value={
+        # 注意：patch.start() 返回的是 mock 对象，patch 对象本身要单独保存，tearDown 才能正确还原
+        self.search_patch = mock.patch("factopia.text.search.search", side_effect=self._search)
+        self.search_mock = self.search_patch.start()
+        self.summarize_patch = mock.patch("factopia.text.search.summarize", return_value={
             "sentences": [{"text": "Demand weakened.", "cites": [1]}], "dropped": 0,
-            "model": "test-pro", "usage": dict(USAGE)}).start()
-        self.llm_label_mock = mock.patch("factopia.text.understand.llm_label").start()
-        self.web_configured_mock = mock.patch("factopia.research.websearch.configured", return_value=True).start()
-        self.web_search_mock = mock.patch("factopia.research.websearch.search").start()
+            "model": "test-pro", "usage": dict(USAGE)})
+        self.summarize_mock = self.summarize_patch.start()
+        self.llm_label_patch = mock.patch("factopia.text.understand.llm_label")
+        self.llm_label_mock = self.llm_label_patch.start()
+        self.web_configured_patch = mock.patch("factopia.research.websearch.configured", return_value=True)
+        self.web_configured_mock = self.web_configured_patch.start()
+        self.web_search_patch = mock.patch("factopia.research.websearch.search")
+        self.web_search_mock = self.web_search_patch.start()
         self.patches = [
             mock.patch.object(dig, "DIGS_DIR", self.runtime / "digs"),
             mock.patch.object(policy_mod, "CONFIGS", self.root / "configs"),
@@ -161,8 +167,8 @@ class DigTests(unittest.TestCase):
             p.start()
 
     def tearDown(self):
-        for p in reversed(self.patches + [self.search_mock, self.summarize_mock, self.llm_label_mock,
-                                          self.web_configured_mock, self.web_search_mock]):
+        for p in reversed(self.patches + [self.search_patch, self.summarize_patch, self.llm_label_patch,
+                                          self.web_configured_patch, self.web_search_patch]):
             p.stop()
         self.tmp.cleanup()
 
