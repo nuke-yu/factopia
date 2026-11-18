@@ -1,0 +1,41 @@
+# 设置菜单（模型选择）配置。
+# 环境变量名只在这里出现，不在界面显示；界面只显示角色名称与模型、费用。
+# prices：美元 / 百万 token（输入 / 输出）。未列出的模型界面显示「—」；
+#         默认模型（各角色 .env 的当前值）回退到 FACTOPIA_LLM_PRICE_IN / OUT。
+
+roles:
+  - key: ai_rd
+    env: CHAT_MODEL
+    prefix: "openai/"          # RD-Agent / LiteLLM 需要 provider 前缀；界面显示时去掉
+  - key: pro
+    env: FACTOPIA_LLM_MODEL
+  - key: lite
+    env: FACTOPIA_LLM_LITE_MODEL
+  - key: critic
+    env: FACTOPIA_LLM_CRITIC_MODEL
+
+# 下拉选项（来自当前百炼工作区可用的对话模型；可按需增删）
+options:
+  - qwen3.8-max-0902
+  - qwen3.8-max
+  - qwen3.8-flash
+  - deepseek-v4.1-flash
+  - deepseek-v4-pro
+  - qwen-plus
+  - kimi-k3
+  - glm-5.3
+  - MiniMax/MiniMax-M3.1-Flash
+
+# 价格来源：百炼 /api/v1/models（2026-11-19 查询）。
+# 接口原始单位为人民币 / 百万 token；按 1 USD = 6.6672 CNY 换算为美元（当日 Frankfurter 汇率）。
+# 多档价格取常用档：deepseek-v4.1-flash 取 peak（高峰）；qwen-plus 取「输入<=128k」档。
+prices:
+  qwen3.8-max-0902: {in: 1.80, out: 5.40}
+  qwen3.8-max: {in: 1.80, out: 5.40}
+  qwen3.8-flash: {in: 0.12, out: 0.40}
+  deepseek-v4.1-flash: {in: 0.30, out: 1.20}   # peak；offpeak 为 0.15 / 0.60
+  deepseek-v4-pro: {in: 1.80, out: 3.60}
+  qwen-plus: {in: 0.12, out: 0.30}             # 输入<=128k；128k–256k 为 0.36 / 3.00；256k–1m 为 0.72 / 7.20
+  kimi-k3: {in: 3.00, out: 15.00}
+  glm-5.3: {in: 1.20, out: 4.20}
+  MiniMax/MiniMax-M3.1-Flash: {in: 0.15, out: 0.60}

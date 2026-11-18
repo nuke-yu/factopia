@@ -215,10 +215,16 @@ def run_job(job: dict) -> None:
 
     src = SRC_ROOT / job["job_id"]
     wd = rdagent_workdir(job["market"], job["horizon"], job["job_id"])
+    try:
+        from factopia import settings as runtime_settings
+        model_env = runtime_settings.subprocess_env()      # 设置菜单里的 AI 研发模型选择
+    except Exception:
+        model_env = {}
     env = {**os.environ,
            "FACTOPIA_RESEARCH": str(store.version_path(job["research_id"], job["version"])),
            "FACTOPIA_MARKET": job["market"], "FACTOPIA_JOB_ID": job["job_id"], "LOG_TRACE_PATH": str(log_dir),
-           "FACTOPIA_SRC_DIR": str(src), **({"FACTOPIA_RESUME": "1"} if resume and resume["ok"] else {})}
+           "FACTOPIA_SRC_DIR": str(src), **model_env,
+           **({"FACTOPIA_RESUME": "1"} if resume and resume["ok"] else {})}
     live = LiveParser()
     log_file = store.log_path(job["job_id"])
     with log_file.open("ab") as out, log_file.open("r", errors="replace") as tail:
@@ -364,7 +370,8 @@ def init_dirs() -> None:
     for d in (store.RESEARCH_DIR, store.JOBS_DIR, store.RUNTIME / "portfolio", store.RUNTIME / "reports",
               store.RUNTIME / "approvals", store.RUNTIME / "signals", store.RUNTIME / "acceptance",
               store.RUNTIME / "access", store.RUNTIME / "ideas", store.RUNTIME / "paper",
-              store.RUNTIME / "agents", store.RUNTIME / "briefs", store.RUNTIME / "digs"):
+              store.RUNTIME / "agents", store.RUNTIME / "briefs", store.RUNTIME / "digs",
+              store.RUNTIME / "settings"):
         d.mkdir(parents=True, exist_ok=True)
         os.chown(d, API_UID, API_UID)
         d.chmod(0o775)

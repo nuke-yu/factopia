@@ -323,11 +323,13 @@ class AgentP1Tests(unittest.TestCase):
         from factopia.research import draft
         base = {"FACTOPIA_LLM_BASE_URL": "http://example.test", "FACTOPIA_LLM_API_KEY": "key",
                 "FACTOPIA_LLM_MODEL": "main-model", "FACTOPIA_LLM_LITE_MODEL": "lite-model"}
-        with mock.patch.dict(os.environ, {**base, "FACTOPIA_LLM_CRITIC_MODEL": "critic-model"}, clear=False):
+        with mock.patch.dict(os.environ, {**base, "FACTOPIA_LLM_CRITIC_MODEL": "critic-model"}, clear=False), \
+                mock.patch("factopia.settings.model_overrides", return_value={}):
             c = draft.llm_config(role="critic")
         self.assertEqual(c["model"], "critic-model")
         self.assertEqual(c["lite_model"], "main-model")
-        with mock.patch.dict(os.environ, {**base, "FACTOPIA_LLM_CRITIC_MODEL": ""}, clear=False):
+        with mock.patch.dict(os.environ, {**base, "FACTOPIA_LLM_CRITIC_MODEL": ""}, clear=False), \
+                mock.patch("factopia.settings.model_overrides", return_value={}):
             c = draft.llm_config(role="critic")
         self.assertEqual(c["model"], "main-model")
         self.assertIsNone(c["lite_model"])

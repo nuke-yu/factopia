@@ -327,6 +327,13 @@ export type AgentTrace = { at: string; kind: string; role?: string; round?: numb
   tool?: string; args?: unknown; result?: unknown; count?: number; [key: string]: unknown };
 export type AgentDetail = { agent: Agent; rounds: AgentRound[]; children: AgentJob[]; job: AgentJob | null; report: string | null;
   terminated: ResearchTermination | null };
+export type ModelRoleKey = "ai_rd" | "pro" | "lite" | "critic";
+export type ModelSettingsState = {
+  roles: { key: ModelRoleKey; model: string; default: string; price: { in: number; out: number } | null }[];
+  options: string[];
+  prices: Record<string, { in: number; out: number } | null>;
+  updated_at: string | null;
+};
 export type AgentOverlapPair = { key: string; title?: string | null; kind?: string | null; approved: boolean;
   corr: number | null; ic_corr: number | null; redundant: boolean };
 export type AgentOverlapMarket = { ok: boolean; reason?: string;
@@ -729,6 +736,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 const get = <T,>(path: string) => request<T>(path);
 const post = <T,>(path: string, body: unknown) =>
   request<T>(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+const put = <T,>(path: string, body: unknown) =>
+  request<T>(path, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
 // ---------------------------------------------------------------- 研究线索池（Spec 第 17 章）
 export type IdeaChannel = "hypothesis" | "paper" | "experience" | "feedback" | "monitor" | "paper_trading" | "portfolio" | "approval" | "agent";
@@ -997,4 +1006,6 @@ export const api = {
   ideaAiHypothesis: (id: string) => post<Idea>(`/ideas/${id}/ai-hypothesis`, {}),
   ideaBriefCreate: (id: string) => post<{ brief_id: string; job_id: string; state: string; created_at: string }>(`/ideas/${id}/brief`, {}),
   ideaBrief: (id: string) => get<IdeaBrief>(`/ideas/${id}/brief`),
+  settingsModels: () => get<ModelSettingsState>("/settings/models"),
+  saveSettingsModels: (models: Partial<Record<ModelRoleKey, string>>) => put<ModelSettingsState>("/settings/models", { models }),
 };

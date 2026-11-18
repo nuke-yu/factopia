@@ -55,14 +55,21 @@ def llm_config(lite: bool = False, role: str = "main") -> dict:
       未配置或 403 时回退主模型（不会回退到 Lite）；
     - lite=True：简单任务，用 FACTOPIA_LLM_LITE_MODEL。
 
+    设置菜单保存的模型优先于 .env（runtime/settings/models.json）。
+
     返回的 lite_model 供 _chat 在“大模型无权限（403）”时自动降级：main 回退 Lite，
     critic 回退主模型；Lite 不自动回退。
     """
+    try:
+        from factopia import settings as runtime_settings
+        overrides = runtime_settings.model_overrides()
+    except Exception:
+        overrides = {}
     base = os.environ.get("FACTOPIA_LLM_BASE_URL")
-    model = os.environ.get("FACTOPIA_LLM_MODEL")
+    model = overrides.get("pro") or os.environ.get("FACTOPIA_LLM_MODEL")
     key = os.environ.get("FACTOPIA_LLM_API_KEY")
-    lite_model = (os.environ.get("FACTOPIA_LLM_LITE_MODEL") or "").strip()
-    critic_model = (os.environ.get("FACTOPIA_LLM_CRITIC_MODEL") or "").strip()
+    lite_model = (overrides.get("lite") or os.environ.get("FACTOPIA_LLM_LITE_MODEL") or "").strip()
+    critic_model = (overrides.get("critic") or os.environ.get("FACTOPIA_LLM_CRITIC_MODEL") or "").strip()
     if lite:
         chosen, fallback = (lite_model or model), (lite_model or None)
     elif role == "critic":
