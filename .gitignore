@@ -24,3 +24,10 @@ web/*.tsbuildinfo
 # 会话工作目录
 .screenshots/
 /.workbuddy/
+
+# 云端部署用的 env（含密钥）
+.env.cloud
+docker/htpasswd
+
+# 论文 PDF（本地参考资料）
+papers/

@@ -146,7 +146,7 @@ def _ai_meta(spec: dict, ex: dict | None) -> str:
     dr = spec.get("ai_draft") or {}
     parts = ([f"研究规格起草 {e(dr.get('model'))}（提示词 {e(dr.get('prompt_version'))}）"] if dr.get("model") else []) \
         + ([f"市场差异解释 {e(ex.get('model'))}（提示词 {e(ex.get('prompt_version'))}）"] if ex and ex.get("model") else []) \
-        + ["自动挖掘轮次假设与因子：RD-Agent（模型见审批材料）"]
+        + ["自动挖掘轮次假设与因子：Factopia-Agent（模型见审批材料）"]
     return f'<div class="meta">AI 生成内容：{" · ".join(parts)}；人工复核、意见与审批记录见情报台与审批台的只追加留痕</div>'
 
 
@@ -236,7 +236,7 @@ blockquote{{margin:6px 0;padding:6px 12px;border-left:3px solid var(--line);colo
                  f'<span class="mono">{e(_cut(r.get("hypothesis"), 200))}</span>'] for r in e_m.get("rounds") or []]
         cred = ((e_m.get("focus") or {}).get("credibility") or {})
         out.append(f"<h3>{e(Z[m])}（{e(e_m.get('run_id') or '未运行')}）</h3>"
-                   + (_table(["轮次", "RD-Agent 决定", "Rank IC", "t", "扣成本年化", "过可证伪", "本轮假设（AI 原文）"], rows) if rows else "<p>没有轮次。</p>")
+                   + (_table(["轮次", "Factopia-Agent 决定", "Rank IC", "t", "扣成本年化", "过可证伪", "本轮假设（AI 原文）"], rows) if rows else "<p>没有轮次。</p>")
                    + (f"<p>可信度：<b>{e(cred.get('label'))}</b> {e('；'.join('未通过：' + c.get('label', '') for c in cred.get('checks') or [] if c.get('ok') is False))}</p>" if cred else ""))
     # ⑤ 组合表现
     out.append("<h2>⑤ 组合表现（含汇率拆分和归因）</h2>")

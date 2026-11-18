@@ -28,7 +28,7 @@ export default function IcSurface({ horizon }: { horizon: number }) {
         : <SurfaceView s={s} boundary={data.test_boundary} smooth={smooth} precise={precise} market={market} />}
       <p className="text-xs text-muted leading-relaxed">
         {tf("横轴为 158 个 Alpha158 因子（按类型分组），纵深为月份，高度与颜色为该因子当月的预测能力（RankIC，预测未来 {h} 个交易日收益）。", { h: horizon })}
-        {tf("发光的竖直平面是 RD-Agent 回测测试期的起点（{b}）：平面之前的数据可以提供给 AI，之后的不可以（MINE-11）。", { b: data?.test_boundary ?? "2022-01" })}
+        {tf("发光的竖直平面是 Factopia-Agent 回测测试期的起点（{b}）：平面之前的数据可以提供给 AI，之后的不可以（MINE-11）。", { b: data?.test_boundary ?? "2022-01" })}
       </p>
     </div>
   );

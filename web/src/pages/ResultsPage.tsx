@@ -90,7 +90,7 @@ function RunSection({ runId }: { runId: string }) {
           </Notice>
         )}
         <Notice title={t("回测结果可信度待排查（Spec 第 8 章 #21）")}>
-          {t("多次运行中出现 rank IC 为负、收益却高于起点，原因未明（三市场研究中香港、法国都出现）；比较基准为 RD-Agent 默认的 20 个基础因子，而非完整 Alpha158。")}
+          {t("多次运行中出现 rank IC 为负、收益却高于起点，原因未明（三市场研究中香港、法国都出现）；比较基准为 Factopia-Agent 默认的 20 个基础因子，而非完整 Alpha158。")}
         </Notice>
       </div>
 
@@ -132,7 +132,7 @@ function RunSection({ runId }: { runId: string }) {
       {best && <ValidationPanel runId={run.run_id} loop={best.loop} />}
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]">
-        <Panel eyebrow={t("RD-Agent · 逐轮")} title={t("AI 研究轨迹")} actions={<ViewToggle precise={precise} onChange={setPrecise} />}>
+        <Panel eyebrow={t("Factopia-Agent · 逐轮")} title={t("AI 研究轨迹")} actions={<ViewToggle precise={precise} onChange={setPrecise} />}>
           {precise ? <RoundTable run={run} rounds={rounds} verdicts={verdicts} selected={selected} onSelect={setSelected} /> : (
             <div className="h-[520px] -mx-1">
               <ResearchTrail run={run} rounds={rounds} selected={selected} onSelect={setSelected} />
@@ -215,7 +215,7 @@ function RoundTable({ run, rounds, verdicts, selected, onSelect }: {
       <table className="w-full text-sm">
         <thead className="text-xs text-muted"><tr>
           <th className="text-left py-1.5">{t("轮次")}</th><th className="text-left">{t("假设（AI 原文）")}</th>
-          <th className="text-right">rank IC</th><th className="text-right">{t("扣成本年化")}</th><th className="text-right">{t("最大回撤")}</th><th className="text-right">RD-Agent</th>
+          <th className="text-right">rank IC</th><th className="text-right">{t("扣成本年化")}</th><th className="text-right">{t("最大回撤")}</th><th className="text-right">Factopia-Agent</th>
           {verdicts && <th className="text-right pl-2" title={t("按研究规格中运行前锁定的可证伪测试判定")}>{t("可证伪测试")}</th>}
         </tr></thead>
         <tbody>
@@ -261,16 +261,16 @@ function RoundDetail({ run, round, verdict }: { run: Run; round?: Round; verdict
   if (!round) {
     return (
       <div className="flex flex-col gap-3 text-sm">
-        <p className="text-muted">{t("RD-Agent 的起点：Alpha158 中的 20 个基础因子（ALPHA20），由 LightGBM 训练后在测试期回测。后续每一轮都在此基础上加入 AI 的新因子。")}</p>
+        <p className="text-muted">{t("Factopia-Agent 的起点：Alpha158 中的 20 个基础因子（ALPHA20），由 LightGBM 训练后在测试期回测。后续每一轮都在此基础上加入 AI 的新因子。")}</p>
         <Compare cur={run.baseline?.metrics} ref_={null} />
-        <p className="text-xs text-faint">{t("起点的回测由 RD-Agent 缓存，没有保留逐日结果，因此净值图中不显示起点曲线。")}</p>
+        <p className="text-xs text-faint">{t("起点的回测由 Factopia-Agent 缓存，没有保留逐日结果，因此净值图中不显示起点曲线。")}</p>
       </div>
     );
   }
   return (
     <div className="flex flex-col gap-4 text-sm max-h-[560px] overflow-y-auto pr-1">
       <div className="flex flex-wrap gap-2">
-        {round.decision ? <Badge tone="good">{t("RD-Agent 采纳")}</Badge> : <Badge tone="bad">{t("RD-Agent 未采纳")}</Badge>}
+        {round.decision ? <Badge tone="good">{t("Factopia-Agent 采纳")}</Badge> : <Badge tone="bad">{t("Factopia-Agent 未采纳")}</Badge>}
         {verdict?.passed != null && <Badge tone={verdict.passed ? "good" : "bad"}>{verdict.passed ? t("可证伪测试通过") : t("可证伪测试未通过")}</Badge>}
         <Badge>{tf("编码尝试 {n} 次", { n: round.coding_attempts })}</Badge>
         <Badge>{tf("费用 {c}", { c: `$${round.cost_usd.toFixed(3)}` })}</Badge>
@@ -320,7 +320,7 @@ function RoundDetail({ run, round, verdict }: { run: Run; round?: Round; verdict
         </section>
       )}
       <section>
-        <div className="label mb-1">{t("Qlib 回测成绩")}</div>
+        <div className="label mb-1">{t("回测成绩")}</div>
         <Compare cur={round.metrics} ref_={round.sota_before} />
       </section>
       {round.feedback && (

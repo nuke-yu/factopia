@@ -9,7 +9,7 @@ import NavChart from "../components/charts/NavChart";
 import LiveStatus from "../components/LiveStatus";
 import ResumeButton from "../components/ResumeButton";
 
-const PIPELINE = ["提出假设", "编写代码", "Qlib 回测", "评审结果"];
+const PIPELINE = ["提出假设", "编写代码", "回测", "评审结果"];
 const LIVE_POLL_MS = 5000;
 const SPEEDS = [10, 30, 60, 120];
 const mmss = (s: number) => `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
@@ -34,7 +34,7 @@ export default function RunPage() {
         <div>
           <div className="label">{t("04 · 运行中")}</div>
           <h1 className="font-display text-2xl font-semibold tracking-wide mt-1">{t("AI 研究过程")}</h1>
-          <p className="text-muted text-sm mt-1 max-w-[80ch]">{t("每一轮：AI 提出假设 → 写代码并自检修错 → Qlib 回测 → AI 评审并决定下一步。运行中每 5 秒刷新；已完成的运行可按真实时间戳加速回放。")}</p>
+          <p className="text-muted text-sm mt-1 max-w-[80ch]">{t("每一轮：AI 提出假设 → 写代码并自检修错 → 回测 → AI 评审并决定下一步。运行中每 5 秒刷新；已完成的运行可按真实时间戳加速回放。")}</p>
         </div>
         <div className="ml-auto flex items-center gap-2">
           <label htmlFor="run-sel" className="label whitespace-nowrap">{t("运行")}</label>
@@ -62,7 +62,7 @@ function useTick(enabled: boolean, ms: number): number {
   return tick;
 }
 
-/** 任务排队或 RD-Agent 正在准备数据（还没有进度事件）时：显示任务状态与控制台输出。 */
+/** 任务排队或 Factopia-Agent 正在准备数据（还没有进度事件）时：显示任务状态与控制台输出。 */
 function JobWaiting({ jobId, onRun }: { jobId: string; onRun: (runId: string) => void }) {
   const [final, setFinal] = useState(false);
   const tick = useTick(!final, 3000);
@@ -86,14 +86,14 @@ function JobWaiting({ jobId, onRun }: { jobId: string; onRun: (runId: string) =>
         <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full" style={{ background: cssVar(`--${j.market}`) }} />{MARKET_LABEL[j.market]}</span>
         <span className="num text-xs text-muted">{tf("{n} 轮 · 上限 {b}", { n: j.loops, b: `$${j.budget_usd}` })}</span>
         {j.state === "queued" && <span className="text-sm text-muted">{tf("前面还有 {n} 个任务", { n: ahead })}</span>}
-        {j.state === "running" && <span className="text-sm text-muted">{t("RD-Agent 正在准备数据与基准回测，第一轮开始后自动切换到过程视图…")}</span>}
+        {j.state === "running" && <span className="text-sm text-muted">{t("Factopia-Agent 正在准备数据与基准回测，第一轮开始后自动切换到过程视图…")}</span>}
         {(j.state === "queued" || j.state === "running") && <div className="ml-auto"><StopButton jobId={j.job_id} /></div>}
         {["failed", "cancelled", "budget_stopped"].includes(j.state) && <div className="ml-auto"><ResumeButton jobId={j.job_id} onDone={() => setFinal(false)} /><RetryButton jobId={j.job_id} /></div>}
       </section>
       {j.error && <Notice tone="bad" title={t("运行失败")}>{j.error}</Notice>}
       {isLive(live.data) && <LiveStatus job={j} live={live.data} />}
       <details className="panel p-4" open={!isLive(live.data)}>
-        <summary className="cursor-pointer label">{t("RD-Agent 原始输出（最后 40 行）")}</summary>
+        <summary className="cursor-pointer label">{t("Factopia-Agent 原始输出（最后 40 行）")}</summary>
         <pre className="num text-[11px] whitespace-pre-wrap leading-relaxed text-muted max-h-[420px] overflow-y-auto bg-bg rounded p-3 mt-2">
           {j.log_tail.length ? j.log_tail.join("\n").replace(/\x1b\[[0-9;]*m/g, "") : t("等待输出…")}
         </pre>
@@ -273,7 +273,7 @@ function Lane({ market, loops, visible, clock }: { market: Market; loops: number
   const cost = ([...visible].reverse().find((e) => e.kind === "cost") as Extract<RunEvent, { kind: "cost" }> | undefined)?.total_usd ?? 0;
   const calls = visible.filter((e) => e.kind === "llm").length;
   const fixes = visible.filter((e) => e.kind === "check").flatMap((e) => (e as Extract<RunEvent, { kind: "check" }>).items).filter((i) => !i.ok).length;
-  // RD-Agent 在步骤结束时才记录开始时间：上一步已结束、下一步尚无记录时，高亮下一步
+  // Factopia-Agent 在步骤结束时才记录开始时间：上一步已结束、下一步尚无记录时，高亮下一步
   const active = !lastStep || done >= loops ? null : lastStep.phase === "start" ? lastStep.name
     : PIPELINE[(PIPELINE.indexOf(lastStep.name) + 1) % PIPELINE.length];
   const color = cssVar(`--${market}`);
@@ -425,7 +425,7 @@ function FeedItem({ e, rounds, fresh, onPrompt }: { e: RunEvent; rounds: Round[]
     case "backtest":
       return (
         <li className={box} style={{ borderColor: cssVar("--uk") }}>
-          {head(t("Qlib 回测完成"), cssVar("--text"))}
+          {head(t("回测完成"), cssVar("--text"))}
           <div className="num text-xs text-muted mt-0.5">{tf("IC {i} · 扣成本年化 {r} · 最大回撤 {d}", { i: fix(e.metrics?.ic), r: pct(e.metrics?.annual_return_with_cost), d: pct(e.metrics?.max_drawdown_with_cost) })}</div>
         </li>
       );

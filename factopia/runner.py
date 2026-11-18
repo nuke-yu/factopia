@@ -3,7 +3,7 @@
 在 rdagent 镜像中常驻运行（docker-compose.yml 的 runner 服务）：
     python -m factopia.runner
 
-每个任务：用锁定的研究规格版本启动一次 RD-Agent（与命令行方式走同一个启动脚本），
+每个任务：用锁定的研究规格版本启动一次 Factopia-Agent（与命令行方式走同一个启动脚本），
 运行期间每 3 秒解析一次控制台输出，写入实时状态（jobs/<任务>.live.json：当前步骤、最近活动、回测结果），
 每隔 15 秒导出一次结构化进度（results/runs/<运行编号>/）；每完成一轮回测即标记回测明细待导出（exporter 服务），
 累计费用超过预算或收到停止请求时中止。大模型余额不足、密钥无效时，中止并暂停排队，避免后面的任务连续失败。
@@ -11,7 +11,7 @@
 研究任务完成且有被采纳的轮次时，自动排入一个可信度检查任务（factopia/validate：未见数据、安慰剂、显著性），
 同样在这个队列中执行，不调用大模型。
 
-任务并行执行（最多 FACTOPIA_MAX_PARALLEL 个，默认 3；Spec BR-37）：RD-Agent 每次运行都会改写源码目录中的配置模板，
+任务并行执行（最多 FACTOPIA_MAX_PARALLEL 个，默认 3；Spec BR-37）：Factopia-Agent 每次运行都会改写源码目录中的配置模板，
 因此每个任务使用独立的源码副本（runtime/rdagent_src/<任务>，启动脚本复制）与独立的工作目录
 （runtime/rdagent/<市场>/h<N>/jobs/<任务>）；停止任务时只停止该任务的回测容器。
 """
@@ -198,7 +198,7 @@ def run_job(job: dict) -> None:
     if resume and resume["ok"]:                        # 从断点继续：同一日志目录与运行编号，只跑剩下的轮数
         log_dir = Path(job["log_dir"])
         run_id = job["run_id"]
-        # RD-Agent 续跑时从第 0 轮重新计数（已完成的轮直接跳过），--loop-n 是总轮数而不是剩余轮数
+        # Factopia-Agent 续跑时从第 0 轮重新计数（已完成的轮直接跳过），--loop-n 是总轮数而不是剩余轮数
         cmd = [ENTRYPOINT, "rdagent", "fin_factor", "--path", str(log_dir), "--loop-n", str(job["loops"])]
         job.update(state="running", resumed_at=store.now(), resume=False)
         log(f"{job['job_id']}: 从断点继续（{resume['checkpoint']}，还剩 {resume['remaining']} 轮）→ {run_id}")
@@ -264,9 +264,9 @@ def run_job(job: dict) -> None:
         job["state"] = "done"
     else:
         job["state"] = "failed"
-        job["error"] = f"RD-Agent 退出码 {proc.returncode}：{last_error(log_file)}"
+        job["error"] = f"Factopia-Agent 退出码 {proc.returncode}：{last_error(log_file)}"
     if run is None and job["state"] == "done":
-        job.update(state="failed", error="RD-Agent 已结束，但没有完成任何一轮")
+        job.update(state="failed", error="Factopia-Agent 已结束，但没有完成任何一轮")
     job["ended_at"] = store.now()
     store.write_job(job)
     if run is not None:  # 回测与持仓需要 Qlib 读取，由 exporter 服务（app 镜像）导出
@@ -278,7 +278,7 @@ def run_job(job: dict) -> None:
 
 
 def enqueue_validation(run_id: str) -> None:
-    """对 RD-Agent 最终采纳的轮次排入可信度检查。"""
+    """对 Factopia-Agent 最终采纳的轮次排入可信度检查。"""
     try:
         run = json.loads((rdagent_run.RUNS_DIR / run_id / "run.json").read_text())
         rounds = json.loads((rdagent_run.RUNS_DIR / run_id / "rounds.json").read_text())
@@ -340,7 +340,7 @@ def run_paper(job: dict) -> None:
 
 
 def run_text(job: dict) -> None:
-    """文本信号研究（第 14.17 节）：检验情报台的文本信号，输出与 RD-Agent 运行相同格式的结果，并直接计算诊断。"""
+    """文本信号研究（第 14.17 节）：检验情报台的文本信号，输出与 Factopia-Agent 运行相同格式的结果，并直接计算诊断。"""
     from factopia.diagnostics import diagnose_run
     from factopia.text import research as text_research
     job.update(state="running", started_at=store.now())

@@ -1,0 +1,99 @@
+# 云端（阿里云 ECS）差异：与 compose.local.yml 二选一，用法：
+#   docker compose -f docker-compose.yml -f compose.cloud.yml --profile platform --profile research up -d
+#
+# 与本地开发的差别：
+#   1) runtime 用绑定挂载 ./runtime（Linux ext4，不需要本地 Windows 那套命名卷覆盖）；
+#      runner 与 dind 必须看到同一路径，RD-Agent 传给回测容器的 -v 才是容器内路径。
+#   2) app / exporter 镜像不带 factopia 源码，api / runner 走镜像内代码 + 挂载覆盖，
+#      与本地行为一致（改代码后 restart 即可，不必重建镜像）。
+#   3) 容器内直连外网（无本地 Clash / IPv6 隧道问题），不继承 compose.local.yml 的 extra_hosts。
+#   4) 构建全部走国内镜像源；Docker Hub 在 ECS 上不通，基础镜像经 daemon.json 的 registry-mirrors 拉取。
+#
+# 需要在 .env 中额外设置（见 .env.cloud.example）：
+#   FACTOPIA_WEB_BIND=0.0.0.0   FACTOPIA_WEB_PORT=80
+#   DIND_REGISTRY_MIRROR=https://docker.m.daocloud.io
+#   QLIB_DOCKER_MEM_LIMIT=3g    QLIB_DOCKER_SHM_SIZE=1g   FACTOPIA_MAX_PARALLEL=1
+services:
+  app:
+    build:
+      args:
+        APT_MIRROR: ${APT_MIRROR:-https://mirrors.aliyun.com}
+        UV_DEFAULT_INDEX: ${UV_DEFAULT_INDEX:-https://mirrors.aliyun.com/pypi/simple/}
+    volumes:
+      - ./runtime:/workspace/runtime
+      - ./:/workspace
+
+  qlib-runner:
+    build:
+      args:
+        APT_MIRROR: ${APT_MIRROR:-https://mirrors.aliyun.com}
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}
+
+  # 独立的 Docker 引擎：RD-Agent 的回测容器跑在这里，与 runner 以相同路径挂载 runtime
+  dind:
+    command: ["--registry-mirror=${DIND_REGISTRY_MIRROR:-https://docker.m.daocloud.io}"]
+    volumes:
+      - ./runtime:/workspace/runtime
+      - rdagent_src:/opt/rdagent-src
+      - dind_data:/var/lib/docker
+
+  rdagent: &rdagent_cloud
+    build:
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
+    environment:
+      PYTHONPATH: /workspace/factopia
+    volumes:
+      - ./runtime:/workspace/runtime
+      - rdagent_src:/opt/rdagent-src
+      - ./configs:/workspace/configs:ro
+      - ./factopia:/workspace/factopia/factopia:ro
+
+  rdagent-ui:
+    volumes:
+      - ./runtime:/workspace/runtime
+      - rdagent_src:/opt/rdagent-src
+      - ./configs:/workspace/configs:ro
+
+  rdagent-web:
+    <<: *rdagent_cloud
+    environment:
+      PYTHONPATH: /workspace/factopia
+      FACTOPIA_MARKET: ${FACTOPIA_MARKET:-hk}
+      UI_STATIC_PATH: /opt/rdagent-web
+      UI_SERVER_HOST: 0.0.0.0
+
+  # 后端接口：镜像已含代码，这里再挂一层源码，改代码后 restart 即生效
+  api:
+    build:
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}
+    volumes:
+      - ./runtime:/workspace/runtime
+      - ./factopia:/workspace/factopia/factopia:ro
+      - ./configs:/workspace/configs:ro
+
+  # 后台运行器：与 dind 同机，按顺序执行页面发起的研究任务
+  runner:
+    volumes:
+      - ./runtime:/workspace/runtime
+      - rdagent_src:/opt/rdagent-src
+      - ./configs:/workspace/configs:ro
+      - ./factopia:/workspace/factopia/factopia:ro
+
+  # 回测结果导出（需要 Qlib，使用 app 镜像）
+  exporter:
+    volumes:
+      - ./runtime:/workspace/runtime
+      - ./:/workspace
+
+  # 前端：公网暴露由 .env 的 FACTOPIA_WEB_BIND / FACTOPIA_WEB_PORT 控制；
+  # 默认加 Basic Auth（docker/htpasswd，云端部署时生成），见 docker/web/cloud.conf.template
+  web:
+    build:
+      args:
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
+    volumes:
+      - ./docker/web/cloud.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ./docker/htpasswd:/etc/nginx/htpasswd:ro

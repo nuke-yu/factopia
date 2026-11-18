@@ -235,7 +235,7 @@ export default function ResearchPage() {
             {mentions.length > 0 && (
               <div className="mt-3">
                 <Notice title={tf("输入中出现了测试期内的年份：{l}", { l: joinList(mentions) })}>
-                  {t("RD-Agent 回测测试期从 2022 年开始。描述测试期内发生的事等于提前透露考题（MINE-11）。如确需保留，请在审核页确认。")}
+                  {t("Factopia-Agent 回测测试期从 2022 年开始。描述测试期内发生的事等于提前透露考题（MINE-11）。如确需保留，请在审核页确认。")}
                 </Notice>
               </div>
             )}

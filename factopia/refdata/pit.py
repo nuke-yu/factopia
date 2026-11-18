@@ -41,7 +41,7 @@ def build() -> dict:
     text = RUNTIME / "text" / "fr" / "summary.json"
     add("text", "公告文本信号", True, "公告日期（当地）", "正式发布时间（AMF 发往市场时间）",
         "正式发布 + 处理延迟，收盘后发布顺延到下一交易日", True,
-        "第 14.9、14.17 节；用于情报台检验与文本信号研究的回测（按实际可获取时间生效）；不提供给 RD-Agent 挖掘" + ("" if text.exists() else "（尚未生成）"))
+        "第 14.9、14.17 节；用于情报台检验与文本信号研究的回测（按实际可获取时间生效）；不提供给 Factopia-Agent 挖掘" + ("" if text.exists() else "（尚未生成）"))
     add("master", "证券主数据与行业分类", False, "—", "—", "取数时间（当前快照）", False,
         "行业、财务年度、报告币种为当前快照，不是历史值；不用于回测选股，只用于诊断的行业中性化与行业权重（以当前行业近似历史行业）")
     used_warn = [d for d in domains if d["used_in_backtest"] and d["status"] == "warn"]

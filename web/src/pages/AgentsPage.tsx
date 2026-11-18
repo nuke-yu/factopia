@@ -391,7 +391,7 @@ function validationText(j: AgentJob) {
   return tf("{m}市场可信度检查：{p}", { m, p: phrase });
 }
 
-/** 当前轮次的业务流程：每一步在做什么、结果是什么；RD-Agent 日志留在「04 运行中」。 */
+/** 当前轮次的业务流程：每一步在做什么、结果是什么；Factopia-Agent 日志留在「04 运行中」。 */
 function WorkflowProgress({ agent, rounds, jobs }: { agent: Agent; rounds: AgentRound[]; jobs: AgentJob[] }) {
   const round = rounds.find((r) => r.n === agent.current_round) ?? rounds[rounds.length - 1] ?? null;
   const facts = round?.facts;
@@ -463,7 +463,7 @@ function WorkflowProgress({ agent, rounds, jobs }: { agent: Agent; rounds: Agent
   return (
     <Panel eyebrow={tf("第 {n} 轮", { n: round?.n ?? (agent.current_round || 1) })}
       title={<span className={RUNNING.has(agent.state) ? "state-flash" : ""}>{t("AI生成假设，思考中...")}</span>}>
-      <p className="text-xs text-faint mb-2">{t("RD-Agent 原始日志请在「04 运行中」查看；这里只显示流程状态与结果。")}</p>
+      <p className="text-xs text-faint mb-2">{t("Factopia-Agent 原始日志请在「04 运行中」查看；这里只显示流程状态与结果。")}</p>
       <ol ref={workflowListRef} className="workflow-scroll flex flex-col gap-2 pr-1">
         <WorkflowStep title={t("观察事实")} status={observe}>
           {facts ? tf("事实 {n} 条 · 平台结论：{a} · 迁移：{b}", {
@@ -574,7 +574,7 @@ function ChildJobsPanel({ items }: { items: AgentJob[] }) {
                   <tr key={j.job_id} className="border-t border-line"
                     style={failed ? { background: "color-mix(in oklab, var(--bad) 8%, transparent)" } : undefined}>
                     <td className="py-1.5">{MARKET_LABEL[j.market as Market] ?? j.market}</td>
-                    <td>{j.kind === "validate" ? t("可信度检查") : j.kind === "text" ? t("文本信号") : t("RD-Agent")}</td>
+                    <td>{j.kind === "validate" ? t("可信度检查") : j.kind === "text" ? t("文本信号") : t("Factopia-Agent")}</td>
                     <td><span className={j.state === "running" ? "state-flash" : "inline-flex"}><Badge tone={TONE[j.state] ?? "muted"}>{j.state_zh ? t(j.state_zh) : STATE_LABEL[j.state] ?? j.state}</Badge></span></td>
                     <td className="num text-right">{j.rounds}</td>
                     <td className="num text-right">${Number(j.cost_usd || 0).toFixed(4)}</td>
@@ -900,7 +900,7 @@ function DraftEditor({ agent, draft, busy, onApprove, onReject }: {
     <div className="border border-accent/40 bg-accent/5 rounded p-3 flex flex-col gap-2">
       <div className="flex flex-wrap items-center gap-2">
         <Badge tone="accent">{t("人工闸门")}</Badge>
-        <span className="text-xs text-muted">{t("审改 vN+1 草稿；hypothesis / falsification / directions / rationale.note 必须是英文（发给 RD-Agent）。")}</span>
+        <span className="text-xs text-muted">{t("审改 vN+1 草稿；hypothesis / falsification / directions / rationale.note 必须是英文（发给 Factopia-Agent）。")}</span>
       </div>
       <label className="text-sm">{t("标题")}<input className="field mt-1" value={title} onChange={(e) => setTitle(e.target.value)} /></label>
       <label className="text-sm">{t("假设（英文）")}<textarea className="field mt-1 min-h-24 num text-xs" value={hypothesis} onChange={(e) => setHypothesis(e.target.value)} /></label>

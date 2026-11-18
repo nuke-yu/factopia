@@ -1,6 +1,6 @@
 """AI 建议的方向选择（Spec 第 17.11 节，v2）：按平台证据给研究方向排序，而不是随机抽一个角度。
 
-每个方向（研究角度）按关键词粗略归类以往的研究、RD-Agent 各轮假设、线索和人工排除方向，再结合：
+每个方向（研究角度）按关键词粗略归类以往的研究、Factopia-Agent 各轮假设、线索和人工排除方向，再结合：
 - 研究缺口：以往研究没有涉及的方向、还没有获批信号的市场优先；
 - 测试期前的证据：Alpha158 在测试期开始前（2015 至测试期前）显著的因子属于该方向的分组；
 - 以往结论：有被采纳的轮次 → 值得延伸；多轮全部未采纳 → 降低优先级；被研究列为排除方向 → 降低；
@@ -51,7 +51,7 @@ def _short(text: str, n: int = 220) -> str:
 
 
 def gather(markets: list[str], horizon: int = 20) -> dict:
-    """平台证据：以往研究（最新锁定版本）、RD-Agent 各轮（只有方向与是否采纳）、排除方向、获批信号、测试期前的因子统计、线索。"""
+    """平台证据：以往研究（最新锁定版本）、Factopia-Agent 各轮（只有方向与是否采纳）、排除方向、获批信号、测试期前的因子统计、线索。"""
     from factopia import ideas as I
     from factopia.research import evidence, library, store
     studies = []
@@ -102,7 +102,7 @@ def _support(angle: dict, ev: dict, market: str) -> list[dict]:
 DIMENSIONS = [
     {"key": "gap", "label": "研究缺口", "rule": "以往研究没涉及 +2；涉及但没覆盖该市场 +1；已覆盖 0"},
     {"key": "pretest", "label": "测试期前显著因子", "rule": "该市场测试期前 |t|>2 的 Alpha158 因子属于该方向分组，每个 +1，最多 +2"},
-    {"key": "adopted", "label": "以往采纳", "rule": "该市场有相关轮次被 RD-Agent 采纳 +1"},
+    {"key": "adopted", "label": "以往采纳", "rule": "该市场有相关轮次被 Factopia-Agent 采纳 +1"},
     {"key": "rejected", "label": "以往全部未采纳", "rule": "该市场 ≥3 轮相关轮次全部未采纳 −2"},
     {"key": "no_signal", "label": "市场无获批信号", "rule": "该市场还没有获批信号 +0.5"},
     {"key": "excluded", "label": "排除方向", "rule": "有研究把相关方向列为排除方向 −3"},
@@ -204,7 +204,7 @@ def evidence_items(angle: dict | None, cov: dict | None, market: str | None, mar
         if h in seen:
             continue
         seen.add(h)
-        items.append({"kind": "以往轮次", "text": f"past RD-Agent round ({r['market']}, {'adopted' if r['adopted'] else 'not adopted'}; results not shown): {h}",
+        items.append({"kind": "以往轮次", "text": f"past Factopia-Agent round ({r['market']}, {'adopted' if r['adopted'] else 'not adopted'}; results not shown): {h}",
                       "zh": f"{MARKET_ZH[r['market']]}以往一轮（{'被采纳' if r['adopted'] else '未采纳'}）：{h}"})
         if len(seen) >= 6:
             break
@@ -234,7 +234,7 @@ def inputs_summary(ev: dict, markets: list[str], log: list[dict], avoid_titles: 
     used = [
         {"name": "以往研究", "source": "runtime/research（各研究最新锁定版本）", "count": len(ev["studies"]),
          "use": "按关键词归类到方向，计「研究缺口」；研究题目放进避开清单", "items": [s["title"] for s in ev["studies"]]},
-        {"name": "RD-Agent 以往各轮", "source": "runtime/results/runs（受泄漏影响的运行和文本研究除外）", "count": len(rounds),
+        {"name": "Factopia-Agent 以往各轮", "source": "runtime/results/runs（受泄漏影响的运行和文本研究除外）", "count": len(rounds),
          "use": "只用假设方向与是否采纳（采纳 {n} 轮）；计「以往采纳 / 全部未采纳」，相关轮次作为证据发给 AI",
          "use_n": sum(r["adopted"] for r in rounds), "items": []},
         {"name": "排除方向", "source": "各研究规格的 exclusions 字段（研究员确认）", "count": sum(len(s["exclusions"]) for s in ev["studies"]),
