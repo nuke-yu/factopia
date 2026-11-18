@@ -376,7 +376,7 @@ def report(signal_id: str, log=print) -> dict:
     positions = {k: v for k, v in (state.get("positions") or {}).items() if float(v) > 1e-9}
     mode_note = {
         "shadow": t("影子撮合：T 日收盘截面决策、T+1 开盘价成交（开盘缺失用收盘价兜底），允许碎股，单边成本按规则包扣减。"),
-        "longport": t("长桥演示通道：市价单实际成交，持仓与现金按成交回报本地记账，按每手 100 股取整。"),
+        "longport": t("长桥模拟盘通道：市价单实际成交，持仓与现金按成交回报本地记账，按每手 100 股取整。"),
     }
     out = {
         "signal_id": signal_id,

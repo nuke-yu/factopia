@@ -1,4 +1,4 @@
-"""地区视角（业务需求 BR-45；Spec 第 14.20 节）——演示用，不是登录鉴权。
+"""地区视角（业务需求 BR-45；Spec 第 14.20 节）——本地视角，不是登录鉴权。
 
 页面顶部选择地区角色（总部 / 香港团队 / 伦敦团队 / 巴黎团队），每个请求带 Cookie factopia_region（或请求头 X-Factopia-Region）；
 后端中间件把角色放入上下文，各接口按 configs/access/regions.yaml 过滤：只返回本地区市场的数据与信号，
@@ -80,7 +80,7 @@ def _log(ev: dict) -> None:
 def deny(what: str, market: str | None = None) -> None:
     r = role()
     _log({"role": r["code"], "role_name": r["name"], "denied": what, "market": market})
-    raise Denied(t("当前地区角色「{role}」无权查看：{what}（演示用地区视角，见 configs/access/regions.yaml）", role=role_label(r["code"], r["name"]), what=what))
+    raise Denied(t("当前地区角色「{role}」无权查看：{what}（本地地区视角，见 configs/access/regions.yaml）", role=role_label(r["code"], r["name"]), what=what))
 
 
 def require(market: str | None, what: str) -> None:

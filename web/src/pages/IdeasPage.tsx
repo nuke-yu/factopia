@@ -246,7 +246,7 @@ function Submit({ meta, actor, setActor, onCreated, onUpdated, onCancelEdit, edi
           ))}
         </div>
         <label className="text-sm">{t("提交人")}
-          <input id="idea-actor" className="field mt-1" value={actor} maxLength={60} onChange={(e) => setActor(e.target.value)} placeholder={t("姓名（演示用，不校验身份）")} /></label>
+          <input id="idea-actor" className="field mt-1" value={actor} maxLength={60} onChange={(e) => setActor(e.target.value)} placeholder={t("姓名（不校验身份）")} /></label>
         <label className="flex items-start gap-2 text-sm">
           <input id="idea-confirm" type="checkbox" className="mt-1" checked={confirm} onChange={(e) => setConfirm(e.target.checked)} />
           <span>{t("确认内容不含真实客户身份信息（不要输入客户姓名；平台会拦截电子邮件、电话、身份证号、IBAN 等格式明确的信息）")}</span>

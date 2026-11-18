@@ -18,6 +18,7 @@ DEFAULTS = {
     "budget_usd": 2.0,
     "no_improve_patience": 2,
     "human_gate": "costly_actions",
+    "debate_rounds": 3,          # 深度思考辩论轮数上限（每轮最多一次评审 + 一次修订）
     "child_loops": 2,
     "child_budget_usd": 0.6,
     "tools": ["new_version", "run_rdagent", "run_text", "validate", "diagnose", "stop"],
@@ -48,14 +49,17 @@ def load(path: str | Path | None = None) -> dict:
         policy["max_rounds"] = int(policy["max_rounds"])
         policy["budget_usd"] = float(policy["budget_usd"])
         policy["no_improve_patience"] = int(policy["no_improve_patience"])
+        policy["debate_rounds"] = int(policy["debate_rounds"])
     except (TypeError, ValueError) as e:
-        raise PolicyError(f"策略中的轮数 / 预算 / 耐心必须是数字：{e}") from e
+        raise PolicyError(f"策略中的轮数 / 预算 / 耐心 / 辩论轮数必须是数字：{e}") from e
     if policy["max_rounds"] < 1:
         raise PolicyError("max_rounds 必须 ≥ 1")
     if policy["budget_usd"] < 0:
         raise PolicyError("budget_usd 必须 ≥ 0")
     if policy["no_improve_patience"] < 0:
         raise PolicyError("no_improve_patience 必须 ≥ 0")
+    if policy["debate_rounds"] < 1:
+        raise PolicyError("debate_rounds 必须 ≥ 1")
     if policy["human_gate"] not in HUMAN_GATES:
         raise PolicyError(f"human_gate 必须是 {HUMAN_GATES} 之一")
     if not isinstance(policy["tools"], list) or not all(isinstance(x, str) for x in policy["tools"]):

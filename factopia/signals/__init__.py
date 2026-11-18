@@ -135,7 +135,7 @@ def catalog() -> list[dict]:
             out.append({
                 "signal_id": sid, "research_id": rid, "version": ver, "market": m, "market_zh": MARKET_ZH[m],
                 "title": mt["title"], "submission": sub["id"], "state": state,
-                "state_zh": STATE_ZH[state] + ("（模拟数据，仅演示）" if sim and state in ("active", "paused") else ""), "reason": reason,
+                "state_zh": STATE_ZH[state] + ("（模拟数据，仅流程验证）" if sim and state in ("active", "paused") else ""), "reason": reason,
                 "production": state == "active" and not sim, "simulated": sim, "kind": res.get("kind", "rdagent"),
                 "mandate": mt.get("mandate"), "base_currency": (mt.get("portfolio") or {}).get("base_currency"),
                 "labels": {"languages": _languages(spec, mandate), "mandate": f"{mandate.get('name', mt.get('mandate'))}（{mandate.get('service_region', '')}）",

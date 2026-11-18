@@ -1,7 +1,7 @@
 """行情来源（文本信号研究，BR-49；Spec 第 14.17 节）。
 
 研究运行默认使用真实市场的标准化行情（runtime/data/standardized/<市场>.parquet）与基准指数。
-文本信号研究在香港、英国使用模拟文本数据集（虚构公司，"模拟数据，仅用于流程演示"），其行情也是模拟的、
+文本信号研究在香港、英国使用模拟文本数据集（虚构公司，"模拟数据，仅用于流程验证"），其行情也是模拟的、
 股票池是虚构公司，没有成交量与指数：基准改为股票池等权，成交额相关的诊断（规模、流动性、容量）留空。
 
 运行结果在 run.json 的 price_source 中记录来源（{"dataset": "demo_hk", "simulated": true, ...}）；
@@ -13,7 +13,7 @@ from pathlib import Path
 import pandas as pd
 
 RUNTIME = Path(os.environ.get("FACTOPIA_RUNTIME", "/workspace/runtime"))
-SIMULATED_LABEL = "模拟数据，仅用于流程演示"
+SIMULATED_LABEL = "模拟数据，仅用于流程验证"
 # 文本信号研究每个市场使用的文本数据集（与 factopia/text/common.py 的 DATASETS 一致）
 TEXT_DATASETS = {"hk": "demo_hk", "uk": "demo_uk", "fr": "fr"}
 SIMULATED = {"demo_hk", "demo_uk"}

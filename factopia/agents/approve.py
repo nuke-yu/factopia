@@ -89,7 +89,7 @@ def ensure_job(agent: dict) -> dict:
 
 
 def approve(agent_id: str, file: str | Path | None = None, run: bool = True,
-            by: str = "研究员（演示，未登录）", queue: bool = True, draft: dict | None = None) -> dict:
+            by: str = "研究员（未登录）", queue: bool = True, draft: dict | None = None) -> dict:
     """保存人工审改后的草稿为 vN+1，并把 agent job 重新排队。"""
     agent = store.load(agent_id)
     if agent.get("state") != "awaiting_human":
@@ -152,7 +152,7 @@ def approve(agent_id: str, file: str | Path | None = None, run: bool = True,
     return {"agent": agent, "saved": saved, "job": job}
 
 
-def reject(agent_id: str, reason: str, by: str = "研究员（演示，未登录）") -> dict:
+def reject(agent_id: str, reason: str, by: str = "研究员（未登录）") -> dict:
     agent = store.load(agent_id)
     if agent.get("state") != "awaiting_human":
         raise ApprovalError(f"只有 awaiting_human 的 Agent 可以拒绝（当前 {agent.get('state')}）")
@@ -170,11 +170,11 @@ def reject(agent_id: str, reason: str, by: str = "研究员（演示，未登录
 
 
 def auto_approve(agent: dict, run: bool = True, by: str = "CLI --yes") -> dict:
-    """--yes 演示用：不编辑，直接批准原草稿；job 由 loop.run 在创建子任务后再排队。"""
+    """--yes 展示用：不编辑，直接批准原草稿；job 由 loop.run 在创建子任务后再排队。"""
     return approve(agent["agent_id"], run=run, by=by, queue=False)
 
 
-def stop(agent_id: str, reason: str = "人工停止", by: str = "研究员（演示，未登录）") -> dict:
+def stop(agent_id: str, reason: str = "人工停止", by: str = "研究员（未登录）") -> dict:
     """人工停止：Agent 与仍在跑的 job / 子任务都置为取消。"""
     agent = store.load(agent_id)
     if agent.get("state") in ("done", "stopped", "failed", "cancelled"):
@@ -196,7 +196,7 @@ def stop(agent_id: str, reason: str = "人工停止", by: str = "研究员（演
 
 
 def terminate_research(research_id: str, version: int | None = None, reason: str = "人工终止当前研究",
-                       by: str = "研究员（演示，未登录）") -> dict:
+                       by: str = "研究员（未登录）") -> dict:
     """人工终止整个研究：写终止标记，并停止该研究下所有仍在活动的 Agent（含其他版本）。
 
     终止后 POST /api/agents 会拒绝任何新 Agent；人工仍可生成新版本、继续研究或提交审批。

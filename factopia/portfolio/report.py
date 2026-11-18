@@ -119,9 +119,9 @@ def _hits_zh(pre: dict | None) -> str:
             + _table(["程度", "编号", "市场", "规则", "命中原因", "所需审批"], rows))
 
 
-SIM_NOTE = {"zh": "{m}：行情与公告为模拟数据，仅用于流程演示（虚构公司，植入已知规律），不构成研究结论。",
-            "en": "{m}: prices and filings are simulated data for workflow demonstration only (fictional companies with a planted pattern); not a research finding.",
-            "fr": "{m} : cours et publications simulés, uniquement pour la démonstration du processus (sociétés fictives, régularité implantée) ; ne constitue pas un résultat de recherche."}
+SIM_NOTE = {"zh": "{m}：行情与公告为模拟数据，仅用于流程验证（虚构公司，植入已知规律），不构成研究结论。",
+            "en": "{m}: prices and filings are simulated data for workflow verification only (fictional companies with a planted pattern); not a research finding.",
+            "fr": "{m} : cours et publications simulés, uniquement pour la vérification du processus (sociétés fictives, régularité implantée) ; ne constitue pas un résultat de recherche."}
 
 
 def _simulated(st: dict, ms: list[str]) -> list[str]:

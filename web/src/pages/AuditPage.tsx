@@ -168,7 +168,7 @@ function Review({ result, markets, horizon, inputs, locked, setLocked }: {
             </Row>
             <Row name={t("信号来源")} source={t("系统")} edited={edited("signal_source")} hint={t("量价：Factopia-Agent 自动挖掘；文本：检验情报台的风险表述变化信号（不启动 Factopia-Agent）")}>
               <Seg label={t("信号来源")} value={f.signal_source} options={SOURCES} onChange={(v) => !ro && set({ signal_source: v })} />
-              {f.signal_source === "text" && <p className="text-xs text-muted mt-1">{t("香港、英国为模拟数据，仅用于流程演示；法国为 AMF 真实公告（2024 年 8 月起，测试期内数据不足）。可证伪测试须写明 rank IC 方向（positive / negative）。")}</p>}
+              {f.signal_source === "text" && <p className="text-xs text-muted mt-1">{t("香港、英国为模拟数据，仅用于流程验证；法国为 AMF 真实公告（2024 年 8 月起，测试期内数据不足）。可证伪测试须写明 rank IC 方向（positive / negative）。")}</p>}
             </Row>
             {d.region_diff && d.region_diff.markets.length > 1 && (
               <Row name={t("地区差异清单")} source={t("系统")} hint={tf("{n} 项各市场不同 · {v} · 规则包 {p}", { n: d.region_diff.differs, v: d.region_diff.markets_version, p: joinList(Object.values(d.region_diff.rule_packs)) })}>

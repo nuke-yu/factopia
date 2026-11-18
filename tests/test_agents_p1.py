@@ -349,8 +349,10 @@ class AgentP1Tests(unittest.TestCase):
                      "confidence": "medium"}
         critique = {"verdict": "revise", "issues": [{"severity": "warn", "text": "Clarify the volume window.", "cites": ["F1"]}],
                     "required_changes": ["State the volume window explicitly"], "alternative_action": None}
+        accept = {"verdict": "accept", "issues": [], "required_changes": [], "alternative_action": None}
         revised = {**plan_data("decrease"), "expected_outcome": "Revised outcome after critique"}
-        responses = [json.dumps(plan_data("decrease")), json.dumps(critique), json.dumps(revised)]
+        responses = [json.dumps(plan_data("decrease")), json.dumps(critique), json.dumps(revised),
+                     json.dumps(accept)]
 
         def fake_chat(prompt, task, role="main"):
             return responses.pop(0), {"prompt_tokens": 5, "completion_tokens": 5, "usd": 0.0001}, "fake"
@@ -358,7 +360,9 @@ class AgentP1Tests(unittest.TestCase):
         plan = loop._plan(facts, diagnosis, {}, policy, fake_chat, agent, {"ric_sign": -1},
                           external=None, deep_think=True)
         self.assertTrue(plan["deep_think"]["revised"])
-        self.assertEqual(plan["deep_think"]["critique"]["verdict"], "revise")
+        self.assertEqual(plan["deep_think"]["critique"]["verdict"], "accept")   # 最后一次评审 accept → 辩论结束
+        self.assertEqual(len(plan["deep_think"]["critiques"]), 2)
+        self.assertEqual(plan["deep_think"]["revisions"], 1)
         self.assertEqual(plan["expected_outcome"], "Revised outcome after critique")
         self.assertTrue(astore.read_round(agent["agent_id"], 1, "plan_critique"))
 
@@ -374,8 +378,10 @@ class AgentP1Tests(unittest.TestCase):
         critique = {"verdict": "revise", "issues": [], "required_changes": ["Add external support"],
                     "alternative_action": None, "needs_external_search": True,
                     "search_query": "volume short-term reversal"}
+        accept = {"verdict": "accept", "issues": [], "required_changes": [], "alternative_action": None}
         revised = {**plan_data("decrease"), "expected_outcome": "Revised with external support"}
-        responses = [json.dumps(plan_data("decrease")), json.dumps(critique), json.dumps(revised)]
+        responses = [json.dumps(plan_data("decrease")), json.dumps(critique), json.dumps(revised),
+                     json.dumps(accept)]
 
         def fake_chat(prompt, task, role="main"):
             return responses.pop(0), {"prompt_tokens": 5, "completion_tokens": 5, "usd": 0.0001}, "fake"
@@ -391,6 +397,81 @@ class AgentP1Tests(unittest.TestCase):
         self.assertEqual(plan["deep_think"]["revision_external"]["results"][0]["title"], "Paper")
         saved = astore.read_round(agent["agent_id"], 1, "external_revision")
         self.assertEqual(saved["results"][0]["title"], "Paper")
+
+    def test_deep_think_accept_ends_debate(self):
+        """Critic 第一次评审就 accept：不修订，辩论提前结束。"""
+        policy = {**POLICY, "prompts": {**POLICY["prompts"], "planner": "iteration-planner-v2",
+                                        "plan_critic": "iteration-plan-critic-v1"}}
+        agent = astore.create("test_negative", 1, policy, ["hk"], 20, deep_think=True)
+        agent["current_round"] = 1
+        astore.save(agent)
+        facts = {"facts": [{"id": "F1", "period": "valid", "text": "Hong Kong rank IC is weak."}]}
+        diagnosis = {"primary_cause": {"text": "Weak IC", "cites": ["F1"]}, "market_findings": [], "risks": [],
+                     "confidence": "medium"}
+        accept = {"verdict": "accept", "issues": [], "required_changes": [], "alternative_action": None}
+        responses = [json.dumps(plan_data("decrease")), json.dumps(accept)]
+
+        def fake_chat(prompt, task, role="main"):
+            return responses.pop(0), {"prompt_tokens": 5, "completion_tokens": 5, "usd": 0.0001}, "fake"
+
+        plan = loop._plan(facts, diagnosis, {}, policy, fake_chat, agent, {"ric_sign": -1},
+                          external=None, deep_think=True)
+        self.assertFalse(plan["deep_think"]["revised"])
+        self.assertEqual(plan["deep_think"]["critique"]["verdict"], "accept")
+        self.assertEqual(len(plan["deep_think"]["critiques"]), 1)
+        self.assertEqual(plan["deep_think"]["revisions"], 0)
+        self.assertEqual(plan["expected_outcome"], plan_data("decrease")["expected_outcome"])
+
+    def test_deep_think_debate_max_3_rounds(self):
+        """Critic 每轮都 revise：打满 debate_rounds=3 轮后结束，不产生第 4 次评审。"""
+        policy = {**POLICY, "debate_rounds": 3,
+                  "prompts": {**POLICY["prompts"], "planner": "iteration-planner-v2",
+                              "plan_critic": "iteration-plan-critic-v1"}}
+        agent = astore.create("test_negative", 1, policy, ["hk"], 20, deep_think=True)
+        agent["current_round"] = 1
+        astore.save(agent)
+        facts = {"facts": [{"id": "F1", "period": "valid", "text": "Hong Kong rank IC is weak."}]}
+        diagnosis = {"primary_cause": {"text": "Weak IC", "cites": ["F1"]}, "market_findings": [], "risks": [],
+                     "confidence": "medium"}
+        revise = {"verdict": "revise", "issues": [], "required_changes": ["fix"], "alternative_action": None}
+        r1 = {**plan_data("decrease"), "expected_outcome": "revision 1"}
+        r2 = {**plan_data("decrease"), "expected_outcome": "revision 2"}
+        r3 = {**plan_data("decrease"), "expected_outcome": "revision 3"}
+        responses = [json.dumps(plan_data("decrease")), json.dumps(revise), json.dumps(r1),
+                     json.dumps(revise), json.dumps(r2), json.dumps(revise), json.dumps(r3)]
+
+        def fake_chat(prompt, task, role="main"):
+            return responses.pop(0), {"prompt_tokens": 5, "completion_tokens": 5, "usd": 0.0001}, "fake"
+
+        plan = loop._plan(facts, diagnosis, {}, policy, fake_chat, agent, {"ric_sign": -1},
+                          external=None, deep_think=True)
+        self.assertEqual(len(plan["deep_think"]["critiques"]), 3)
+        self.assertEqual(plan["deep_think"]["revisions"], 3)
+        self.assertEqual(plan["deep_think"]["critique"]["verdict"], "revise")   # 第 3 轮仍是 revise，但循环到此为止
+        self.assertEqual(plan["expected_outcome"], "revision 3")
+        self.assertEqual(responses, [])                                         # 没有第 4 次评审
+
+    def test_deep_think_critic_failure_keeps_plan(self):
+        """Critic 输出非法：评审失败，保留原计划，辩论提前结束。"""
+        policy = {**POLICY, "prompts": {**POLICY["prompts"], "planner": "iteration-planner-v2",
+                                        "plan_critic": "iteration-plan-critic-v1"}}
+        agent = astore.create("test_negative", 1, policy, ["hk"], 20, deep_think=True)
+        agent["current_round"] = 1
+        astore.save(agent)
+        facts = {"facts": [{"id": "F1", "period": "valid", "text": "Hong Kong rank IC is weak."}]}
+        diagnosis = {"primary_cause": {"text": "Weak IC", "cites": ["F1"]}, "market_findings": [], "risks": [],
+                     "confidence": "medium"}
+        responses = [json.dumps(plan_data("decrease")), "{}"]
+
+        def fake_chat(prompt, task, role="main"):
+            return responses.pop(0), {"prompt_tokens": 5, "completion_tokens": 5, "usd": 0.0001}, "fake"
+
+        plan = loop._plan(facts, diagnosis, {}, policy, fake_chat, agent, {"ric_sign": -1},
+                          external=None, deep_think=True)
+        self.assertEqual(plan["deep_think"]["critiques"], [])
+        self.assertFalse(plan["deep_think"]["revised"])
+        self.assertIsNone(plan["deep_think"]["critique"])
+        self.assertEqual(plan["expected_outcome"], plan_data("decrease")["expected_outcome"])
 
     def test_terminate_research_stops_active_agents_and_is_idempotent(self):
         agent = astore.create("test_single", 1, POLICY, ["hk"], 20)

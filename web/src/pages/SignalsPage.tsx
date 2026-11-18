@@ -12,7 +12,7 @@ const STATE_TONE: Record<string, "good" | "warn" | "bad" | "accent" | "muted"> =
   active: "good", paused: "warn", retired: "bad", not_applicable: "muted", not_approved: "bad", in_review: "accent",
 };
 const SUG_TONE: Record<string, "good" | "warn" | "bad"> = { ok: "good", watch: "warn", pause: "bad" };
-const ROLES = ["投资组合经理", "运营 / 技术负责人", "模型风险"]; // 演示身份（协议值，直传后端）
+const ROLES = ["投资组合经理", "运营 / 技术负责人", "模型风险"]; // 地区身份（协议值，直传后端）
 /** 运行状态代码的界面名称（后端 state_zh 为简体中文，按状态代码本地化；未知状态回退原值）。 */
 const JOB_STATE_LABEL: Record<string, string> = {
   running: t("运行中"), done: t("已完成"), failed: t("失败"), queued: t("排队中"), cancelled: t("已取消"),
@@ -350,7 +350,7 @@ function Detail({ sid, onChanged }: { sid: string; onChanged: () => void }) {
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <button className="btn btn-primary" disabled={!!running} onClick={async () => { await api.startMonitor(sid); await load(); onChanged(); }}>
               {running ? tf("监控计算中（{state}）…", { state: JOB_STATE_LABEL[job!.state] ?? t(job!.state_zh) }) : m ? t("重新计算监控") : t("运行监控")}</button>
-            <select id="sig-role" className="field" style={{ width: "auto" }} value={role} onChange={(x) => setRole(x.target.value)} aria-label={t("演示身份")}>
+            <select id="sig-role" className="field" style={{ width: "auto" }} value={role} onChange={(x) => setRole(x.target.value)} aria-label={t("地区身份")}>
               {ROLES.map((r) => <option key={r} value={r}>{t(r)}</option>)}
             </select>
             <input id="sig-note" className="field flex-1 min-w-[14rem]" placeholder={t("原因（必填）")} value={note} onChange={(x) => setNote(x.target.value)} />

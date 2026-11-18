@@ -47,7 +47,7 @@ app = FastAPI(title="Factopia API", version="0.1.0", docs_url="/api/docs", opena
 
 @app.middleware("http")
 async def _region_view(request, call_next):
-    """地区视角（第 14.20 节，演示用）：请求头 X-Factopia-Region 决定当前地区角色。"""
+    """地区视角（第 14.20 节，展示用）：请求头 X-Factopia-Region 决定当前地区角色。"""
     token = access.set_role(request.headers.get(access.HEADER) or request.cookies.get(access.COOKIE) or request.query_params.get("region"))
     try:
         return await call_next(request)
@@ -63,7 +63,7 @@ def _region_denied(request, exc):
 
 @app.get("/api/access")
 def access_info():
-    """当前地区角色、可选角色与策略（演示用，不是登录鉴权）。"""
+    """当前地区角色、可选角色与策略（本地视角，不是登录鉴权）。"""
     return access.info()
 
 
@@ -500,7 +500,7 @@ def research_preview(body: PreviewIn):
 
 
 EDITABLE = ("hypothesis", "rationale", "directions", "exclusions", "falsification")
-LOCKED_BY = "研究员（演示，未登录）"
+LOCKED_BY = "研究员（未登录）"
 
 
 TEST_YEAR = re.compile(r"20(2[2-9]|[3-9]\d)\s*年?")
@@ -702,7 +702,7 @@ def ideas_ai_hypothesis(iid: str):
 
 
 @app.post("/api/ideas/{iid}/extract")
-def ideas_extract(iid: str, by: str = Query("研究员（演示，未登录）", max_length=60)):
+def ideas_extract(iid: str, by: str = Query("研究员（未登录）", max_length=60)):
     _idea_check(iid)
     return _idea_call(_ideas().extract, iid, by)
 
@@ -841,7 +841,7 @@ def _version_rules(research_id: str, version: int, overrides: dict) -> dict:
             "portfolio_note": None if has_pf else "还没有完成的运行：组合生成后才能做组合预检",
             "focus": {m: {"run_id": e.get("run_id"), "loop": (e.get("focus") or {}).get("loop")} for m, e in st["markets"].items()},
             "overrides": overrides,
-            # 规则命中的处理状态（审批台的确认 / 例外）；合成违规演示时不显示
+            # 规则命中的处理状态（审批台的确认 / 例外）；合成违规样例时不显示
             "handling": None if overrides else _approval_mod().handling(research_id, version)}
 
 
@@ -1136,7 +1136,7 @@ def study_view(research_id: str, version: int):
 class ResearchTerminateIn(BaseModel):
     version: int | None = None          # 终止操作发生在哪个版本，仅用于追溯
     reason: str = "人工终止当前研究"
-    by: str = "研究员（演示，未登录）"
+    by: str = "研究员（未登录）"
 
 
 @app.get("/api/research/{research_id}/termination")
@@ -1303,7 +1303,7 @@ class FeedbackIn(BaseModel):
     market: str
     action: str
     note: str = ""
-    by: str = "研究员（演示，未登录）"
+    by: str = "研究员（未登录）"
 
 
 @app.post("/api/research/{research_id}/versions/{version}/portfolio/feedback")
@@ -1380,7 +1380,7 @@ def _approval_mod():
     return approval
 
 
-SUBMITTER = "发起研究员（演示，未登录）"
+SUBMITTER = "发起研究员（未登录）"
 
 
 def _materials(research_id: str, version: int) -> dict:
@@ -1402,7 +1402,7 @@ def _materials(research_id: str, version: int) -> dict:
             "quality": _json(qp) if qp.exists() else None, "text_pending": pending,
             "explanation": json.loads(exp.read_text(encoding="utf-8")) if exp.exists() else None,
             "translations": {"uses_text": uses_text, "pending_reviews": pending, "datasets": used,
-                             "waived_simulated": waived, "waived_note": "模拟数据集的复核要求不适用（仅用于流程演示，不得用于生产）" if waived else None}}
+                             "waived_simulated": waived, "waived_note": "模拟数据集的复核要求不适用（仅用于流程验证，不得用于生产）" if waived else None}}
 
 
 @app.get("/api/research/{research_id}/versions/{version}/submission-check")
@@ -1507,7 +1507,7 @@ def approval_evidence(sid: str):
     return Response(data, media_type="application/zip", headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
-# ---------------------------------------------------------------- 一键接入演示线（研究 → 审批 → 信号目录 → 模拟盘）
+# ---------------------------------------------------------------- 一键接入模拟盘（研究 → 审批 → 信号目录 → 模拟盘）
 
 DEMO_THRESHOLDS = {"rolling_rank_ic_60d_min": -0.05, "drawdown_vs_bench_max": -0.15}
 
@@ -1519,7 +1519,7 @@ class PaperDemoIn(BaseModel):
 
 @app.post("/api/research/{research_id}/versions/{version}/paper-demo")
 def paper_demo(research_id: str, version: int, body: PaperDemoIn | None = None):
-    """研究线结果一键接入演示线：补齐材料（组合 / 报告）→ 提交审批 → 自动走完全部审批步骤 →
+    """研究线结果一键接入模拟盘：补齐材料（组合 / 报告）→ 提交审批 → 自动走完全部审批步骤 →
     获批市场生成信号并接入模拟盘（排第一轮推进）。
 
     body.markets 可选（结果页市场勾选）：传入时只处理所选市场（可多选 / 单选），已接入且运行中的
@@ -1527,9 +1527,9 @@ def paper_demo(research_id: str, version: int, body: PaperDemoIn | None = None):
     不传时保持一键默认：运行中的市场跳过不重置。
 
     这是人为决策的入口：审批的门槛只看「有采纳轮次」，不看研究结论是否通过（判定否定 ≠ 不能观察），
-    研究员仍可把该版本接入演示线持续观察。全部审批留痕为「演示一键接入」，不构成生产部署。
+    研究员仍可把该版本接入演示线持续观察。全部审批留痕为「模拟盘一键接入」，不构成生产部署。
     """
-    access.require_cross_region(t("一键接入演示线"))
+    access.require_cross_region(t("一键接入模拟盘"))
     A = _approval_mod()
     P = _portfolio_mod()
     S = _signals_mod()
@@ -1548,7 +1548,7 @@ def paper_demo(research_id: str, version: int, body: PaperDemoIn | None = None):
     m = _materials(research_id, version)
     bad = A.preconditions(m)
     if bad:
-        raise HTTPException(422, t("还不能接入演示线：{bad}", bad="；".join(bad)))
+        raise HTTPException(422, t("还不能接入模拟盘：{bad}", bad="；".join(bad)))
     # 2) 选择提交：已获批复用；审批中的继续走完；都没有则自动提交
     subs = [s for s in A.list_all(research_id) if s["version"] == version]
     sub = next((A.load(s["id"]) for s in subs if s["status"] in ("approved", "approved_restricted")), None)
@@ -1556,10 +1556,10 @@ def paper_demo(research_id: str, version: int, body: PaperDemoIn | None = None):
         log.append(f"该版本已获批，复用提交 {sub['id']}")
     else:
         cur = next((s for s in subs if s["status"] == "in_review"), None)
-        sub = A.submit(m, SUBMITTER, "演示一键接入：自动提交") if cur is None else A.load(cur["id"])
+        sub = A.submit(m, SUBMITTER, "模拟盘一键接入：自动提交") if cur is None else A.load(cur["id"])
         log.append(f"{'已自动提交审批 ' + sub['id'] if cur is None else '已有审批中的提交 ' + sub['id'] + '，继续自动完成'}")
     # 3) 自动审批：逐步骤确认命中与模型例外 → 批准 → 运营完成部署核对（阈值与 seed 演示一致）
-    BY = "演示一键接入（自动审批）"
+    BY = "模拟盘一键接入（自动审批）"
     guard = 0
     try:
         while sub["status"] == "in_review" and guard < 24:
@@ -1568,13 +1568,13 @@ def paper_demo(research_id: str, version: int, body: PaperDemoIn | None = None):
             role, sid = step["role"], sub["id"]
             for h in list(step["hits"]) + [f"MODEL@{x}" for x in step["model_exceptions"]]:
                 if f"{role}|{h}" not in sub["rule_decisions"]:
-                    sub = A.act(sid, role, BY, "acknowledge", "演示一键接入：自动确认", h)
+                    sub = A.act(sid, role, BY, "acknowledge", "模拟盘一键接入：自动确认", h)
             if role == "运营 / 技术负责人":
-                sub = A.act(sid, role, BY, "complete", "演示一键接入：完成部署核对", None,
+                sub = A.act(sid, role, BY, "complete", "模拟盘一键接入：完成部署核对", None,
                             sub["approved_markets"], DEMO_THRESHOLDS,
                             A.current_fingerprint(sid, {"portfolio": P.load(research_id, version)}))
             else:
-                sub = A.act(sid, role, BY, "approve", "演示一键接入：批准")
+                sub = A.act(sid, role, BY, "approve", "模拟盘一键接入：批准")
     except A.ApprovalError as e:
         raise HTTPException(422, t("自动审批中断（可到审批台手动处理）：{e}", e=e))
     if sub["status"] not in ("approved", "approved_restricted"):
@@ -2123,17 +2123,17 @@ class AgentIn(BaseModel):
 class AgentApproveIn(BaseModel):
     draft: dict | None = None
     run: bool = True
-    by: str = "研究员（演示，未登录）"
+    by: str = "研究员（未登录）"
 
 
 class AgentRejectIn(BaseModel):
     reason: str
-    by: str = "研究员（演示，未登录）"
+    by: str = "研究员（未登录）"
 
 
 class AgentStopIn(BaseModel):
     reason: str = "人工停止"
-    by: str = "研究员（演示，未登录）"
+    by: str = "研究员（未登录）"
 
 
 def _agent_visible(agent: dict) -> bool:

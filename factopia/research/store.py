@@ -104,7 +104,7 @@ def termination(research_id: str | None) -> dict | None:
 
 
 def terminate(research_id: str, version: int | None = None, reason: str = "人工终止当前研究",
-              by: str = "研究员（演示，未登录）") -> dict:
+              by: str = "研究员（未登录）") -> dict:
     """写入终止标记；重复调用返回第一次的记录（幂等）。"""
     existing = termination(research_id)
     if existing:

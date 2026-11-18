@@ -60,7 +60,7 @@ def setup_context(spec: dict, overrides: dict | None = None) -> dict:
 
 
 def portfolio_context(spec: dict, study: dict, overrides: dict | None = None) -> dict:
-    """study：研究结论（factopia.api.main.study 的输出）。overrides["positions"]：{市场: [{date, symbol, weight}]} 用于合成违规演示。"""
+    """study：研究结论（factopia.api.main.study 的输出）。overrides["positions"]：{市场: [{date, symbol, weight}]} 用于合成违规样例。"""
     ctx = setup_context(spec, overrides)
     pf = {}
     # 已构建授权组合（第 14.13 节）时检查授权组合的持仓；否则检查 RD-Agent 回测组合的持仓

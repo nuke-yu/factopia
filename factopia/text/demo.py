@@ -1,7 +1,7 @@
 """香港、英国模拟数据（Spec 第 11.9 节；BR-08 授权前的替代方案）。
 
 - 公司全部虚构（代码 DEMO01.HK / DEMO01.L 等，名称含"示例" / "Example"），不为任何真实公司编造公告；
-  所有记录 simulated=True，页面统一标注"模拟数据，仅用于流程演示"。
+  所有记录 simulated=True，页面统一标注"模拟数据，仅用于流程验证"。
 - 公告：每家公司每季度一篇（香港中文，部分附英文版；英国英文）；风险水平按随机游走变化，
   按水平生成悲观句和否定句（"需求并未转弱"），用于检验跨语言理解与否定句复核。
 - 发布时间：午间、收盘后、开盘前随机（检验收盘后顺延）；行情：共同因子 + 个股噪声 + 植入规律。
@@ -36,7 +36,7 @@ TEMPLATES = {
                                    ["监管不确定性并未加大。"]),
         "neutral": ["本集团继续推进数字化转型，提升运营效率。", "董事会建议派发末期股息。", "本期集团持续优化资本结构，财务状况稳健。",
                     "集团于期内完成两项小型收购，整合进展顺利。", "管理层将继续关注股东回报与可持续发展。",
-                    "本公告所载资料为模拟数据，仅用于流程演示。"],
+                    "本公告所载资料为模拟数据，仅用于流程验证。"],
         "titles": {"Q": "季度业务更新（模拟）", "H": "中期业绩公告（模拟）", "A": "年度业绩公告（模拟）"},
     },
     "en": {
@@ -52,7 +52,7 @@ TEMPLATES = {
                     "The group further optimised its capital structure and the balance sheet remains sound.",
                     "Two small acquisitions were completed and integration is on track.",
                     "Management remains focused on shareholder returns and sustainability.",
-                    "This announcement contains simulated data for workflow demonstration only."],
+                    "This announcement contains simulated data for workflow verification only."],
         "titles": {"Q": "Quarterly trading update (simulated)", "H": "Interim results (simulated)", "A": "Annual results (simulated)"},
     },
 }

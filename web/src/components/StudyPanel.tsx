@@ -163,7 +163,7 @@ function ContinueMenu({ researchId, version, current, study, terminated, savedId
         title: title.trim(),
         body: (body || title).trim(),
         markets: ideaMarkets,
-        submitted_by: actor.trim() || "研究员（演示，未登录）",
+        submitted_by: actor.trim() || "研究员（未登录）",
         confirm_no_client_data: true,
         source_ref: { research: `${researchId}.v${version}`, ...(current ? { run: current } : {}) },
       });
@@ -345,7 +345,7 @@ function MarketCard({ e, current }: { e: StudyMarket; current: boolean }) {
         {e.primary && <Badge tone="accent">{t("主市场")}</Badge>}
         {current && <Badge>{t("当前运行")}</Badge>}
         {e.kind === "text" && <Badge tone="accent">{t("文本信号")}</Badge>}
-        {e.price_source?.simulated && <Badge tone="warn">{t("模拟数据，仅用于流程演示")}</Badge>}
+        {e.price_source?.simulated && <Badge tone="warn">{t("模拟数据，仅用于流程验证")}</Badge>}
         <span className="ml-auto">
           {done && e.insufficient ? <Badge tone="warn">{t("数据不足")}</Badge>
             : !done ? <Badge tone={e.state === "running" ? "accent" : "muted"}>{STATE_ZH[e.state] ?? e.state}</Badge>
@@ -381,7 +381,7 @@ function MarketCard({ e, current }: { e: StudyMarket; current: boolean }) {
           ? tf("验证期未满足采纳条件（rank IC 方向与假设一致且扣成本超额高于等权持有股票池），不采纳；起点扣成本年化超额 {p}。", { p: pct(b?.annual_return_with_cost) })
           : tf("Factopia-Agent 没有采纳任何一轮：新因子都没有超过起点（扣成本年化 {p}）。", { p: pct(b?.annual_return_with_cost) })}</p>
       ) : (
-        <p className="text-xs text-muted">{(e.state as string) === "hidden" ? t("当前地区视角不显示其他地区的结果（演示用地区视角）。")
+        <p className="text-xs text-muted">{(e.state as string) === "hidden" ? t("当前地区视角不显示其他地区的结果（本地地区视角）。")
           : e.job ? tf("任务{s}，完成后自动判定。", { s: t(e.job.state_zh) }) : t("这个版本还没有在该市场运行。")}</p>
       )}
 
@@ -473,7 +473,7 @@ function PaperDemoBlock({ s }: { s: Study }) {
     finally { setBusy(false); }
   };
 
-  // 未获批也放行：后端 paper-demo 会自动补材料、自动提交并走完全部审批（留痕「演示一键接入」）
+  // 未获批也放行：后端 paper-demo 会自动补材料、自动提交并走完全部审批（留痕「模拟盘一键接入」）
   if (appr.loading || appr.error) return null;
   return (
     <div className="border border-line rounded p-3 flex flex-col gap-2">
@@ -489,7 +489,7 @@ function PaperDemoBlock({ s }: { s: Study }) {
           <Link className="text-accent text-xs" to={`/approvals?sid=${reviewing.id}`}>{t("审批台 →")}</Link>
         </> : <>
           <Badge tone="muted">{t("未提交审批")}</Badge>
-          <span className="text-xs text-faint">{t("接入前会自动补材料、提交并走完全部审批（留痕「演示一键接入」）")}</span>
+          <span className="text-xs text-faint">{t("接入前会自动补材料、提交并走完全部审批（留痕「模拟盘一键接入」）")}</span>
         </>}
         <div ref={popRef} className="relative ml-auto">
           <button className="btn" disabled={busy} onClick={() => setOpen((v) => !v)}>
@@ -544,7 +544,7 @@ function PaperDemoBlock({ s }: { s: Study }) {
         </div>
       )}
       <p className="text-[11px] text-faint">
-        {t("未提交审批时点击会自动补材料、自动提交并走完全部审批（留痕「演示一键接入」）；审批门槛只看「有采纳轮次」，不要求研究结论通过——判定为否定的版本获批后同样可接入持续观察。")}
+        {t("未提交审批时点击会自动补材料、自动提交并走完全部审批（留痕「模拟盘一键接入」）；审批门槛只看「有采纳轮次」，不要求研究结论通过——判定为否定的版本获批后同样可接入持续观察。")}
         {t("点击「一键接入模拟盘」后勾选市场（可多选或只选一个）：只勾一个就只接入该市场模拟盘，全选则接入全部；勾选了运行中的市场会重置该市场模拟盘（清空旧状态从头开始），未勾选的市场保持现状；接入后约 1–3 分钟出第一轮模拟盘报告，之后每日自动推进。")}
       </p>
     </div>

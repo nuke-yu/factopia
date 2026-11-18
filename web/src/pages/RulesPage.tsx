@@ -12,7 +12,7 @@ type Tab = "check" | "packs" | "sources";
 const SEV_TONE = { block: "bad", warn: "warn", info: "muted" } as const;
 const STATUS_TONE: Record<string, "good" | "warn" | "bad" | "muted"> = { approved: "good", limited: "warn", forbidden: "bad" };
 
-// 合成违规演示：同一市场里加入一只受限证券（正权重）与一笔卖空；有英国时再加入一只烟草股，验证规则能否拦截
+// 合成违规样例：同一市场里加入一只受限证券（正权重）与一笔卖空；有英国时再加入一只烟草股，验证规则能否拦截
 const DEMO: Record<Market, { restricted: string; short: string }> = {
   hk: { restricted: "0700.HK", short: "0005.HK" }, uk: { restricted: "HSBA.L", short: "SHEL.L" }, fr: { restricted: "OR.PA", short: "MC.PA" },
 };
@@ -66,11 +66,11 @@ function CheckTab({ packs }: { packs: RulePacks }) {
         <span className="text-xs text-muted">{proj ? joinList(proj.markets.map((m) => MARKET_LABEL[m])) : ""} · {tf("{n} 个规则包", { n: packs.packs.length })}</span>
         <label className="ml-auto text-sm flex items-center gap-2" title={t("不写入任何文件，只用于验证规则能否拦截")}>
           <input id="rules-demo" type="checkbox" checked={demo} onChange={(e) => setDemo(e.target.checked)} />
-          {t("合成违规演示")}
+          {t("合成违规样例")}
         </label>
       </div>
       {demo && proj && (
-        <Notice tone="accent" title={t("合成违规演示（不写入任何文件）")}>
+        <Notice tone="accent" title={t("合成违规样例（不写入任何文件）")}>
           {tf("授权加入受限证券 {r}，自由文本加“避免烟草与争议性武器行业”；在{m}组合里追加该证券 4% 持仓与 {s} −3% 卖空{uk}（2023-06-01）。", {
             r: DEMO[proj.markets[0]].restricted, m: MARKET_LABEL[proj.markets[0]], s: DEMO[proj.markets[0]].short,
             uk: proj.markets.includes("uk") ? t("，英国组合追加 BATS.L（英美烟草）3%") : "",

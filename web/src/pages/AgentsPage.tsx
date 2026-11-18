@@ -494,7 +494,7 @@ function WorkflowProgress({ agent, rounds, jobs }: { agent: Agent; rounds: Agent
           <WorkflowStep title={t("深度思考评审")} status={deep}>
             {plan?.deep_think
               ? plan.deep_think.critique
-                ? <>{plan.deep_think.critique.verdict === "accept" ? t("通过评审") : t("需要修订")} · {plan.deep_think.revised ? t("已按评审修订") : t("保留原计划")}{plan.deep_think.critique.model ? ` · ${plan.deep_think.critique.model}` : ""}{plan.deep_think.revision_external && <span className="text-faint"> · {plan.deep_think.revision_external.error ? t("补充检索失败") : tf("补充检索 {n} 条", { n: plan.deep_think.revision_external.results?.length ?? 0 })}</span>}</>
+                ? <>{plan.deep_think.critique.verdict === "accept" ? t("通过评审") : t("需要修订")} · {plan.deep_think.revised ? t("已按评审修订") : t("保留原计划")} · {tf("评审 {n}/{m} 轮", { n: plan.deep_think.critiques?.length ?? 0, m: plan.deep_think.debate_rounds ?? 3 })}{plan.deep_think.critique.model ? ` · ${plan.deep_think.critique.model}` : ""}{plan.deep_think.revision_external && <span className="text-faint"> · {plan.deep_think.revision_external.error ? t("补充检索失败") : tf("补充检索 {n} 条", { n: plan.deep_think.revision_external.results?.length ?? 0 })}</span>}</>
                 : t("评审未返回，已保留原计划")
               : deep === "active" ? t("Critic 正在评审计划…") : t("等待 Planner 草案")}
           </WorkflowStep>
@@ -745,7 +745,8 @@ function RoundCard({ agent, round, busy, awaiting, onApprove, onReject }: {
             {plan.deep_think?.critique && (
               <details className="mt-2 border-t border-line pt-2">
                 <summary className="cursor-pointer text-sm">
-                  {t("深度思考 · 多智能体评审")} · {plan.deep_think.critique.verdict} ·{" "}
+                  {t("深度思考 · 多智能体评审")} · {tf("共 {n} 轮", { n: plan.deep_think.critiques?.length ?? 1 })} ·{" "}
+                  {plan.deep_think.critique.verdict} ·{" "}
                   {plan.deep_think.revised ? t("已按评审修订") : t("保留原计划")}
                   {plan.deep_think.critique.model && <span className="text-faint"> · {plan.deep_think.critique.model}</span>}
                   {plan.deep_think.revision_external && (
@@ -754,20 +755,28 @@ function RoundCard({ agent, round, busy, awaiting, onApprove, onReject }: {
                       : tf("补充检索 {n} 条", { n: plan.deep_think.revision_external.results?.length ?? 0 })}</span>
                   )}
                 </summary>
-                <ul className="mt-1 flex flex-col gap-1 text-xs">
-                  {(plan.deep_think.critique.issues || []).map((x: any, i: number) => (
-                    <li key={i} className="flex flex-wrap items-baseline gap-1.5">
-                      <Badge tone={x.severity === "block" ? "bad" : "warn"}>{x.severity === "block" ? t("阻断") : t("提醒")}</Badge>
-                      <span className="text-muted">{x.text}</span>
-                      {!!x.cites?.length && <span className="num text-faint">[{x.cites.join(", ")}]</span>}
-                    </li>
+                <div className="mt-1 flex flex-col gap-2 text-xs">
+                  {(plan.deep_think.critiques || [plan.deep_think.critique]).map((c: any, i: number) => (
+                    <div key={i} className="flex flex-col gap-1">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <Badge tone={c.verdict === "accept" ? "good" : "warn"}>{tf("第 {n} 轮评审", { n: i + 1 })} · {c.verdict === "accept" ? t("通过评审") : t("需要修订")}</Badge>
+                        {c.model && <span className="text-faint">{c.model}</span>}
+                      </div>
+                      {(c.issues || []).map((x: any, j: number) => (
+                        <div key={j} className="flex flex-wrap items-baseline gap-1.5">
+                          <Badge tone={x.severity === "block" ? "bad" : "warn"}>{x.severity === "block" ? t("阻断") : t("提醒")}</Badge>
+                          <span className="text-muted">{x.text}</span>
+                          {!!x.cites?.length && <span className="num text-faint">[{x.cites.join(", ")}]</span>}
+                        </div>
+                      ))}
+                      {!!c.required_changes?.length && (
+                        <ul className="list-disc pl-4 text-muted">
+                          {c.required_changes.map((x: string, j: number) => <li key={j}>{x}</li>)}
+                        </ul>
+                      )}
+                    </div>
                   ))}
-                </ul>
-                {!!plan.deep_think.critique.required_changes?.length && (
-                  <ul className="mt-1 list-disc pl-4 text-xs text-muted">
-                    {plan.deep_think.critique.required_changes.map((x: string, i: number) => <li key={i}>{x}</li>)}
-                  </ul>
-                )}
+                </div>
                 {plan.deep_think.revision_external && (
                   <div className="mt-2 text-xs">
                     <div className="label mb-1">{t("修订前补充检索")}</div>
@@ -875,7 +884,7 @@ function DraftEditor({ agent, draft, busy, onApprove, onReject }: {
   const [note, setNote] = useState(String(draft.rationale?.note || ""));
   const [markets, setMarkets] = useState<Market[]>((draft.markets || agent.root.markets) as Market[]);
   const [horizon, setHorizon] = useState(String(draft.horizon || agent.root.horizon));
-  const [by, setBy] = useState("研究员（演示，未登录）");
+  const [by, setBy] = useState("研究员（未登录）");
   const [reason, setReason] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const toggle = (m: Market) => setMarkets((xs) => xs.includes(m) ? xs.filter((x) => x !== m) : [...xs, m]);
@@ -888,12 +897,12 @@ function DraftEditor({ agent, draft, busy, onApprove, onReject }: {
   });
   async function approve(run: boolean) {
     setErr(null);
-    try { await onApprove(payload(), run, by.trim() || "研究员（演示，未登录）"); }
+    try { await onApprove(payload(), run, by.trim() || "研究员（未登录）"); }
     catch (e) { setErr((e as Error).message); }
   }
   async function reject() {
     setErr(null);
-    try { await onReject(reason.trim() || t("不同意本轮研究规格"), by.trim() || "研究员（演示，未登录）"); }
+    try { await onReject(reason.trim() || t("不同意本轮研究规格"), by.trim() || "研究员（未登录）"); }
     catch (e) { setErr((e as Error).message); }
   }
   return (
@@ -919,7 +928,7 @@ function DraftEditor({ agent, draft, busy, onApprove, onReject }: {
           {[1, 5, 20, 60].map((h) => <option key={h} value={h}>{tf("{n} 日", { n: h })}</option>)}
         </select>
       </div>
-      <label className="text-sm">{t("审批人（演示，未登录）")}<input className="field mt-1" value={by} onChange={(e) => setBy(e.target.value)} /></label>
+      <label className="text-sm">{t("审批人（未登录）")}<input className="field mt-1" value={by} onChange={(e) => setBy(e.target.value)} /></label>
       {err && <div className="text-xs text-bad">{err}</div>}
       <div className="flex flex-wrap items-center gap-2">
         <button className="btn btn-primary h-9 px-3" disabled={busy} onClick={() => approve(true)}>{busy ? t("提交中…") : t("批准并运行")}</button>

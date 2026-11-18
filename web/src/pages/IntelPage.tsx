@@ -11,7 +11,7 @@ import { IS_ZH, joinList, t, tf } from "../i18n";
 
 // 情报台（Spec 第 11 章；BR-08 至 12、15、49）：多语言公告 → 概念标签 / 译文 / 置信度 → 复核 → 文本信号 → 三市场检验
 
-const SIM = t("模拟数据，仅用于流程演示");
+const SIM = t("模拟数据，仅用于流程验证");
 const LANG: Record<string, string> = { zh: t("中文"), en: t("英文"), fr: t("法文") };
 const REVIEW_ZH: Record<string, string> = {
   pending: t("待复核"), not_required: t("无需复核"), confirm: t("已确认"), correct: t("已修正"), reject: t("判定不涉及风险"),
@@ -194,7 +194,7 @@ function FormulaDefs({ horizon, datasets }: { horizon: number; datasets: TextDat
 
 function CompareTable({ rows, note, horizon, rule, datasets }: { rows: TextCompareRow[]; note: string; horizon: number; rule?: string; datasets: TextDataset[] }) {
   return (
-    <Panel title={t("三个市场分别检验")} eyebrow={tf("演示主线 · 管理层风险表述变化 → 未来 {h} 个交易日相对收益", { h: horizon })}>
+    <Panel title={t("三个市场分别检验")} eyebrow={tf("示例主线 · 管理层风险表述变化 → 未来 {h} 个交易日相对收益", { h: horizon })}>
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="label text-left">
@@ -350,7 +350,7 @@ function DigPanel({ ds, instrument, company, filingId, onClose }:
       c.signal_note].filter(Boolean).join("\n\n");
     try {
       const r = await api.createIdea({ channel: "hypothesis", title: `${b.company} 公告深挖风险画像`,
-        body, markets: [DIG_MARKET[ds] ?? "fr"], submitted_by: t("研究员（演示，未登录）"), confirm_no_client_data: true });
+        body, markets: [DIG_MARKET[ds] ?? "fr"], submitted_by: t("研究员（未登录）"), confirm_no_client_data: true });
       navigate(`/ideas?id=${r.id}`);                 // 跳线索池并自动定位到新线索
     } catch (e) { setErr(String((e as Error).message ?? e)); } finally { setBusy(false); }
   };

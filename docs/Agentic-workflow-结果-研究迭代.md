@@ -1,7 +1,7 @@
-# 研究迭代 Agent 演示脚本（WF-02）
+# 研究迭代 Agent 介绍脚本（WF-02）
 
-> 适用版本：2026-11-15。演示数据使用 runtime 中已完成的 Agent `agt_20261114181750_cdfa`；
-> 不需要重跑 UK（UK 单轮约 17 分钟，演示时不要现场等待）。
+> 适用版本：2026-11-15。预置数据使用 runtime 中已完成的 Agent `agt_20261114181750_cdfa`；
+> 不需要重跑 UK（UK 单轮约 17 分钟，介绍时不要现场等待）。
 
 ## 0. 预置条件
 
@@ -12,9 +12,9 @@ docker compose -f docker-compose.yml -f compose.local.yml --profile platform --p
 - Web：<http://localhost:18080>
 - Vite 热更新：<http://localhost:5173>
 - Agent 列表：<http://localhost:18080/agents>
-- 固定演示 Agent：<http://localhost:18080/agents/agt_20261114181750_cdfa>
+- 固定预置 Agent：<http://localhost:18080/agents/agt_20261114181750_cdfa>
 
-演示用固定记录：
+展示用固定记录：
 
 | 项 | 值 |
 |---|---|
@@ -194,7 +194,7 @@ flowchart TD
 
 **说明：**
 
-- 图中 `action = new_version` 是主演示路径；Planner 也允许 `run_rdagent` / `run_text` / `validate` / `diagnose` / `stop`，这些动作由普通编程 / runner 执行，不额外调用 Pro/Lite 模型；其中 `run_rdagent` / `run_text` 的子任务内部使用 RD-Agent 的 `CHAT_MODEL`。
+- 图中 `action = new_version` 是主线讲解路径；Planner 也允许 `run_rdagent` / `run_text` / `validate` / `diagnose` / `stop`，这些动作由普通编程 / runner 执行，不额外调用 Pro/Lite 模型；其中 `run_rdagent` / `run_text` 的子任务内部使用 RD-Agent 的 `CHAT_MODEL`。
 - **联网**和**深度思考**都是 `planning` 阶段内的同步子流程，**不创建 runner job**：联网是 `diagnose → plan` 之间的可选检索（外部搜索 API，不调用 LLM）；深度思考是 `plan` 内部的「Planner → Critic → 修订」有界辩论（最多 3 轮，每轮最多一次评审 + 一次修订；Critic `accept` 即提前结束）。它们与 `waiting_children` 里真正的 RD-Agent 子任务不同，后者是独立 runner job。
 - 图中 `F2` 是经过 `_validate_plan`（工具白名单 + JSON schema + rank IC 方向一致性）的最终计划；未勾选深度思考时 `F` 直接到 `F2`，勾选后 Critic `accept` 或打满 3 轮辩论再到 `F2`。
 - 人工批准并运行后，会**按研究规格的市场数 n 一次性创建 n 个 runner job**（每个市场一条独立 RD-Agent workflow）。每个市场的 RD-Agent 完成后，runner 立即为该市场入队可信度检查（validate）；因此 n 条「RD-Agent → validate」流水线并行推进，validate 可以和其它市场的 RD-Agent / validate 重叠执行。所有 job 共用 runner 并发池（默认 3 个槽），超出排队。
@@ -385,7 +385,7 @@ RD-Agent 运行步骤按市场显示业务状态，不显示 RD-Agent 日志：
 
 ---
 
-## 1. 主演示：负结果如何闭环（约 3 分钟）
+## 1. 主线讲解：负结果如何闭环（约 3 分钟）
 
 ### 1.1 打开 Agent 页
 
@@ -434,13 +434,13 @@ http://localhost:18080/ideas?id=idea_20261114202859_963f
 
 ---
 
-## 2. 完整正向演示（可选，约 15–30 分钟）
+## 2. 完整正向讲解（可选，约 15–30 分钟）
 
-UK 慢，建议用**单市场研究**做现场演示，例如 `hk_vol_price_divergence_reversal`。
+UK 慢，建议用**单市场研究**做现场介绍，例如 `hk_vol_price_divergence_reversal`。
 
 1. 结果页选一个已完成运行 → 研究结论右上角 **继续研究 ▾ → AI 生成下一版假设（vN+1）并自动运行**；
    - 可选勾选 **联网**：需先在 `.env` 配置 `FACTOPIA_SEARCH_API_KEY`，Agent 会在诊断后检索测试期前的公开资料；
-   - 可选勾选 **深度思考**：计划草案进入最多 3 轮「独立评审 → 修订」辩论，评审通过提前结束；每轮多 1–2 次 LLM 调用，演示时更慢、更贵。
+   - 可选勾选 **深度思考**：计划草案进入最多 3 轮「独立评审 → 修订」辩论，评审通过提前结束；每轮多 1–2 次 LLM 调用，介绍时更慢、更贵。
 2. Agent 页先停在 **等待人工批准**，展示 vN+1 草稿；
 3. 在草稿编辑器里改标题/假设，点击 **批准并运行**；
 4. 观察阶段 toast：
@@ -485,7 +485,7 @@ Agent 相关红队用例：
 
 ---
 
-## 4. 演示边界（常见问题）
+## 4. 常见问题边界（常见问题）
 
 | 问题 | 回答 |
 |---|---|

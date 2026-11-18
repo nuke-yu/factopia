@@ -6,7 +6,7 @@
 
 数据集：
 - fr：法国 AMF 开放数据（真实公告，Licence Ouverte 2.0）
-- demo_hk、demo_uk：模拟数据（虚构公司，植入已知规律），仅用于流程演示，待取得授权数据后按相同格式替换
+- demo_hk、demo_uk：模拟数据（虚构公司，植入已知规律），仅用于流程验证，待取得授权数据后按相同格式替换
 
 全部数据在 /workspace/runtime/text/<数据集>/ 下；运行：python -m factopia.text --help
 """

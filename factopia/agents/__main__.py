@@ -35,11 +35,11 @@ def main(argv: list[str] | None = None) -> int:
     approve.add_argument("--file", help="人工修改后的草稿 JSON / YAML；默认用 Agent 原草稿")
     approve.add_argument("--run", action=argparse.BooleanOptionalAction, default=True,
                          help="批准后是否自动创建运行（默认是；--no-run 只保存版本）")
-    approve.add_argument("--by", default="研究员（演示，未登录）", help="审批人")
+    approve.add_argument("--by", default="研究员（未登录）", help="审批人")
     reject = sub.add_parser("reject", help="拒绝当前轮次，不保存版本、不运行")
     reject.add_argument("agent_id")
     reject.add_argument("--reason", required=True)
-    reject.add_argument("--by", default="研究员（演示，未登录）", help="审批人")
+    reject.add_argument("--by", default="研究员（未登录）", help="审批人")
     sub.add_parser("list", help="列出全部 Agent")
     args = parser.parse_args(argv)
 
