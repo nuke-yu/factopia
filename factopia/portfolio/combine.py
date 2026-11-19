@@ -97,6 +97,12 @@ def analyse(market: str, cands: list[dict], keys: list[str] | None = None) -> di
     idx = pd.DatetimeIndex(common)
     scores = {k: s.reindex(idx) for k, s in scores.items()}
     rics = pd.DataFrame({k: _ric(s, fwd) for k, s in scores.items()}).dropna()
+    if len(rics) < 60:
+        return {"market": market, "ok": False,
+                "reason": f"候选信号与行情数据可共同评估的交易日只有 {len(rics)} 天"
+                          f"（打分区间 {idx.min().date()}~{idx.max().date()}，行情区间 {close.index.min().date()}~{close.index.max().date()}，"
+                          "两者不重叠说明行情数据与运行时的数据源不一致）",
+                "candidates": cands}
     mid = rics.index[len(rics) // 2]
     first, second = rics.loc[:mid].iloc[:-1], rics.loc[mid:]
     ks = list(scores)

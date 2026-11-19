@@ -31,10 +31,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends build-essential
 
 WORKDIR /workspace
 
-# 先复制依赖声明与本地 qlibs 源码（pyqlib 为路径依赖），依赖不变时可复用缓存层
+# 先复制依赖声明与本地 qlibs/ 源码（pyqlib 为路径依赖），依赖不变时可复用缓存层
 COPY pyproject.toml uv.lock* ./
 COPY qlibs ./qlibs
 RUN uv sync --no-install-project
+
+# uv 的 editable 安装不会把 Cython 扩展编译进源码树，而源码树会遮蔽 site-packages，
+# 导致反序列化回测持仓时 `No module named 'qlib.data._libs.rolling'` —— 必须就地编译
+RUN uv pip install --quiet cython && cd qlibs && python setup.py build_ext --inplace
 
 # 源码在本地开发时通过挂载提供（compose.local.yml），云端部署时再 COPY
 CMD ["python", "-c", "print('factopia app ready')"]

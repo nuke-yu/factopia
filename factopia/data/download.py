@@ -50,6 +50,15 @@ def _quote_currency(symbols: list[str]) -> dict[str, str | None]:
     return out
 
 
+def _keep_or(df: pd.DataFrame, path: Path) -> pd.DataFrame:
+    """下载 0 行且已有非空文件时（限流/断网等瞬时故障），沿用旧文件，避免把完好数据覆盖成空表。"""
+    if df.empty and path.exists() and path.stat().st_size > 1000:
+        old = pd.read_parquet(path)
+        print(f"{path.name}: 本次下载 0 行，沿用既有文件（{len(old)} 行）")
+        return old
+    return df
+
+
 def main() -> None:
     RAW_DIR.mkdir(parents=True, exist_ok=True)
     manifest = {"downloaded_at": datetime.now(timezone.utc).isoformat(), "start": START, "markets": {}}
@@ -64,16 +73,17 @@ def main() -> None:
         out = RAW_DIR / market
         out.mkdir(parents=True, exist_ok=True)
 
-        prices = _download(symbols)
+        prices = _keep_or(_download(symbols), out / "prices.parquet")
         prices.to_parquet(out / "prices.parquet", index=False)
         got = set(prices["symbol"]) if not prices.empty else set()
         missing = sorted(set(symbols) - got)
 
-        currencies = _quote_currency(sorted(got))
-        pd.DataFrame(currencies.items(), columns=["symbol", "quote_currency"]).to_csv(out / "currency.csv", index=False)
+        currencies = _quote_currency(sorted(got)) if got else {}
+        if got:
+            pd.DataFrame(currencies.items(), columns=["symbol", "quote_currency"]).to_csv(out / "currency.csv", index=False)
         odd = {s: c for s, c in currencies.items() if c not in (cfg["currency"], "GBp")}
 
-        index = _download([cfg["index"]])
+        index = _keep_or(_download([cfg["index"]]), out / "index.parquet")
         index.to_parquet(out / "index.parquet", index=False)
 
         manifest["markets"][market] = {
@@ -84,7 +94,7 @@ def main() -> None:
         print(f"{market}: 成分股 {len(symbols)}，成功 {len(got)}，失败 {len(missing)} {missing[:10]}，"
               f"{len(prices)} 行，币种例外 {odd}")
 
-    fx = _download(FX_PAIRS)
+    fx = _keep_or(_download(FX_PAIRS), RAW_DIR / "fx.parquet")
     fx.to_parquet(RAW_DIR / "fx.parquet", index=False)
     manifest["fx"] = sorted(fx["symbol"].unique().tolist())
     print(f"fx: {manifest['fx']}，{len(fx)} 行")
