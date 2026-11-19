@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, type ModelRoleKey, type ModelSettingsState } from "../api";
 import { t, tf } from "../i18n";
 
@@ -9,6 +9,60 @@ const ROLES: { key: ModelRoleKey; label: string }[] = [
   { key: "critic", label: t("Critic LLM") },
 ];
 
+type RoleState = ModelSettingsState["roles"][number];
+type Price = { in: number; out: number } | null;
+
+function priceText(p: Price | undefined) {
+  return p ? `$${p.in.toFixed(2)} / $${p.out.toFixed(2)}` : "—";
+}
+
+/** 自定义下拉：模型名靠左，费用靠右（原生 select 无法控制 option 对齐）。 */
+function ModelSelect({ role, options, prices, value, onChange, ariaLabel }: {
+  role: RoleState | undefined; options: string[]; prices: Record<string, Price>;
+  value: string; onChange: (v: string) => void; ariaLabel: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [open]);
+  const defaultModel = role?.default ?? "";
+  const choices = [
+    { value: "", label: tf("默认（{model}）", { model: defaultModel || "—" }), model: defaultModel },
+    ...options.map((m) => ({ value: m, label: m, model: m })),
+  ];
+  if (value && !options.includes(value)) choices.splice(1, 0, { value, label: value, model: value });
+  const selected = choices.find((c) => c.value === value) ?? choices[0];
+  return (
+    <div ref={ref} className="relative">
+      <button type="button" className="field w-full flex items-center justify-between gap-3 text-left cursor-pointer"
+        aria-label={ariaLabel} aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+        <span className="truncate">{selected.label}</span>
+        <span className="num text-xs text-muted whitespace-nowrap">{priceText(prices[selected.model])}</span>
+      </button>
+      {open && (
+        <div className="absolute left-0 right-0 z-50 mt-1 max-h-64 overflow-y-auto rounded border border-line bg-bg shadow-lg p-1"
+          role="listbox" aria-label={ariaLabel}>
+          {choices.map((c) => (
+            <button key={c.value || "__default"} type="button" role="option" aria-selected={c.value === value}
+              className={`w-full flex items-center justify-between gap-3 rounded px-2 py-1.5 text-left text-sm cursor-pointer hover:bg-accent/10 ${
+                c.value === value ? "bg-accent/10" : ""}`}
+              onClick={() => { onChange(c.value); setOpen(false); }}>
+              <span className="truncate">{c.label}</span>
+              <span className="num text-xs text-muted whitespace-nowrap">{priceText(prices[c.model])}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** 顶部齿轮按钮：模型选择设置（角色 → 模型、费用）。 */
 export default function ModelSettings() {
   const [open, setOpen] = useState(false);
@@ -16,11 +70,10 @@ export default function ModelSettings() {
   const [draft, setDraft] = useState<Partial<Record<ModelRoleKey, string>>>({});
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
 
   useEffect(() => {
     if (!open) return;
-    setErr(null); setSaved(false); setDraft({}); setData(null);
+    setErr(null); setDraft({}); setData(null);
     api.settingsModels().then(setData).catch((e: Error) => setErr(e.message));
   }, [open]);
 
@@ -32,10 +85,11 @@ export default function ModelSettings() {
   }, [open]);
 
   const save = async () => {
-    setBusy(true); setErr(null); setSaved(false);
+    setBusy(true); setErr(null);
     try {
       const next = await api.saveSettingsModels(draft);
-      setData(next); setDraft({}); setSaved(true);
+      setData(next); setDraft({});
+      setOpen(false);                             // 保存成功后自动关闭
     } catch (e) {
       setErr((e as Error).message);
     } finally {
@@ -70,7 +124,6 @@ export default function ModelSettings() {
               </button>
             </div>
             {err && <p className="text-xs text-bad mb-2">{err}</p>}
-            {saved && <p className="text-xs text-accent mb-2">{t("已保存")}</p>}
             {!data ? (
               <p className="text-sm text-muted">{err ? "" : t("加载中…")}</p>
             ) : (
@@ -78,8 +131,12 @@ export default function ModelSettings() {
                 <thead>
                   <tr className="label">
                     <th className="text-left pb-2 pr-3 font-normal"></th>
-                    <th className="text-left pb-2 pr-3 font-normal">{t("模型选择")}</th>
-                    <th className="text-left pb-2 font-normal">{t("费用（美元 / 百万 token）")}</th>
+                    <th className="pb-2 font-normal">
+                      <div className="flex items-center justify-between gap-3">
+                        <span>{t("模型选择")}</span>
+                        <span className="text-right">{t("费用（美元 / 百万 token）")}</span>
+                      </div>
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -87,24 +144,12 @@ export default function ModelSettings() {
                     const role = data.roles.find((r) => r.key === key);
                     const current = role?.model ?? "";
                     const selected = draft[key] !== undefined ? draft[key] : current;
-                    const effective = selected === "" ? (role?.default ?? "") : selected;
-                    const price = data.prices[effective];
-                    const options = data.options.includes(selected) || !selected ? data.options : [selected, ...data.options];
                     return (
-                      <tr key={key} className="border-t border-line align-top">
+                      <tr key={key} className="border-t border-line align-middle">
                         <td className="py-2 pr-3 whitespace-nowrap">{label}</td>
-                        <td className="py-2 pr-3">
-                          <select className="field" value={selected} aria-label={label}
-                            onChange={(e) => setDraft((d) => ({ ...d, [key]: e.target.value }))}>
-                            <option value="">{tf("默认（{model}）", { model: role?.default || "—" })}</option>
-                            {options.map((m) => <option key={m} value={m}>{m}</option>)}
-                          </select>
-                        </td>
-                        <td className="py-2 num whitespace-nowrap">
-                          {price ? <>
-                            <div>${price.in.toFixed(2)} / ${price.out.toFixed(2)}</div>
-                            <div className="text-xs text-faint">{t("输入 / 输出")}</div>
-                          </> : "—"}
+                        <td className="py-2">
+                          <ModelSelect role={role} options={data.options} prices={data.prices} value={selected}
+                            ariaLabel={label} onChange={(v) => setDraft((d) => ({ ...d, [key]: v }))} />
                         </td>
                       </tr>
                     );
